@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from knowledge_mining.mining.db import AssetCoreDB, MiningRuntimeDB
-
 
 @pytest.fixture
 def tmp_dir():
@@ -44,26 +42,15 @@ class TestIncrementalRun:
         """Second run with identical content should SKIP all documents."""
         from knowledge_mining.mining.jobs.run import run
 
-        asset_path = str(tmp_dir / "asset_core.sqlite")
-        runtime_path = str(tmp_dir / "mining_runtime.sqlite")
-
         # First run
-        result1 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result1 = run(str(input_dir))
         assert result1["status"] == "completed"
         assert result1["committed_count"] == 1
         assert result1["new_count"] == 1
         assert result1["skipped_count"] == 0
 
         # Second run (same content) — should SKIP
-        result2 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result2 = run(str(input_dir))
         assert result2["status"] == "completed"
         assert result2["skipped_count"] == 1
         assert result2["new_count"] == 0
@@ -73,15 +60,8 @@ class TestIncrementalRun:
         """Second run with changed content should UPDATE the document."""
         from knowledge_mining.mining.jobs.run import run
 
-        asset_path = str(tmp_dir / "asset_core.sqlite")
-        runtime_path = str(tmp_dir / "mining_runtime.sqlite")
-
         # First run
-        result1 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result1 = run(str(input_dir))
         assert result1["new_count"] == 1
 
         # Modify the file
@@ -90,11 +70,7 @@ class TestIncrementalRun:
         )
 
         # Second run (changed content) — should UPDATE
-        result2 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result2 = run(str(input_dir))
         assert result2["status"] == "completed"
         assert result2["updated_count"] == 1
         assert result2["new_count"] == 0
@@ -104,15 +80,8 @@ class TestIncrementalRun:
         """Run with mix of NEW, UPDATE, and SKIP documents."""
         from knowledge_mining.mining.jobs.run import run
 
-        asset_path = str(tmp_dir / "asset_core.sqlite")
-        runtime_path = str(tmp_dir / "mining_runtime.sqlite")
-
         # First run with one file
-        result1 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result1 = run(str(input_dir))
         assert result1["new_count"] == 1
 
         # Add a new file, modify existing
@@ -122,10 +91,6 @@ class TestIncrementalRun:
         )
 
         # Second run: 1 UPDATE + 1 NEW
-        result2 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result2 = run(str(input_dir))
         assert result2["updated_count"] == 1
         assert result2["new_count"] == 1

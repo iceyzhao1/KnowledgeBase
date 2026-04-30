@@ -10,8 +10,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from knowledge_mining.mining.models import BatchParams, RawFileData
-from knowledge_mining.mining.hash_utils import compute_raw_hash, compute_snapshot_hash
+from knowledge_mining.mining.contracts.models import BatchParams, RawFileData
+from knowledge_mining.mining.infra.hash_utils import compute_raw_hash, compute_snapshot_hash
 from knowledge_mining.mining.ingestion.preprocessing import (
     SUPPORTED_ARCHIVE_EXTS,
     archive_to_markdown,

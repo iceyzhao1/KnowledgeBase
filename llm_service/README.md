@@ -1,13 +1,17 @@
 # LLM Service
 
-> 统一 LLM 调用与审计服务，为 Mining / Serving 提供集中式的模型调用能力。
+> 统一 LLM 调用与审计服务，为 Mining / Serving 提供集中式的聊天、Embedding、Rerank 模型能力。
 > 版本：v1.1 | 数据库：agent_llm_runtime（6 张表）| 端口：8900 | 测试：84 passed
 
 ## 1. 系统定位
 
 LLM Service 是一个**独立运行的 FastAPI 服务**，拥有自己的 SQLite 数据库（WAL 模式）。
 
-**核心职责：** 统一管理所有 LLM 调用的提交、执行、重试、结果解析和审计记录。Mining 和 Serving 不各自维护 LLM 调用逻辑，而是通过 `LLMClient` 或 HTTP API 调用本服务。
+**核心职责：**
+- 统一管理聊天类 LLM 调用的提交、执行、重试、结果解析和审计记录
+- 统一暴露 Embedding / Rerank 模型 HTTP 接口，给 Mining / Serving 直接复用
+
+Mining 和 Serving 不各自维护模型调用逻辑，而是通过 `LLMClient` 或 HTTP API 调用本服务。
 
 ```
 ┌─────────┐     ┌─────────┐
@@ -37,12 +41,13 @@ llm_service/
 ├── __main__.py             # python -m llm_service 入口
 ├── main.py                 # FastAPI app 工厂，初始化 lifespan / worker / recovery
 ├── config.py               # 环境变量配置（LLM_SERVICE_* 前缀）
-├── models.py               # API 请求/响应 Pydantic 模型
+├── models.py               # tasks + embeddings + rerank API 请求/响应模型
 ├── db.py                   # SQLite 连接（WAL + autocommit），DDL 从共享 SQL 加载
-├── client.py               # Python LLMClient — Mining / Serving 的调用入口
+├── client.py               # Python LLMClient — Mining / Serving 的统一调用入口
 │
 ├── runtime/
 │   ├── service.py          # 顶层编排：模板解析、submit/execute、响应构建
+│   ├── model_service.py    # Embedding / Rerank 统一服务层
 │   ├── task_manager.py     # 任务生命周期：submit / claim / complete / fail / cancel
 │   ├── executor.py         # 执行引擎（同步路径）：重试循环 + Provider 调用
 │   ├── worker.py           # 后台 Worker + LeaseRecovery（异步路径）
@@ -53,10 +58,13 @@ llm_service/
 │
 ├── providers/
 │   ├── base.py             # ProviderProtocol 接口 + ProviderResponse / ProviderError
+│   ├── model_base.py       # ModelProviderProtocol 接口 + ModelProviderError
+│   ├── bigmodel_models.py  # BigModel Embedding / Rerank Provider
 │   ├── openai_compatible.py# OpenAI 兼容 Provider（DeepSeek / Qwen / Ollama 等）
 │   └── mock.py             # MockProvider（测试用）
 │
 ├── api/
+│   ├── model_api.py        # POST /models/embeddings, POST /models/rerank
 │   ├── tasks.py            # POST /tasks, POST /execute, GET /tasks/{id}, POST /cancel
 │   ├── results.py          # GET /tasks/{id}/result, attempts, events
 │   ├── health.py           # GET /health
@@ -68,6 +76,19 @@ llm_service/
 ```
 
 ## 3. 数据流
+
+### 3.0 共享模型接口（Embedding / Rerank）
+
+```
+Mining / Serving
+    └─ LLMClient.embed() / LLMClient.rerank()
+          └─ POST /api/v1/models/embeddings
+          └─ POST /api/v1/models/rerank
+                └─ ModelService
+                      └─ BigModelProvider
+```
+
+这条链路是同步直通接口，不走任务队列，也不写 `agent_llm_tasks` 审计表。
 
 ### 3.1 同步执行（`execute()`）— Serving 场景
 
@@ -208,7 +229,67 @@ GET /health
 → {"status": "ok"}
 ```
 
-### 6.2 同步执行
+### 6.2 Embedding
+
+```
+POST /api/v1/models/embeddings
+```
+
+请求示例：
+
+```json
+{
+  "input": ["what is amf", "how to add upf"],
+  "model": "embedding-3",
+  "dimensions": 2048
+}
+```
+
+响应示例：
+
+```json
+{
+  "model": "embedding-3",
+  "data": [
+    {"index": 0, "embedding": [0.12, -0.03]},
+    {"index": 1, "embedding": [0.44, 0.19]}
+  ],
+  "usage": {
+    "prompt_tokens": 23
+  }
+}
+```
+
+### 6.3 Rerank
+
+```
+POST /api/v1/models/rerank
+```
+
+请求示例：
+
+```json
+{
+  "query": "AMF 配置命令",
+  "documents": ["ADD AMF ...", "UPF 介绍 ..."],
+  "model": "rerank",
+  "top_n": 2
+}
+```
+
+响应示例：
+
+```json
+{
+  "model": "rerank",
+  "results": [
+    {"index": 0, "relevance_score": 0.98, "document": "ADD AMF ..."},
+    {"index": 1, "relevance_score": 0.21, "document": "UPF 介绍 ..."}
+  ]
+}
+```
+
+### 6.4 同步执行
 
 ```
 POST /api/v1/execute
@@ -267,7 +348,7 @@ POST /api/v1/execute
 }
 ```
 
-### 6.3 异步提交
+### 6.5 异步提交
 
 ```
 POST /api/v1/tasks

@@ -4,6 +4,7 @@
 
 独立的 LLM 调用服务，FastAPI 进程，端口 8900。
 - 支持任意 OpenAI 兼容接口（DeepSeek / OpenAI / 通义千问 / 硅基流动 / Ollama 等）
+- 支持共享 Embedding / Rerank 模型接口（当前默认对接 BigModel）
 - 同步调用（`execute`，等结果）+ 异步提交（`submit`，后台 Worker 执行）
 - Prompt 模板管理（`$variable` 占位符 + JSON Schema 校验）
 - 三重 JSON 保障：schema 注入 prompt → response_format → jsonschema 后校验
@@ -49,13 +50,28 @@ pip install -e ".[llm]"
 
 ## 2. 配置 Provider
 
-在项目根目录的 `.env` 文件中设置这三个必填项：
+在项目根目录的 `.env` 文件中设置聊天模型这三个必填项：
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=你的API密钥
 LLM_SERVICE_PROVIDER_BASE_URL=接口地址
 LLM_SERVICE_PROVIDER_MODEL=模型名称
 ```
+
+如果要让 Mining / Serving 走共享 Embedding / Rerank 接口，再补这组配置：
+
+```
+LLM_SERVICE_EMBEDDING_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+LLM_SERVICE_EMBEDDING_API_KEY=你的Embedding密钥
+LLM_SERVICE_EMBEDDING_MODEL=embedding-3
+LLM_SERVICE_EMBEDDING_DIMENSIONS=2048
+LLM_SERVICE_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+LLM_SERVICE_RERANK_API_KEY=你的Rerank密钥
+LLM_SERVICE_RERANK_MODEL=rerank
+```
+
+当前项目里，如果你用的是同一个 BigModel key，可以直接把
+`LLM_SERVICE_EMBEDDING_API_KEY` 和 `LLM_SERVICE_RERANK_API_KEY` 配成同一个值。
 
 ### 各平台配置示例
 
@@ -118,6 +134,13 @@ LLM_SERVICE_PROVIDER_MODEL=qwen2.5:7b
 | `LLM_SERVICE_EXECUTE_TIMEOUT` | 60 | 同步执行超时秒数 |
 | `LLM_SERVICE_PROVIDER_TIMEOUT` | 30 | Provider 请求超时秒数 |
 | `LLM_SERVICE_PROVIDER_BYPASS_PROXY` | false | 绕过系统代理（内网机器设 true） |
+| `LLM_SERVICE_EMBEDDING_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Embedding 模型接口地址 |
+| `LLM_SERVICE_EMBEDDING_API_KEY` | 空 | Embedding 模型密钥 |
+| `LLM_SERVICE_EMBEDDING_MODEL` | `embedding-3` | Embedding 模型名 |
+| `LLM_SERVICE_EMBEDDING_DIMENSIONS` | `2048` | Embedding 维度 |
+| `LLM_SERVICE_RERANK_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Rerank 模型接口地址 |
+| `LLM_SERVICE_RERANK_API_KEY` | 空 | Rerank 模型密钥 |
+| `LLM_SERVICE_RERANK_MODEL` | `rerank` | Rerank 模型名 |
 | `LLM_SERVICE_LEASE_DURATION` | 300 | Worker 租约（秒） |
 | `LLM_SERVICE_RETRY_BACKOFF_BASE` | 2.0 | 重试退避基数 |
 | `LLM_SERVICE_RETRY_BACKOFF_MAX` | 60.0 | 重试退避上限（秒） |
@@ -151,6 +174,27 @@ INFO:     Uvicorn running on http://0.0.0.0:8900 (Press CTRL+C to quit)
 ```bash
 curl http://localhost:8900/health
 # 返回：{"status":"ok"}
+```
+
+### 验证共享模型接口
+
+```bash
+curl -X POST http://localhost:8900/api/v1/models/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": ["AMF是什么"],
+    "model": "embedding-3",
+    "dimensions": 2048
+  }'
+
+curl -X POST http://localhost:8900/api/v1/models/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "AMF 配置命令",
+    "documents": ["ADD AMF ...", "UPF 介绍 ..."],
+    "model": "rerank",
+    "top_n": 2
+  }'
 ```
 
 ## 4. 创建 Prompt 模板

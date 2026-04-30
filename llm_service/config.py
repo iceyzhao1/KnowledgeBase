@@ -15,6 +15,16 @@ class LLMServiceConfig(BaseSettings):
     provider_timeout: int = 30
     provider_bypass_proxy: bool = False
 
+    embedding_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    embedding_api_key: str = ""
+    embedding_model: str = "embedding-3"
+    embedding_dimensions: int = 1024
+    rerank_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    rerank_api_key: str = ""
+    rerank_model: str = "rerank"
+    model_timeout: int = 60
+    model_bypass_proxy: bool = False
+
     worker_concurrency: int = 4
     default_max_attempts: int = 3
     retry_backoff_base: float = 2.0

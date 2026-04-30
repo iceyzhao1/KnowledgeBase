@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from knowledge_mining.mining.db import AssetCoreDB, MiningRuntimeDB
-from knowledge_mining.mining.models import MiningRunData
+from knowledge_mining.mining.contracts.models import MiningRunData
 from knowledge_mining.mining.runtime import RuntimeTracker
 
 
@@ -17,14 +16,6 @@ def tmp_dir():
     d = tempfile.mkdtemp()
     yield Path(d)
     shutil.rmtree(d)
-
-
-@pytest.fixture
-def runtime_db(tmp_dir):
-    db = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-    db.open()
-    yield db
-    db.close()
 
 
 class TestRunStatusMachine:
@@ -58,8 +49,10 @@ class TestRunStatusMachine:
 
         run = runtime_db.get_run("r2")
         assert run["status"] == "completed"
-        import json
-        meta = json.loads(run["metadata_json"])
+        meta = run["metadata_json"]
+        if isinstance(meta, str):
+            import json
+            meta = json.loads(meta)
         assert meta["has_failures"] is True
         assert meta["failed_count"] == 2
 
@@ -123,13 +116,8 @@ class TestRunStatusMachine:
         # Create an empty file that might produce no tree
         (input_dir / "empty.md").write_text("", encoding="utf-8")
 
-        asset_path = str(tmp_dir / "asset_core.sqlite")
-        runtime_path = str(tmp_dir / "mining_runtime.sqlite")
-
         result = run(
             str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
         )
         # Empty file should be skipped (no tree), not failed
         assert result["status"] == "completed"

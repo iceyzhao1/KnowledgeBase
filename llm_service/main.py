@@ -10,9 +10,12 @@ from jinja2 import Environment, FileSystemLoader
 
 from llm_service.config import LLMServiceConfig
 from llm_service.db import init_db
+from llm_service.providers.bigmodel_models import BigModelProvider
+from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.openai_compatible import OpenAICompatibleProvider
 from llm_service.runtime.event_bus import EventBus
+from llm_service.runtime.model_service import ModelService
 from llm_service.runtime.service import LLMService
 from llm_service.runtime.task_manager import TaskManager
 from llm_service.runtime.template_registry import TemplateRegistry
@@ -25,6 +28,7 @@ logger = logging.getLogger(__name__)
 def create_app(
     config: LLMServiceConfig | None = None,
     provider_factory: Callable[[], ProviderProtocol] | None = None,
+    model_provider_factory: Callable[[], ModelProviderProtocol] | None = None,
     *,
     start_worker: bool = True,
 ) -> FastAPI:
@@ -48,8 +52,24 @@ def create_app(
             timeout=cfg.provider_timeout,
             bypass_proxy=cfg.provider_bypass_proxy,
         )
+        model_provider = (
+            model_provider_factory()
+            if model_provider_factory
+            else BigModelProvider(
+                embedding_api_key=cfg.embedding_api_key,
+                embedding_base_url=cfg.embedding_base_url,
+                embedding_model=cfg.embedding_model,
+                rerank_api_key=cfg.rerank_api_key,
+                rerank_base_url=cfg.rerank_base_url,
+                rerank_model=cfg.rerank_model,
+                timeout=cfg.model_timeout,
+                bypass_proxy=cfg.model_bypass_proxy,
+            )
+        )
         svc = LLMService(db=db, provider=provider, config=cfg)
+        model_svc = ModelService(model_provider)
         app.state.llm_service = svc
+        app.state.model_service = model_svc
         app.state.db = db
         app.state.templates = Environment(
             loader=FileSystemLoader(str(_TEMPLATES_DIR)),
@@ -129,12 +149,14 @@ def create_app(
     app.state.config = cfg
 
     from llm_service.api.health import router as health_router
+    from llm_service.api.model_api import router as model_api_router
     from llm_service.api.results import router as results_router
     from llm_service.api.tasks import router as tasks_router
     from llm_service.api.templates import router as templates_router
     from llm_service.dashboard.views import router as dashboard_router
 
     app.include_router(health_router)
+    app.include_router(model_api_router)
     app.include_router(tasks_router)
     app.include_router(results_router)
     app.include_router(templates_router)

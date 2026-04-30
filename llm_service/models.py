@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, Field
+from pydantic import field_validator
 
 
 # --- Request models ---
@@ -24,6 +25,66 @@ class TaskSubmitRequest(BaseModel):
     metadata: dict[str, Any] | None = None
     max_attempts: int = Field(default=3, ge=1, le=10)
     priority: int = Field(default=100, ge=1)
+
+
+class EmbeddingRequest(BaseModel):
+    input: list[str] | str
+    model: str | None = None
+    dimensions: int | None = Field(default=None, ge=1)
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def _normalize_input(cls, value: list[str] | str) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @field_validator("input")
+    @classmethod
+    def _validate_input(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("input must not be empty")
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            raise ValueError("input items must be non-empty strings")
+        return value
+
+
+class EmbeddingData(BaseModel):
+    index: int
+    embedding: list[float]
+
+
+class EmbeddingResponse(BaseModel):
+    model: str
+    data: list[EmbeddingData]
+    usage: dict[str, Any] | None = None
+
+
+class RerankRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    documents: list[str]
+    model: str | None = None
+    top_n: int | None = Field(default=None, ge=1)
+
+    @field_validator("documents")
+    @classmethod
+    def _validate_documents(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("documents must not be empty")
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            raise ValueError("documents must be non-empty strings")
+        return value
+
+
+class RerankResult(BaseModel):
+    index: int
+    relevance_score: float
+    document: str | None = None
+
+
+class RerankResponse(BaseModel):
+    model: str
+    results: list[RerankResult]
 
 
 # --- Response dataclasses ---

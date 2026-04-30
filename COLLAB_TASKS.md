@@ -54,10 +54,11 @@
   - `docs/analysis/2026-04-27-v11-knowledge-mining-state-audit-codex-review.md`
   - `docs/analysis/2026-04-28-v11-knowledge-mining-domain-pack-half-graphrag-codex-review.md`
   - `docs/analysis/2026-04-28-v11-knowledge-mining-industrial-data-quality-codex-review.md`
+  - `docs/analysis/2026-04-29-v11-knowledge-mining-3layer-architecture-codex-review.md`
 - 修复文档：`docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-fix.md`
 - 阶段审查文档：`docs/handoffs/2026-04-22-v11-knowledge-mining-claude-mining-stage-review.md`
 - 管理员文档：
-- 最新消息序号：MSG-20260428-224500-codex
+- 最新消息序号：MSG-20260429-112900-codex
 - 备注：主背景见 `README.md`、`docs/architecture/2026-04-21-coremasterkb-v1.1-architecture.md`、`.dev/2026-04-21-v1.1-database-complete-proposal.md` 与 `databases/asset_core|mining_runtime` 契约。
 
 ## TASK-20260421-v11-agent-serving

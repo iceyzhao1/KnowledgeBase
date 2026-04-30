@@ -8,8 +8,23 @@ from pathlib import Path
 
 import pytest
 
-from knowledge_mining.mining.db import AssetCoreDB, MiningRuntimeDB
-from knowledge_mining.mining.models import MiningRunData
+from knowledge_mining.mining.infra.db import MiningRuntimeDB
+
+
+def _make_db(cls):
+    """Create a PG-backed database adapter for testing."""
+    from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+    from knowledge_mining.mining.infra.pg_schema import ensure_schema
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    cfg = MiningDbConfig()
+    ensure_schema(cfg)
+    pool = ConnectionPool(
+        cfg.conninfo, min_size=1, max_size=2, open=True,
+        kwargs={"row_factory": dict_row},
+    )
+    return cls(pool)
 
 
 @pytest.fixture
@@ -49,14 +64,9 @@ class TestStageEvents:
         """Each document should have events for segment, build_relations, build_retrieval_units."""
         from knowledge_mining.mining.jobs.run import run
 
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-        )
+        result = run(str(input_dir))
 
-        rdb = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-        rdb.open()
+        rdb = _make_db(MiningRuntimeDB)
 
         events = rdb.get_stage_events(result["run_id"])
         stages = {e["stage"] for e in events}
@@ -77,14 +87,9 @@ class TestStageEvents:
         """Stage end events should have 'completed' status."""
         from knowledge_mining.mining.jobs.run import run
 
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-        )
+        result = run(str(input_dir))
 
-        rdb = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-        rdb.open()
+        rdb = _make_db(MiningRuntimeDB)
 
         events = rdb.get_stage_events(result["run_id"])
         completed_events = [e for e in events if e["status"] == "completed"]
@@ -100,14 +105,9 @@ class TestStageEvents:
         """Completed stage events should have output_summary with counts."""
         from knowledge_mining.mining.jobs.run import run
 
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-        )
+        result = run(str(input_dir))
 
-        rdb = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-        rdb.open()
+        rdb = _make_db(MiningRuntimeDB)
 
         events = rdb.get_stage_events(result["run_id"])
         seg_events = [e for e in events if e["stage"] == "segment" and e["status"] == "completed"]
@@ -125,14 +125,9 @@ class TestStageEvents:
         """Global stages (assemble_build, validate_build) should have no run_document_id."""
         from knowledge_mining.mining.jobs.run import run
 
-        result = run(
-            str(input_dir),
-            asset_core_db_path=str(tmp_dir / "asset_core.sqlite"),
-            mining_runtime_db_path=str(tmp_dir / "mining_runtime.sqlite"),
-        )
+        result = run(str(input_dir))
 
-        rdb = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-        rdb.open()
+        rdb = _make_db(MiningRuntimeDB)
 
         events = rdb.get_stage_events(result["run_id"])
         build_events = [e for e in events if e["stage"] == "assemble_build"]
@@ -147,26 +142,14 @@ class TestStageEvents:
         """Skipped documents should not generate stage events."""
         from knowledge_mining.mining.jobs.run import run
 
-        asset_path = str(tmp_dir / "asset_core.sqlite")
-        runtime_path = str(tmp_dir / "mining_runtime.sqlite")
-
         # First run
-        result1 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result1 = run(str(input_dir))
 
         # Second run (SKIP)
-        result2 = run(
-            str(input_dir),
-            asset_core_db_path=asset_path,
-            mining_runtime_db_path=runtime_path,
-        )
+        result2 = run(str(input_dir))
         assert result2["skipped_count"] == 1
 
-        rdb = MiningRuntimeDB(tmp_dir / "mining_runtime.sqlite")
-        rdb.open()
+        rdb = _make_db(MiningRuntimeDB)
 
         # Second run should have fewer stage events (only global ones)
         run2_events = rdb.get_stage_events(result2["run_id"])
