@@ -58,6 +58,7 @@ class RetrievalPolicy:
     table_row: str = "structured_tables"
     max_questions_per_segment: int = 2
     max_entity_cards_per_segment: int = 3
+    contextual_retrieval: str = "on"
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ def _parse_retrieval_policy(raw: dict[str, Any]) -> RetrievalPolicy:
         table_row=raw.get("table_row", "structured_tables"),
         max_questions_per_segment=raw.get("max_questions_per_segment", 2),
         max_entity_cards_per_segment=raw.get("max_entity_cards_per_segment", 3),
+        contextual_retrieval=raw.get("contextual_retrieval", "on"),
     )
 
 

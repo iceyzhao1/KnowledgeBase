@@ -7,10 +7,13 @@ Two-phase:
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from knowledge_mining.mining.infra.db import AssetCoreDB
+
+logger = logging.getLogger(__name__)
 
 
 class PublishingStage:
@@ -245,3 +248,76 @@ def publish_release(
     asset_db.activate_release(release_id)
 
     return release_id
+
+
+def demo_quality_summary(asset_db: AssetCoreDB, build_id: str) -> dict[str, Any]:
+    """Generate a demo quality summary for a build.
+
+    Checks:
+    - generated_question count (warns if 0)
+    - Whether question titles still carry Qn prefix
+    - RST discourse relation count and type distribution
+
+    Does NOT block release. Returns a dict to merge into build metadata.
+    """
+    snapshots = asset_db.get_build_snapshots(build_id)
+    active_snap_ids = [s["document_snapshot_id"] for s in snapshots if s["selection_status"] == "active"]
+
+    warnings: list[str] = []
+    summary: dict[str, Any] = {"build_id": build_id}
+
+    # 1. Count retrieval units by type
+    unit_counts: dict[str, int] = {}
+    for snap_id in active_snap_ids:
+        rows = asset_db._fetchall(
+            "SELECT unit_type, COUNT(*) as cnt FROM asset_retrieval_units "
+            "WHERE document_snapshot_id = %s GROUP BY unit_type",
+            (snap_id,),
+        )
+        for r in rows:
+            unit_counts[r["unit_type"]] = unit_counts.get(r["unit_type"], 0) + r["cnt"]
+
+    summary["unit_type_counts"] = unit_counts
+    q_count = unit_counts.get("generated_question", 0)
+    if q_count == 0:
+        warnings.append("No generated_question units found")
+    summary["generated_question_count"] = q_count
+
+    # 2. Check for Qn-prefixed question titles
+    q_prefix_count = 0
+    for snap_id in active_snap_ids:
+        rows = asset_db._fetchall(
+            "SELECT COUNT(*) as cnt FROM asset_retrieval_units "
+            "WHERE document_snapshot_id = %s AND unit_type = 'generated_question' "
+            "AND title LIKE 'Q%%'",
+            (snap_id,),
+        )
+        for r in rows:
+            q_prefix_count += r["cnt"]
+    if q_prefix_count > 0:
+        warnings.append(f"{q_prefix_count} question titles still have Qn prefix")
+    summary["qn_prefix_count"] = q_prefix_count
+
+    # 3. RST discourse relation distribution
+    discourse_counts: dict[str, int] = {}
+    for snap_id in active_snap_ids:
+        rows = asset_db._fetchall(
+            "SELECT relation_type, COUNT(*) as cnt FROM asset_raw_segment_relations "
+            "WHERE document_snapshot_id = %s "
+            "AND metadata_json->>'source' = 'discourse_llm' "
+            "GROUP BY relation_type",
+            (snap_id,),
+        )
+        for r in rows:
+            discourse_counts[r["relation_type"]] = discourse_counts.get(r["relation_type"], 0) + r["cnt"]
+
+    summary["discourse_relation_counts"] = discourse_counts
+    total_discourse = sum(discourse_counts.values())
+    if total_discourse == 0:
+        warnings.append("No discourse relations found")
+
+    summary["warnings"] = warnings
+    if warnings:
+        logger.warning("Demo quality summary for build %s: %s", build_id[:8], warnings)
+
+    return summary

@@ -193,8 +193,19 @@ class TestQuestionGenerationFilter:
             block_type="paragraph",
             raw_text="This is a normal paragraph with enough content to be considered question-worthy.",
             token_count=15,
+            semantic_role="concept",
         )
         assert _is_questionworthy(good_seg) is True
+
+        # unknown role should be filtered out by demo question gate
+        unknown_seg = RawSegmentData(
+            document_key="doc:/test.md",
+            segment_index=0,
+            block_type="paragraph",
+            raw_text="This is a normal paragraph with enough content to be considered question-worthy.",
+            token_count=15,
+        )
+        assert _is_questionworthy(unknown_seg) is False
 
     def test_filter_in_build_retrieval_units(self):
         """Verify heading segments are not sent to question generator."""
@@ -215,6 +226,7 @@ class TestQuestionGenerationFilter:
                 raw_text="This is a substantial paragraph with enough content to generate questions from.",
                 token_count=15,
                 section_title="Title Only",
+                semantic_role="concept",
             ),
         ]
 
@@ -319,6 +331,17 @@ class TestTableRowUnits:
 
     def test_table_row_units_in_build(self):
         from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
+        from knowledge_mining.mining.infra.domain_pack import RetrievalPolicy, DomainProfile
+
+        # Use a profile with table_row enabled
+        policy = RetrievalPolicy(table_row="structured_tables")
+        profile = DomainProfile(
+            domain_id="test", display_name="Test",
+            entity_types=frozenset(), strong_entity_types=frozenset(),
+            role_keyword_rules=(), heading_role_keywords=(),
+            extractor_rules=(), llm_templates=(),
+            retrieval_policy=policy, eval_questions=(),
+        )
 
         seg = RawSegmentData(
             document_key="doc:/test.md",
@@ -331,7 +354,7 @@ class TestTableRowUnits:
             },
         )
 
-        units = build_retrieval_units([seg], document_key="doc:/test.md")
+        units = build_retrieval_units([seg], document_key="doc:/test.md", profile=profile)
         table_rows = [u for u in units if u.unit_type == "table_row"]
         assert len(table_rows) == 1
 
@@ -802,6 +825,17 @@ class TestContextualizer:
     def test_contextualizer_in_build_retrieval_units(self):
         """v1.3: contextualizer enriches raw_text.search_text, no separate unit."""
         from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
+        from knowledge_mining.mining.infra.domain_pack import RetrievalPolicy, DomainProfile
+
+        # Use a profile with contextual_retrieval enabled
+        policy = RetrievalPolicy(contextual_retrieval="on")
+        profile = DomainProfile(
+            domain_id="test", display_name="Test",
+            entity_types=frozenset(), strong_entity_types=frozenset(),
+            role_keyword_rules=(), heading_role_keywords=(),
+            extractor_rules=(), llm_templates=(),
+            retrieval_policy=policy, eval_questions=(),
+        )
 
         segments = [
             RawSegmentData(
@@ -820,6 +854,7 @@ class TestContextualizer:
             segments,
             document_key="doc:/test.md",
             contextualizer=MockContextualizer(),
+            profile=profile,
         )
 
         # v1.3: no contextual_enhanced units, LLM context goes into raw_text

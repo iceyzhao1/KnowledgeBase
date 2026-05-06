@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 # Default values — overridden by DomainProfile.retrieval_policy
 _DEFAULT_MAX_QUESTIONS_PER_SEGMENT = 2
 
+# Semantic roles eligible for question generation (demo gate)
+_QUESTIONWORTHY_ROLES = frozenset({
+    "concept", "parameter", "procedure_step", "troubleshooting_step",
+    "example", "note",
+})
+
 
 # ---------------------------------------------------------------------------
 # Question Generators
@@ -265,16 +271,17 @@ def build_retrieval_units(
     # Phase 1b: Batch-generate contextual descriptions (for search_text enrichment)
     context_map: dict[str, str] = {}
     ctxer_task_ids: dict[str, str] = {}
-    document_text = "\n".join(s.raw_text for s in segments)
-    try:
-        context_map = ctxer.contextualize(
-            [s for s in segments if s.raw_text.strip()],
-            document_text,
-        )
-        if hasattr(ctxer, "last_task_ids"):
-            ctxer_task_ids = ctxer.last_task_ids
-    except Exception as e:
-        logger.warning("Contextualization failed: %s", e)
+    if profile.retrieval_policy.contextual_retrieval != "off":
+        document_text = "\n".join(s.raw_text for s in segments)
+        try:
+            context_map = ctxer.contextualize(
+                [s for s in segments if s.raw_text.strip()],
+                document_text,
+            )
+            if hasattr(ctxer, "last_task_ids"):
+                ctxer_task_ids = ctxer.last_task_ids
+        except Exception as e:
+            logger.warning("Contextualization failed: %s", e)
 
     # Phase 2: Build units for each segment
     for seg in segments:
@@ -286,26 +293,28 @@ def build_retrieval_units(
         ctx_task_id = ctxer_task_ids.get(seg_key)
         units.append(_make_raw_text_unit(seg, source_seg_id, llm_context, ctx_task_id))
 
-        # 2. entity_card units — only strong types, deduped, skip navigation segments
-        assessment = seg.metadata_json.get("content_assessment", {})
-        segment_card_count = 0
-        for ref in seg.entity_refs_json:
-            entity_type = ref.get("type", "")
-            if entity_type not in strong_types:
-                continue
-            # v1.5: Skip entity cards from navigation segments (LLM assessment)
-            if assessment.get("is_navigation"):
-                continue
-            entity_key = f"{entity_type}:{ref.get('name', '')}"
-            if entity_key not in seen_entity_cards:
-                seen_entity_cards.add(entity_key)
-                units.append(_make_entity_card_unit(seg, ref, source_seg_id))
-                segment_card_count += 1
-                if segment_card_count >= max_entity_cards:
-                    break
+        # 2. entity_card units — only if policy enables it
+        if profile.retrieval_policy.entity_card != "off":
+            assessment = seg.metadata_json.get("content_assessment", {})
+            segment_card_count = 0
+            for ref in seg.entity_refs_json:
+                entity_type = ref.get("type", "")
+                if entity_type not in strong_types:
+                    continue
+                # v1.5: Skip entity cards from navigation segments (LLM assessment)
+                if assessment.get("is_navigation"):
+                    continue
+                entity_key = f"{entity_type}:{ref.get('name', '')}"
+                if entity_key not in seen_entity_cards:
+                    seen_entity_cards.add(entity_key)
+                    units.append(_make_entity_card_unit(seg, ref, source_seg_id))
+                    segment_card_count += 1
+                    if segment_card_count >= max_entity_cards:
+                        break
 
-        # 3. table_row units (per-row retrieval for structured tables)
-        units.extend(_make_table_row_units(seg, source_seg_id))
+        # 3. table_row units — only if policy enables it
+        if profile.retrieval_policy.table_row != "off":
+            units.extend(_make_table_row_units(seg, source_seg_id))
 
         # 4. generated_question units (capped by profile policy, already pruned)
         questions = question_map.get(seg_key, [])
@@ -571,6 +580,9 @@ def _is_questionworthy(seg: RawSegmentData) -> bool:
     # v1.5: If enrichment already assessed this segment as non-substantive, skip LLM call
     assessment = seg.metadata_json.get("content_assessment", {})
     if assessment and not assessment.get("is_substantive", True):
+        return False
+    # Demo gate: only generate questions for certain semantic roles
+    if seg.semantic_role and seg.semantic_role not in _QUESTIONWORTHY_ROLES:
         return False
     return True
 

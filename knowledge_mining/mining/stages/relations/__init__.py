@@ -215,6 +215,13 @@ class DiscourseRelationBuilder:
     stage_name = "discourse_relations"
     stage_version = "1"
 
+    # RST relation whitelist — only these labels are retained
+    _RST_WHITELIST = frozenset({
+        "elaborates", "conditions", "causes", "results_in", "contrasts_with",
+        "sequences", "backgrounds", "summarizes", "parallels",
+    })
+    _MIN_CONFIDENCE = 0.5
+
     def __init__(
         self,
         base_url: str = "http://localhost:8900",
@@ -255,7 +262,17 @@ class DiscourseRelationBuilder:
             window_relations = self._analyze_window(window)
             all_relations.extend(window_relations)
 
-        return all_relations
+        # RST whitelist filter: only keep whitelisted labels with sufficient confidence
+        filtered = [
+            r for r in all_relations
+            if r.relation_type in self._RST_WHITELIST
+            and (r.confidence is None or r.confidence >= self._MIN_CONFIDENCE)
+        ]
+        removed = len(all_relations) - len(filtered)
+        if removed > 0:
+            logger.info("RST whitelist: filtered %d/%d relations", removed, len(all_relations))
+
+        return filtered
 
     def _analyze_window(self, segments: list[RawSegmentData]) -> list[SegmentRelationData]:
         """Send a window of segments to LLM for discourse analysis."""

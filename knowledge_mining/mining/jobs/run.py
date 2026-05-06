@@ -39,7 +39,7 @@ from knowledge_mining.mining.stages.segment import DefaultSegmenter
 from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
 from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
 from knowledge_mining.mining.snapshot import select_or_create_snapshot
-from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, publish_release
+from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, demo_quality_summary, publish_release
 from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier  # noqa: F401 — used for enrich
 from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack
 from knowledge_mining.mining.pipeline import (
@@ -238,14 +238,15 @@ def _init_llm(
     except (ImportError, Exception):
         pass
 
-    # v1.2: Create LLMContextualizer
-    try:
-        from knowledge_mining.mining.stages.retrieval_units import LLMContextualizer
-        result["contextualizer"] = LLMContextualizer(
-            base_url=llm_base_url, bypass_proxy=bypass_proxy,
-        )
-    except (ImportError, Exception):
-        pass
+    # v1.2: Create LLMContextualizer (skip if contextual_retrieval is off)
+    if profile.retrieval_policy.contextual_retrieval != "off":
+        try:
+            from knowledge_mining.mining.stages.retrieval_units import LLMContextualizer
+            result["contextualizer"] = LLMContextualizer(
+                base_url=llm_base_url, bypass_proxy=bypass_proxy,
+            )
+        except (ImportError, Exception):
+            pass
 
     return result
 
@@ -637,6 +638,13 @@ def _run_pipeline(
         tracker.end_stage(evt, run_id, "assemble_build", output_summary=f"build_id={build_id}")
         asset_db.commit()
         runtime_db.commit()
+
+        # Demo quality summary (non-blocking, writes to build metadata)
+        try:
+            quality = demo_quality_summary(asset_db, build_id)
+            logger.info("Demo quality summary: %s", quality)
+        except Exception as e:
+            logger.warning("Demo quality summary failed: %s", e)
 
         # Stage 8: Validate (already done inside assemble_build)
         evt = tracker.start_stage(run_id, "validate_build")

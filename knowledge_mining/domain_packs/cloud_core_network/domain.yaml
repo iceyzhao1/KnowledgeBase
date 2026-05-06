@@ -112,10 +112,11 @@ section_title_command_pattern: "^(ADD|SHOW|MOD|DEL|DSP|LST|REG|DEREG)\\s+(\\S+)"
 retrieval_policy:
   raw_text: primary
   generated_question: auxiliary
-  entity_card: strong_entities_only
-  table_row: structured_tables
+  entity_card: "off"
+  table_row: "off"
   max_questions_per_segment: 2
-  max_entity_cards_per_segment: 3
+  max_entity_cards_per_segment: 0
+  contextual_retrieval: "off"
 
 # ---------------------------------------------------------------------------
 # LLM templates
