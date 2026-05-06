@@ -48,8 +48,12 @@
 - Claude：Claude Mining 已完成 Codex review 全部 P1+P2 修复，enrich 正式可替换、generated_question 预留、build merge 语义、run 失败语义、旧测试清理
 - Codex：已基于真实 SQLite 与 LLM 调用记录发布 Mining 工业级数据质量基线，要求下一版一次性交付 Content Quality Gate、Question Policy、Post Validation、Unit Budget、Reference Relation 与 Data Quality Eval
 - 管理员：已确认 v1.1 数据库架构、shared snapshot、build/release 与三库边界为统一口径
-- 计划文档：`docs/plans/2026-04-21-v11-knowledge-mining-impl-plan.md`
-- 交接文档：`docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-handoff.md`
+- 计划文档：
+  - `docs/plans/2026-04-21-v11-knowledge-mining-impl-plan.md`
+  - `docs/plans/2026-05-06-mining-ui-pg-migration-impl-plan.md`（mining_ui.py 跟进 PG 迁移）
+- 交接文档：
+  - `docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-handoff.md`
+  - `docs/handoffs/2026-05-06-mining-ui-pg-migration-claude-handoff.md`
 - 审查文档：
   - `docs/analysis/2026-04-27-v11-knowledge-mining-state-audit-codex-review.md`
   - `docs/analysis/2026-04-28-v11-knowledge-mining-domain-pack-half-graphrag-codex-review.md`
