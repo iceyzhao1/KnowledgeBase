@@ -197,7 +197,13 @@ async def get_run_documents(run_id: str, request: Request) -> dict:
 
 @router.post("/{run_id}/cancel", response_model=CancelRunResponse)
 async def cancel_run(run_id: str, request: Request) -> dict:
-    """Cancel a running run (best-effort)."""
+    """Cancel a running run (cooperative).
+
+    Sets `mining_runs.status='cancelled'` and writes finished_at. The mining
+    worker polls this status at stage / document checkpoints and exits within
+    one document. The UPDATE is guarded by `status='running'` so we never
+    overwrite a run that has already completed/failed concurrently.
+    """
     pool = request.app.state.pg_pool
 
     async with pool.connection() as conn:
@@ -207,15 +213,20 @@ async def cancel_run(run_id: str, request: Request) -> dict:
         run = await cur.fetchone()
         if not run:
             raise HTTPException(404, f"Run {run_id} not found")
-        if run["status"] not in ("running", "pending"):
+        if run["status"] not in ("running", "pending", "queued"):
             raise HTTPException(400, f"Run {run_id} is {run['status']}, cannot cancel")
 
         await conn.execute(
-            "UPDATE mining_runs SET status = 'cancelled', finished_at = %s WHERE id = %s",
+            "UPDATE mining_runs SET status = 'cancelled', finished_at = %s "
+            "WHERE id = %s AND status IN ('running', 'pending', 'queued')",
             [_utcnow(), run_id],
         )
 
-    return {"run_id": run_id, "status": "cancelled", "message": "Run cancellation requested"}
+    return {
+        "run_id": run_id,
+        "status": "cancelled",
+        "message": "Cancellation signal recorded — worker will stop at next checkpoint",
+    }
 
 
 @router.post("/{run_id}/publish")

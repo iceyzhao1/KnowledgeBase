@@ -877,7 +877,7 @@ def render_timeline(run_id: str) -> list[Any]:
 # Stage registry — every stage knows how to build its UI and render data
 # =====================================================================
 
-_PLOT_KW = dict(height=260, container=False)
+_PLOT_KW = dict(height=180, container=False)
 
 
 def build_ingest_tab():
@@ -885,7 +885,8 @@ def build_ingest_tab():
     with gr.Row():
         action_plot = gr.BarPlot(x="action", y="count", title="按 action 分布", **_PLOT_KW)
         status_plot = gr.BarPlot(x="status", y="count", title="按 status 分布", **_PLOT_KW)
-    table = gr.Dataframe(label="全量文档列表", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="全量文档列表", wrap=True, interactive=False)
     return [summary, action_plot, status_plot, table]
 
 
@@ -894,7 +895,8 @@ def build_parse_tab():
     with gr.Row():
         per_doc = gr.BarPlot(x="doc", y="count", title="每文档小节数", **_PLOT_KW)
         depth_plot = gr.BarPlot(x="depth", y="count", title="小节层级分布", **_PLOT_KW)
-    table = gr.Dataframe(label="全部小节", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="全部小节", wrap=True, interactive=False)
     return [summary, per_doc, depth_plot, table]
 
 
@@ -903,17 +905,19 @@ def build_segment_tab():
     with gr.Row():
         bt_plot = gr.BarPlot(x="block_type", y="count", title="block_type 分布", **_PLOT_KW)
         token_plot = gr.BarPlot(x="token_bin", y="count", title="token_count 分布", **_PLOT_KW)
-    table = gr.Dataframe(label="全部段落", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="全部段落", wrap=True, interactive=False)
     return [summary, bt_plot, token_plot, table]
 
 
 def build_enrich_tab():
     summary = gr.Markdown(EMPTY_RUN_TEXT)
     with gr.Row():
-        role_plot = gr.BarPlot(x="semantic_role", y="count", title="semantic_role 分布（含 unknown）", **_PLOT_KW)
+        role_plot = gr.BarPlot(x="semantic_role", y="count", title="semantic_role 分布", **_PLOT_KW)
         type_plot = gr.BarPlot(x="entity_type", y="count", title="实体类型分布", **_PLOT_KW)
     per_seg_plot = gr.BarPlot(x="count_per_seg", y="count", title="每段实体数分布", **_PLOT_KW)
-    table = gr.Dataframe(label="全部实体引用", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="全部实体引用", wrap=True, interactive=False)
     return [summary, role_plot, type_plot, per_seg_plot, table]
 
 
@@ -922,7 +926,8 @@ def build_relations_tab():
     with gr.Row():
         type_plot = gr.BarPlot(x="relation_type", y="count", title="relation_type 分布", **_PLOT_KW)
         dist_plot = gr.BarPlot(x="distance_bin", y="count", title="距离分布", **_PLOT_KW)
-    table = gr.Dataframe(label="全部关系", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="全部关系", wrap=True, interactive=False)
     return [summary, type_plot, dist_plot, table]
 
 
@@ -932,7 +937,8 @@ def build_retrieval_units_tab():
         ut_plot = gr.BarPlot(x="unit_type", y="count", title="unit_type 分布", **_PLOT_KW)
         tt_plot = gr.BarPlot(x="target_type", y="count", title="target_type 分布", **_PLOT_KW)
     len_plot = gr.BarPlot(x="text_len_bin", y="count", title="文本长度分布", **_PLOT_KW)
-    table = gr.Dataframe(label="全部检索单元", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="全部检索单元", wrap=True, interactive=False)
     return [summary, ut_plot, tt_plot, len_plot, table]
 
 
@@ -941,141 +947,596 @@ def build_snapshot_tab():
     with gr.Row():
         action_plot = gr.BarPlot(x="action", y="count", title="action 分布", **_PLOT_KW)
         mime_plot = gr.BarPlot(x="mime_type", y="count", title="mime_type 分布", **_PLOT_KW)
-    table = gr.Dataframe(label="document → snapshot 映射", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="document → snapshot 映射", wrap=True, interactive=False)
     return [summary, action_plot, mime_plot, table]
 
 
 def build_build_tab():
     summary = gr.Markdown(EMPTY_RUN_TEXT)
     reason_plot = gr.BarPlot(x="reason", y="count", title="reason 分布", **_PLOT_KW)
-    table = gr.Dataframe(label="构建包含的快照", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="构建包含的快照", wrap=True, interactive=False)
     return [summary, reason_plot, table]
 
 
 def build_release_tab():
     summary = gr.Markdown(EMPTY_RUN_TEXT)
-    table = gr.Dataframe(label="Release 列表", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="Release 列表", wrap=True, interactive=False)
     return [summary, table]
 
 
 def build_timeline_tab():
     summary = gr.Markdown(EMPTY_RUN_TEXT)
     dur_plot = gr.BarPlot(x="stage", y="ms", title="按阶段累计耗时", **_PLOT_KW)
-    table = gr.Dataframe(label="全部阶段事件", wrap=True, interactive=False)
+    with gr.Accordion("展开明细表格", open=False):
+        table = gr.Dataframe(label="全部阶段事件", wrap=True, interactive=False)
     return [summary, dur_plot, table]
 
 
+# Stage spec: id (stable key), label (UI), short (stepper), build, render, n_components
 STAGES: list[dict[str, Any]] = [
-    {"label": "1️⃣ Ingest 摄取",        "build": build_ingest_tab,           "render": render_ingest},
-    {"label": "2️⃣ Parse 解析",         "build": build_parse_tab,            "render": render_parse},
-    {"label": "3️⃣ Segment 分块",       "build": build_segment_tab,          "render": render_segment},
-    {"label": "4️⃣ Enrich 增强",        "build": build_enrich_tab,           "render": render_enrich},
-    {"label": "5️⃣ Relations 关系",     "build": build_relations_tab,        "render": render_relations},
-    {"label": "6️⃣ Retrieval Units",    "build": build_retrieval_units_tab,  "render": render_retrieval_units},
-    {"label": "7️⃣ Snapshot 快照",      "build": build_snapshot_tab,         "render": render_snapshot},
-    {"label": "8️⃣ Build 构建",         "build": build_build_tab,            "render": render_build},
-    {"label": "9️⃣ Release 发布",       "build": build_release_tab,          "render": render_release},
-    {"label": "⏱️ 事件时间线",          "build": build_timeline_tab,         "render": render_timeline},
+    {"id": "ingest",    "label": "Ingest 摄取",       "short": "Ingest",    "build": build_ingest_tab,           "render": render_ingest,           "n": 4},
+    {"id": "parse",     "label": "Parse 解析",        "short": "Parse",     "build": build_parse_tab,            "render": render_parse,            "n": 4},
+    {"id": "segment",   "label": "Segment 分块",      "short": "Segment",   "build": build_segment_tab,          "render": render_segment,          "n": 4},
+    {"id": "enrich",    "label": "Enrich 增强",       "short": "Enrich",    "build": build_enrich_tab,           "render": render_enrich,           "n": 5},
+    {"id": "relations", "label": "Relations 关系",    "short": "Relations", "build": build_relations_tab,        "render": render_relations,        "n": 4},
+    {"id": "units",     "label": "Retrieval Units",   "short": "Units",     "build": build_retrieval_units_tab,  "render": render_retrieval_units,  "n": 5},
+    {"id": "snapshot",  "label": "Snapshot 快照",     "short": "Snapshot",  "build": build_snapshot_tab,         "render": render_snapshot,         "n": 4},
+    {"id": "build",     "label": "Build 构建",        "short": "Build",     "build": build_build_tab,            "render": render_build,            "n": 3},
+    {"id": "release",   "label": "Release 发布",      "short": "Release",   "build": build_release_tab,          "render": render_release,          "n": 2},
+    {"id": "timeline",  "label": "事件时间线",         "short": "Timeline",  "build": build_timeline_tab,         "render": render_timeline,         "n": 3},
 ]
+STAGE_BY_ID = {s["id"]: s for s in STAGES}
+STAGE_IDS = [s["id"] for s in STAGES]
+PIPELINE_STAGE_IDS = [sid for sid in STAGE_IDS if sid != "timeline"]  # 9 pipeline stages for stepper
 
 
-def _placeholder_outputs() -> list[Any]:
-    """Return a list of placeholder values matching the flat stage components."""
-    out: list[Any] = []
-    for stage in STAGES:
-        # Each stage builder produces: 1 markdown + N plots + 1 table
-        # Use the stage's render-empty path: call with non-existent run_id won't work
-        # Instead: produce neutral defaults — running text + empty dfs
-        if stage["label"].startswith("1️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("action"), _empty_counts_df("status"), pd.DataFrame()])
-        elif stage["label"].startswith("2️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("doc"), _empty_counts_df("depth"), pd.DataFrame()])
-        elif stage["label"].startswith("3️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("block_type"),
-                        _empty_counts_df("token_bin"), pd.DataFrame()])
-        elif stage["label"].startswith("4️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("semantic_role"), _empty_counts_df("entity_type"),
-                        _empty_counts_df("count_per_seg"), pd.DataFrame()])
-        elif stage["label"].startswith("5️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("relation_type"), _empty_counts_df("distance_bin"), pd.DataFrame()])
-        elif stage["label"].startswith("6️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("unit_type"), _empty_counts_df("target_type"),
-                        _empty_counts_df("text_len_bin"), pd.DataFrame()])
-        elif stage["label"].startswith("7️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("action"), _empty_counts_df("mime_type"), pd.DataFrame()])
-        elif stage["label"].startswith("8️⃣"):
-            out.extend([RUNNING_TEXT, _empty_counts_df("reason"), pd.DataFrame()])
-        elif stage["label"].startswith("9️⃣"):
-            out.extend([RUNNING_TEXT, pd.DataFrame()])
-        else:  # timeline
-            out.extend([RUNNING_TEXT, _empty_counts_df("stage"), pd.DataFrame()])
-    return out
+def _empty_render_for(stage: dict[str, Any]) -> list[Any]:
+    """Default placeholder per stage when run not started or stage not yet reached."""
+    if stage["id"] == "ingest":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("action"), _empty_counts_df("status"), pd.DataFrame()]
+    if stage["id"] == "parse":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("doc"), _empty_counts_df("depth"), pd.DataFrame()]
+    if stage["id"] == "segment":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("block_type"), _empty_counts_df("token_bin"), pd.DataFrame()]
+    if stage["id"] == "enrich":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("semantic_role"), _empty_counts_df("entity_type"),
+                _empty_counts_df("count_per_seg"), pd.DataFrame()]
+    if stage["id"] == "relations":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("relation_type"), _empty_counts_df("distance_bin"), pd.DataFrame()]
+    if stage["id"] == "units":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("unit_type"), _empty_counts_df("target_type"),
+                _empty_counts_df("text_len_bin"), pd.DataFrame()]
+    if stage["id"] == "snapshot":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("action"), _empty_counts_df("mime_type"), pd.DataFrame()]
+    if stage["id"] == "build":
+        return [EMPTY_RUN_TEXT, _empty_counts_df("reason"), pd.DataFrame()]
+    if stage["id"] == "release":
+        return [EMPTY_RUN_TEXT, pd.DataFrame()]
+    return [EMPTY_RUN_TEXT, _empty_counts_df("stage"), pd.DataFrame()]  # timeline
 
 
-def _render_all(run_id: str | None) -> list[Any]:
-    out: list[Any] = []
+def _safe_render(stage: dict[str, Any], run_id: str | None) -> list[Any]:
+    """Render a stage, falling back to placeholder on error or missing run."""
     if not run_id:
-        return _placeholder_outputs()
-    for stage in STAGES:
-        try:
-            out.extend(stage["render"](run_id))
-        except Exception as e:
-            err = f"❌ 渲染失败：{type(e).__name__}: {e}"
-            # Fall back to placeholders for this stage
-            placeholders = _placeholder_outputs()
-            # Find the slice for this stage and replace summary with err
-            # Simpler: just push the err as the first slot then pad with empty dfs
-            out.append(err)
-            # Pad
-            stage_components = stage["build"].__name__
-            # Count slots by re-running build is not safe — use heuristic from labels
-            label = stage["label"]
-            if label.startswith("1️⃣"):    pad = 3
-            elif label.startswith("2️⃣"):  pad = 3
-            elif label.startswith("3️⃣"):  pad = 3
-            elif label.startswith("4️⃣"):  pad = 4
-            elif label.startswith("5️⃣"):  pad = 3
-            elif label.startswith("6️⃣"):  pad = 4
-            elif label.startswith("7️⃣"):  pad = 3
-            elif label.startswith("8️⃣"):  pad = 2
-            elif label.startswith("9️⃣"):  pad = 1
-            else:                          pad = 2
-            for _ in range(pad):
-                out.append(pd.DataFrame())
+        return _empty_render_for(stage)
+    try:
+        return stage["render"](run_id)
+    except Exception as e:
+        msg = f"❌ 渲染失败：{type(e).__name__}: {e}"
+        out = _empty_render_for(stage)
+        out[0] = msg
+        return out
+
+
+# =====================================================================
+# Per-stage state derivation (status + KPI) from PG
+# =====================================================================
+
+def _stage_event_status(events_by_stage: dict[str, dict], names: tuple[str, ...]) -> str | None:
+    """Return 'completed' if any of the named stage_events is completed,
+    'started' if any started but none completed, else None."""
+    seen = "none"
+    for name in names:
+        ev = events_by_stage.get(name)
+        if not ev:
+            continue
+        if ev["status"] == "completed":
+            return "completed"
+        if ev["status"] == "failed":
+            return "failed"
+        if ev["status"] == "started":
+            seen = "started"
+    return seen if seen != "none" else None
+
+
+def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
+    """Compute per-stage UI status: pending / running / done / failed / cancelled.
+
+    Returns dict keyed by stage id (only the 9 pipeline stages, no timeline).
+    Each value has: {status, kpi_text, duration_ms}
+    """
+    if run_row is None:
+        return {sid: {"status": "pending", "kpi": None, "duration_ms": None}
+                for sid in PIPELINE_STAGE_IDS}
+    rt = _open_runtime()
+    asset = _open_asset()
+    overall_status = run_row["status"]
+    is_terminal = overall_status in ("completed", "failed", "cancelled")
+    try:
+        # Latest stage event per stage name
+        ev_rows = rt.execute(
+            "SELECT stage, status, duration_ms, error_message, created_at "
+            "FROM mining_run_stage_events "
+            "WHERE run_id = %s ORDER BY created_at",
+            (run_id,),
+        ).fetchall()
+        events_by_stage: dict[str, dict] = {}
+        for r in ev_rows:
+            cur = events_by_stage.get(r["stage"])
+            # Keep the latest for each stage; "completed" trumps "started".
+            if cur is None or (cur["status"] == "started" and r["status"] in ("completed", "failed")):
+                events_by_stage[r["stage"]] = dict(r)
+
+        snap_ids = _snapshot_ids(rt, run_id)
+        snap_ph = ",".join(["%s"] * len(snap_ids)) if snap_ids else None
+
+        # ingest: based on mining_run_documents
+        doc_rows = rt.execute(
+            "SELECT status, action FROM mining_run_documents WHERE run_id = %s",
+            (run_id,),
+        ).fetchall()
+        n_docs = len(doc_rows)
+        n_docs_failed = sum(1 for r in doc_rows if r["status"] == "failed")
+        n_docs_committed = sum(1 for r in doc_rows if r["status"] == "committed")
+
+        # asset-side counts for downstream stages
+        n_segments = 0
+        n_enriched_segs = 0
+        n_relations = 0
+        n_units = 0
+        n_snapshots = 0
+        if snap_ph:
+            n_segments = (asset.execute(
+                f"SELECT COUNT(*) AS c FROM asset_raw_segments WHERE document_snapshot_id IN ({snap_ph})",
+                snap_ids,
+            ).fetchone() or {"c": 0})["c"]
+            n_enriched_segs = (asset.execute(
+                f"SELECT COUNT(*) AS c FROM asset_raw_segments "
+                f"WHERE document_snapshot_id IN ({snap_ph}) AND entity_refs_json != '[]'",
+                snap_ids,
+            ).fetchone() or {"c": 0})["c"]
+            n_relations = (asset.execute(
+                f"SELECT COUNT(*) AS c FROM asset_raw_segment_relations WHERE document_snapshot_id IN ({snap_ph})",
+                snap_ids,
+            ).fetchone() or {"c": 0})["c"]
+            n_units = (asset.execute(
+                f"SELECT COUNT(*) AS c FROM asset_retrieval_units WHERE document_snapshot_id IN ({snap_ph})",
+                snap_ids,
+            ).fetchone() or {"c": 0})["c"]
+            n_snapshots = (asset.execute(
+                f"SELECT COUNT(*) AS c FROM asset_document_snapshots WHERE id IN ({snap_ph})",
+                snap_ids,
+            ).fetchone() or {"c": 0})["c"]
+
+        # build / release
+        build_id = run_row.get("build_id")
+        n_releases = 0
+        if build_id:
+            n_releases = (asset.execute(
+                "SELECT COUNT(*) AS c FROM asset_publish_releases WHERE build_id = %s",
+                (build_id,),
+            ).fetchone() or {"c": 0})["c"]
+    finally:
+        rt.close()
+        asset.close()
+
+    seg_evt = events_by_stage.get("segment")
+    rel_evt = events_by_stage.get("build_relations")
+    snap_evt = events_by_stage.get("select_snapshot")
+    ru_evt = events_by_stage.get("build_retrieval_units")
+    ab_evt = events_by_stage.get("assemble_build")
+    pr_evt = events_by_stage.get("publish_release")
+
+    def derive(has_data: bool, evt: dict | None, *, started_others: bool = False) -> tuple[str, int | None]:
+        """Return (status, duration_ms)."""
+        if evt and evt["status"] == "failed":
+            return ("failed", evt.get("duration_ms"))
+        if evt and evt["status"] == "completed":
+            return ("done", evt.get("duration_ms"))
+        if has_data:
+            return ("done" if is_terminal else "running", None)
+        if evt and evt["status"] == "started":
+            return ("running", None)
+        if started_others or overall_status == "running":
+            return ("pending", None)
+        if overall_status == "cancelled":
+            return ("cancelled", None)
+        if overall_status == "failed" and not has_data:
+            return ("pending", None)
+        return ("pending", None)
+
+    stages: dict[str, dict] = {}
+    # ingest
+    if n_docs > 0:
+        st = "failed" if (n_docs_failed > 0 and n_docs_committed == 0 and overall_status == "failed") else "done"
+        kpi = f"📄 {n_docs} 个 · ✓{n_docs_committed} ✗{n_docs_failed}"
+    else:
+        st = "running" if overall_status == "running" else "pending"
+        kpi = "—"
+    stages["ingest"] = {"status": st, "kpi": kpi, "duration_ms": None}
+
+    # parse — segment events are written together with seg DB write; parse alone has no event
+    parse_status, parse_dur = derive(n_segments > 0, seg_evt)
+    stages["parse"] = {"status": parse_status, "kpi": f"≈{n_segments} 段" if n_segments else "—", "duration_ms": None}
+
+    # segment
+    seg_st, seg_dur = derive(n_segments > 0, seg_evt)
+    stages["segment"] = {"status": seg_st, "kpi": f"{n_segments} 段" if n_segments else "—", "duration_ms": seg_dur}
+
+    # enrich — no explicit event; presence of enriched segs OR completion of relations implies done
+    if n_enriched_segs > 0:
+        en_st, en_kpi = ("done" if is_terminal else "done"), f"{n_enriched_segs} 段含实体"
+    elif rel_evt and rel_evt.get("status") == "completed":
+        en_st, en_kpi = "done", "0 实体（rule-based 无命中）"
+    elif n_segments > 0:
+        en_st = "running" if overall_status == "running" else "pending"
+        en_kpi = "—"
+    else:
+        en_st = "running" if overall_status == "running" else "pending"
+        en_kpi = "—"
+    stages["enrich"] = {"status": en_st, "kpi": en_kpi, "duration_ms": None}
+
+    # relations
+    rel_st, rel_dur = derive(n_relations > 0, rel_evt)
+    stages["relations"] = {"status": rel_st, "kpi": f"{n_relations} 条" if n_relations else "—", "duration_ms": rel_dur}
+
+    # units
+    ru_st, ru_dur = derive(n_units > 0, ru_evt)
+    stages["units"] = {"status": ru_st, "kpi": f"{n_units} 单元" if n_units else "—", "duration_ms": ru_dur}
+
+    # snapshot
+    snap_st, snap_dur = derive(n_snapshots > 0, snap_evt)
+    stages["snapshot"] = {"status": snap_st, "kpi": f"{n_snapshots} 快照" if n_snapshots else "—", "duration_ms": snap_dur}
+
+    # build
+    has_build = bool(build_id)
+    bd_st, bd_dur = derive(has_build, ab_evt)
+    stages["build"] = {"status": bd_st, "kpi": f"build {build_id[:8]}" if has_build and build_id else "—", "duration_ms": bd_dur}
+
+    # release
+    rel2_st, rel2_dur = derive(n_releases > 0, pr_evt)
+    stages["release"] = {"status": rel2_st, "kpi": f"{n_releases} release" if n_releases else "—", "duration_ms": rel2_dur}
+
+    # If overall is cancelled and stage is still pending, mark as cancelled
+    if overall_status == "cancelled":
+        for sid, sd in stages.items():
+            if sd["status"] in ("pending", "running"):
+                sd["status"] = "cancelled"
+
+    return stages
+
+
+# =====================================================================
+# UI helpers (rendering)
+# =====================================================================
+
+_STATUS_GLYPH = {
+    "done":      "✓",
+    "running":   "⟳",
+    "pending":   "○",
+    "failed":    "✗",
+    "cancelled": "⊘",
+}
+_STATUS_COLOR = {
+    "done":      "#10b981",
+    "running":   "#3b82f6",
+    "pending":   "#94a3b8",
+    "failed":    "#ef4444",
+    "cancelled": "#f59e0b",
+}
+
+
+def _fmt_duration(ms: int | None) -> str:
+    if ms is None:
+        return "—"
+    if ms < 1000:
+        return f"{ms} ms"
+    if ms < 60_000:
+        return f"{ms / 1000:.1f}s"
+    m, s = divmod(ms // 1000, 60)
+    return f"{m}m{s:02d}s"
+
+
+def _stepper_choices(stages: dict[str, dict]) -> list[tuple[str, str]]:
+    """Build the list of (label, value) tuples for the Stepper Radio (9 stages)."""
+    out: list[tuple[str, str]] = []
+    for sid in PIPELINE_STAGE_IDS:
+        s = STAGE_BY_ID[sid]
+        st = stages.get(sid, {}).get("status", "pending")
+        glyph = _STATUS_GLYPH[st]
+        dur = _fmt_duration(stages.get(sid, {}).get("duration_ms"))
+        kpi = stages.get(sid, {}).get("kpi", "—")
+        if st == "running":
+            extra = "运行中…"
+        elif st == "done":
+            extra = dur
+        elif st == "failed":
+            extra = "失败"
+        elif st == "cancelled":
+            extra = "已取消"
+        else:
+            extra = "待运行"
+        label = f"{glyph} {s['short']} · {extra}"
+        if kpi != "—" and st in ("done", "running", "failed"):
+            label += f" · {kpi}"
+        out.append((label, sid))
     return out
 
 
+def _phase_from_run(run_row: dict | None) -> str:
+    """Map mining_runs.status → UI phase."""
+    if run_row is None:
+        return "running"  # run not yet appeared, but worker spawned
+    s = run_row["status"]
+    if s == "completed":
+        return "done"
+    if s == "failed":
+        return "failed"
+    if s == "cancelled":
+        return "cancelled"
+    return "running"
+
+
+def _elapsed_seconds(started_at: str | None, finished_at: str | None) -> int:
+    if not started_at:
+        return 0
+    try:
+        from datetime import datetime, timezone
+        start = datetime.fromisoformat(started_at)
+        end = datetime.fromisoformat(finished_at) if finished_at else datetime.now(timezone.utc)
+        return max(0, int((end - start).total_seconds()))
+    except Exception:
+        return 0
+
+
+def _progress_pct(stages: dict[str, dict]) -> int:
+    done = sum(1 for sid in PIPELINE_STAGE_IDS if stages.get(sid, {}).get("status") in ("done",))
+    return int(done / len(PIPELINE_STAGE_IDS) * 100)
+
+
+def _status_bar_html(run_row: dict | None, stages: dict[str, dict], phase: str) -> str:
+    if run_row is None:
+        return '<div class="status-bar">⏳ 启动中…</div>'
+    elapsed = _elapsed_seconds(run_row.get("started_at"), run_row.get("finished_at"))
+    mm, ss = divmod(elapsed, 60)
+    pct = _progress_pct(stages)
+    rid = (run_row.get("id") or "")[:8]
+    if phase == "running":
+        icon, label, color = "🏃", "运行中", "#3b82f6"
+    elif phase == "done":
+        icon, label, color = "✅", "完成", "#10b981"
+    elif phase == "failed":
+        icon, label, color = "❌", "失败", "#ef4444"
+    elif phase == "cancelled":
+        icon, label, color = "⊘", "已取消", "#f59e0b"
+    else:
+        icon, label, color = "•", phase, "#94a3b8"
+    return (
+        f'<div class="status-bar">'
+        f'  <span class="sb-badge" style="background:{color}1a;color:{color};">{icon} {label}</span>'
+        f'  <span class="sb-meta">run <code>{rid}</code></span>'
+        f'  <span class="sb-meta">⏱ {mm}:{ss:02d}</span>'
+        f'  <span class="sb-meta">进度 {pct}%</span>'
+        f'  <div class="sb-bar"><div class="sb-bar-fill" style="width:{pct}%;background:{color};"></div></div>'
+        f'</div>'
+    )
+
+
+def _focus_label_md(focus_stage: str | None, stages: dict[str, dict], auto_follow: bool) -> str:
+    if not focus_stage:
+        return "_（请选择阶段）_"
+    s = STAGE_BY_ID.get(focus_stage)
+    if not s:
+        return "_（未知阶段）_"
+    st = stages.get(focus_stage, {}).get("status", "pending")
+    glyph = _STATUS_GLYPH.get(st, "•")
+    follow = " · 📍 自动跟随最新已完成阶段" if auto_follow else ""
+    return f"### {glyph} 当前焦点 · {s['label']}{follow}"
+
+
+def _kpi_html(stage_id: str, stages: dict[str, dict]) -> str:
+    """4-card KPI strip for the focused stage panel."""
+    sd = stages.get(stage_id, {})
+    st = sd.get("status", "pending")
+    glyph = _STATUS_GLYPH.get(st, "•")
+    color = _STATUS_COLOR.get(st, "#94a3b8")
+    dur = _fmt_duration(sd.get("duration_ms"))
+    kpi = sd.get("kpi", "—")
+    label_map = {
+        "done": "已完成", "running": "运行中",
+        "pending": "等待中", "failed": "失败", "cancelled": "已取消",
+    }
+    return (
+        f'<div class="kpi-row">'
+        f'  <div class="kpi-card"><div class="kpi-num" style="color:{color};">{glyph}</div>'
+        f'    <div class="kpi-label">{label_map.get(st, st)}</div></div>'
+        f'  <div class="kpi-card"><div class="kpi-num">{dur}</div>'
+        f'    <div class="kpi-label">耗时</div></div>'
+        f'  <div class="kpi-card"><div class="kpi-num">{kpi}</div>'
+        f'    <div class="kpi-label">本阶段产出</div></div>'
+        f'</div>'
+    )
+
+
 # =====================================================================
-# Main run handler
+# Run-orchestration helpers
 # =====================================================================
 
-def do_mining(
-    files,
-    product,
-    tags,
-    doc_type,
-    domain_pack,
-    use_llm,
-    llm_url,
-    embedding_key,
-    progress=gr.Progress(),
+_RUN_LOCK = threading.Lock()
+
+
+def _next_focus(prev: str | None, stages: dict[str, dict], auto_follow: bool) -> str:
+    """Pick the stage to focus on.
+
+    auto_follow=True: latest stage with status='done', else first 'running', else first 'pending'.
+    auto_follow=False: keep prev (or fallback if invalid).
+    """
+    valid = [sid for sid in PIPELINE_STAGE_IDS if stages.get(sid, {}).get("status") != "pending"]
+    if not auto_follow and prev and prev in PIPELINE_STAGE_IDS and (
+        stages.get(prev, {}).get("status") != "pending"
+    ):
+        return prev
+    # auto follow: latest done first, then running, else first pipeline stage
+    last_done = None
+    first_running = None
+    for sid in PIPELINE_STAGE_IDS:
+        st = stages.get(sid, {}).get("status")
+        if st == "done":
+            last_done = sid
+        if st == "running" and first_running is None:
+            first_running = sid
+    return last_done or first_running or (valid[0] if valid else PIPELINE_STAGE_IDS[0])
+
+
+def _cancel_run_in_db(run_id: str) -> None:
+    """Best-effort: flip mining_runs.status to 'cancelled' (UI-side cancel signal)."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE mining_runs SET status = 'cancelled', finished_at = %s "
+            "WHERE id = %s AND status IN ('running', 'pending', 'queued')",
+            (now, run_id),
+        )
+
+
+# =====================================================================
+# Callbacks
+# =====================================================================
+
+INITIAL_STATE: dict[str, Any] = {
+    "phase": "ready",          # ready | running | done | failed | cancelled
+    "run_id": None,
+    "input_path": None,
+    "focus_stage": None,
+    "auto_follow": True,
+    "started_at_local": None,  # python time, for orphan-detection
+    "stages": {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS},
+}
+
+
+def _build_outputs_for_phase(
+    state: dict[str, Any],
+    run_row: dict | None = None,
+) -> tuple[list[Any], list[Any]]:
+    """Build (focus-area updates, per-stage updates) lists for current state.
+
+    Returns:
+      focus_updates — [status_bar_html, stepper_choices, focus_label_md]
+      stage_updates — flat list of per-stage [group_visible, kpi_html, *components(n)]
+                      for all 10 stages (pipeline 9 + timeline)
+    """
+    phase = state["phase"]
+    stages_state = state["stages"]
+    focus = state["focus_stage"]
+    auto_follow = state.get("auto_follow", True)
+
+    sb_html = _status_bar_html(run_row, stages_state, phase)
+    stepper_choices = _stepper_choices(stages_state)
+    if focus and focus in PIPELINE_STAGE_IDS:
+        focus_value = focus
+    else:
+        focus_value = PIPELINE_STAGE_IDS[0]
+    focus_label = _focus_label_md(focus, stages_state, auto_follow)
+    focus_updates = [
+        sb_html,
+        gr.update(choices=stepper_choices, value=focus_value),
+        focus_label,
+    ]
+
+    # Per-stage updates: render only the focused stage; others get their components untouched (gr.skip)
+    run_id = state.get("run_id")
+    stage_updates: list[Any] = []
+    for stage in STAGES:
+        sid = stage["id"]
+        is_focus = (sid == focus) or (sid == "timeline" and focus == "timeline")
+        # Group visibility: focus visible; non-pipeline timeline visible if focus == 'timeline'
+        # For pipeline stages, only the focused one is visible
+        visible = (sid == focus) if focus else (sid == PIPELINE_STAGE_IDS[0])
+        stage_updates.append(gr.update(visible=visible))  # group
+        # KPI HTML
+        if sid in PIPELINE_STAGE_IDS:
+            stage_updates.append(_kpi_html(sid, stages_state))
+        else:
+            stage_updates.append("<div class='kpi-row'></div>")
+        # Components
+        if is_focus and run_id:
+            rendered = _safe_render(stage, run_id)
+            stage_updates.extend(rendered)
+        else:
+            # Don't touch other stages' components; pad with gr.skip()
+            stage_updates.extend([gr.skip()] * stage["n"])
+    return focus_updates, stage_updates
+
+
+def _empty_outputs() -> tuple[list[Any], list[Any]]:
+    """Outputs for the READY phase (run group hidden)."""
+    sb_html = ""
+    empty_choices = [(f"○ {s['short']} · 待运行", s["id"]) for s in STAGES if s["id"] != "timeline"]
+    focus_updates = [sb_html, gr.update(choices=empty_choices, value=PIPELINE_STAGE_IDS[0]), ""]
+    stage_updates: list[Any] = []
+    for stage in STAGES:
+        stage_updates.append(gr.update(visible=False))  # group
+        stage_updates.append("<div class='kpi-row'></div>")
+        stage_updates.extend(_empty_render_for(stage))
+    return focus_updates, stage_updates
+
+
+def _ingest_files(files, target: Path) -> list[Path]:
+    target.mkdir(parents=True, exist_ok=True)
+    out: list[Path] = []
+    for f in files or []:
+        src = Path(f.name if hasattr(f, "name") else f)
+        dst = target / src.name
+        shutil.copy(src, dst)
+        out.append(dst)
+    return out
+
+
+def cb_start_mining(
+    state, files, product, tags, doc_type, domain_pack, use_llm, llm_url, embedding_key,
 ):
-    placeholder = _placeholder_outputs()
-
+    """Click handler for the Start button. Spawns worker, switches to RUNNING."""
     if not files:
-        yield ["❌ 请先上传文件", None] + placeholder
-        return
+        gr.Warning("请先上传文件")
+        # Return current outputs unchanged (basically gr.skip everywhere except maybe state)
+        focus_updates, stage_updates = _empty_outputs()
+        return [
+            state,                      # state
+            gr.update(visible=True),    # ready_group
+            gr.update(visible=False),   # run_group
+            gr.update(active=False),    # timer
+            gr.update(visible=False),   # cancel_btn
+            gr.update(visible=False),   # restart_btn
+        ] + focus_updates + stage_updates
+
+    # Acquire run lock
+    if not _RUN_LOCK.acquire(blocking=False):
+        gr.Warning("已经有挖掘任务在执行")
+        focus_updates, stage_updates = _empty_outputs()
+        return [
+            state,
+            gr.update(visible=True), gr.update(visible=False), gr.update(active=False),
+            gr.update(visible=False), gr.update(visible=False),
+        ] + focus_updates + stage_updates
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = UPLOADS_ROOT / ts
-    target.mkdir(parents=True, exist_ok=True)
-    for f in files:
-        src = Path(f.name if hasattr(f, "name") else f)
-        shutil.copy(src, target / src.name)
-
-    yield [f"📁 已落盘 {len(files)} 个文件 → {target}\n⏳ 启动 mining...", None] + placeholder
-
-    holder: dict = {}
+    _ingest_files(files, target)
 
     product_v = (product or "").strip()
     tags_v = (tags or "").strip()
@@ -1086,7 +1547,7 @@ def do_mining(
 
     def worker():
         try:
-            holder["result"] = mining_run(
+            mining_run(
                 input_path=target,
                 batch_params=BatchParams(
                     default_source_type="folder_scan",
@@ -1099,45 +1560,184 @@ def do_mining(
                 llm_bypass_proxy=True,
                 embedding_api_key=(embedding_key_v or None),
             )
-        except Exception as e:
-            holder["error"] = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        except Exception:
+            traceback.print_exc()
+        finally:
+            _RUN_LOCK.release()
 
     th = threading.Thread(target=worker, daemon=True)
     th.start()
 
-    last_msg = "⏳ 正在执行..."
-    current_run_id: str | None = None
-    while th.is_alive():
-        time.sleep(1.0)
-        snap = _query_latest_run(str(target))
-        if snap:
-            r = snap["run"]
-            current_run_id = r["id"]
-            ev = snap["latest_event"]
-            stage_line = (
-                f"阶段 {ev['stage']} [{ev['status']}]" if ev else "（尚未产生 stage event）"
-            )
-            last_msg = (
-                f"🏃 run_id={r['id'][:12]}... | status={r['status']}\n"
-                f"📄 文档 total={r['total_documents']} new={r['new_count']} "
-                f"updated={r['updated_count']} skipped={r['skipped_count']} "
-                f"failed={r['failed_count']} committed={r['committed_count']}\n"
-                f"🔧 {stage_line}"
-            )
-        progress(0.5, desc="挖掘中...")
-        yield [last_msg, None] + placeholder
+    new_state = {
+        **state,
+        "phase": "running",
+        "input_path": str(target),
+        "started_at_local": time.time(),
+        "auto_follow": True,
+        "focus_stage": PIPELINE_STAGE_IDS[0],
+        "run_id": None,
+        "stages": INITIAL_STATE["stages"].copy(),
+    }
+    focus_updates, stage_updates = _build_outputs_for_phase(new_state, None)
+    return [
+        new_state,
+        gr.update(visible=False),  # ready_group hidden
+        gr.update(visible=True),   # run_group visible
+        gr.update(active=True),    # timer ON
+        gr.update(visible=True),   # cancel_btn visible
+        gr.update(visible=False),  # restart_btn hidden
+    ] + focus_updates + stage_updates
 
-    th.join()
 
-    if "error" in holder:
-        stage_outputs = _render_all(current_run_id)
-        yield [f"❌ 失败:\n{holder['error']}", None] + stage_outputs
-        return
+def cb_poll_tick(state):
+    """Timer callback — read PG, refresh UI."""
+    if state["phase"] == "ready":
+        # Should not happen (timer disabled), but guard anyway
+        focus_updates, stage_updates = _empty_outputs()
+        return [
+            state, gr.update(visible=True), gr.update(visible=False),
+            gr.update(active=False), gr.update(visible=False), gr.update(visible=False),
+        ] + focus_updates + stage_updates
 
-    result = holder["result"]
-    final_run_id = result.get("run_id") or current_run_id
-    stage_outputs = _render_all(final_run_id)
-    yield ["✅ 完成", result] + stage_outputs
+    input_path = state.get("input_path")
+    if not input_path:
+        focus_updates, stage_updates = _build_outputs_for_phase(state, None)
+        return [
+            state, gr.update(visible=False), gr.update(visible=True),
+            gr.update(active=True), gr.update(visible=True), gr.update(visible=False),
+        ] + focus_updates + stage_updates
+
+    snap = _query_latest_run(input_path)
+    if snap is None:
+        # Run not yet visible in DB
+        if state.get("started_at_local") and time.time() - state["started_at_local"] > 30:
+            # Orphan — worker likely failed before creating run row
+            new_state = {**state, "phase": "failed"}
+            focus_updates, stage_updates = _build_outputs_for_phase(new_state, None)
+            return [
+                new_state, gr.update(visible=False), gr.update(visible=True),
+                gr.update(active=False), gr.update(visible=False), gr.update(visible=True),
+            ] + focus_updates + stage_updates
+        focus_updates, stage_updates = _build_outputs_for_phase(state, None)
+        return [
+            state, gr.update(visible=False), gr.update(visible=True),
+            gr.update(active=True), gr.update(visible=True), gr.update(visible=False),
+        ] + focus_updates + stage_updates
+
+    run_row = snap["run"]
+    run_id = run_row["id"]
+    new_phase = _phase_from_run(run_row)
+    stages_state = _compute_pipeline_status(run_id, run_row)
+    focus = _next_focus(state.get("focus_stage"), stages_state, state.get("auto_follow", True))
+
+    new_state = {
+        **state,
+        "phase": new_phase,
+        "run_id": run_id,
+        "stages": stages_state,
+        "focus_stage": focus,
+    }
+
+    is_terminal = new_phase in ("done", "failed", "cancelled")
+    focus_updates, stage_updates = _build_outputs_for_phase(new_state, run_row)
+    return [
+        new_state,
+        gr.update(visible=False),                 # ready_group hidden
+        gr.update(visible=True),                  # run_group visible
+        gr.update(active=not is_terminal),        # timer
+        gr.update(visible=(new_phase == "running")),    # cancel_btn
+        gr.update(visible=is_terminal),                 # restart_btn
+    ] + focus_updates + stage_updates
+
+
+def cb_cancel(state):
+    """Click handler for ▣ 终止."""
+    run_id = state.get("run_id")
+    if not run_id:
+        gr.Warning("尚未拿到 run_id，请稍等再点")
+        focus_updates, stage_updates = _build_outputs_for_phase(state, None)
+        return [
+            state, gr.update(visible=False), gr.update(visible=True),
+            gr.update(active=True), gr.update(visible=True), gr.update(visible=False),
+        ] + focus_updates + stage_updates
+    try:
+        _cancel_run_in_db(run_id)
+        gr.Info("已发送终止信号，worker 将在最近一次检查点退出")
+    except Exception as e:
+        gr.Warning(f"发送终止失败：{e}")
+    # Disable cancel button visually until next poll
+    focus_updates, stage_updates = _build_outputs_for_phase(state, None)
+    return [
+        state,
+        gr.update(visible=False), gr.update(visible=True),
+        gr.update(active=True),
+        gr.update(visible=False, value="⏳ 正在停止…"),  # cancel_btn disabled visually
+        gr.update(visible=False),
+    ] + focus_updates + stage_updates
+
+
+def cb_stepper_change(state, new_focus):
+    """User clicked a different stage on the stepper — pin focus, disable auto-follow."""
+    if not new_focus or new_focus not in PIPELINE_STAGE_IDS:
+        return [state] + [gr.skip()] * (5 + 3 + sum(2 + s["n"] for s in STAGES))
+    new_state = {**state, "focus_stage": new_focus, "auto_follow": False}
+    focus_updates, stage_updates = _build_outputs_for_phase(
+        new_state, _query_latest_run(state["input_path"])["run"] if state.get("input_path") else None
+    )
+    return [
+        new_state,
+        gr.update(),  # ready_group
+        gr.update(),  # run_group
+        gr.update(),  # timer
+        gr.update(),  # cancel_btn
+        gr.update(),  # restart_btn
+    ] + focus_updates + stage_updates
+
+
+def cb_enable_follow(state):
+    new_state = {**state, "auto_follow": True}
+    snap = _query_latest_run(state["input_path"]) if state.get("input_path") else None
+    run_row = snap["run"] if snap else None
+    if run_row:
+        stages_state = _compute_pipeline_status(run_row["id"], run_row)
+        new_state["stages"] = stages_state
+        new_state["focus_stage"] = _next_focus(None, stages_state, True)
+    focus_updates, stage_updates = _build_outputs_for_phase(new_state, run_row)
+    return [
+        new_state,
+        gr.update(),  # ready_group
+        gr.update(),  # run_group
+        gr.update(),  # timer
+        gr.update(),  # cancel_btn
+        gr.update(),  # restart_btn
+    ] + focus_updates + stage_updates
+
+
+def cb_restart(state):
+    """Reset to READY phase."""
+    new_state = INITIAL_STATE.copy()
+    new_state["stages"] = {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS}
+    focus_updates, stage_updates = _empty_outputs()
+    return [
+        new_state,
+        gr.update(visible=True),   # ready_group
+        gr.update(visible=False),  # run_group
+        gr.update(active=False),
+        gr.update(visible=False, value="▣ 终止"),
+        gr.update(visible=False),
+    ] + focus_updates + stage_updates
+
+
+def cb_show_timeline(state):
+    """Switch focus to timeline tab."""
+    new_state = {**state, "focus_stage": "timeline", "auto_follow": False}
+    snap = _query_latest_run(state["input_path"]) if state.get("input_path") else None
+    run_row = snap["run"] if snap else None
+    focus_updates, stage_updates = _build_outputs_for_phase(new_state, run_row)
+    return [
+        new_state,
+        gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+    ] + focus_updates + stage_updates
 
 
 # =====================================================================
@@ -1148,145 +1748,262 @@ CUSTOM_CSS = """
 .gradio-container {
     max-width: 1480px !important;
     margin: 0 auto !important;
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f7fb !important;
 }
-#hero {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 28px 32px;
-    border-radius: 16px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.25);
+#app-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 4px 8px 4px; margin-bottom: 6px;
+    border-bottom: 1px solid #e6e8f0;
 }
-#hero h1 {
-    margin: 0 0 6px 0 !important;
-    color: white !important;
-    font-size: 26px !important;
-    font-weight: 700;
+#app-header h1 {
+    margin: 0 !important; font-size: 22px !important; font-weight: 700 !important;
+    color: #1f2937 !important; letter-spacing: -0.01em;
 }
-#hero p {
-    margin: 0 !important;
-    color: rgba(255,255,255,0.92) !important;
-    font-size: 14px;
+#app-header .subtitle { color: #6b7280; font-size: 13px; }
+
+/* READY group */
+#ready-group .gr-block {
+    background: #fff; border-radius: 12px; padding: 16px;
+    border: 1px solid #e6e8f0; box-shadow: 0 1px 2px rgba(15,23,42,0.04);
 }
-#sidebar {
-    background: #f8f9fc;
-    padding: 18px;
-    border-radius: 12px;
+#start-btn {
+    background: #5b6cff !important; color: #fff !important;
+    font-weight: 600 !important; font-size: 15px !important; padding: 12px !important;
+    border: none !important; border-radius: 10px !important;
+    box-shadow: 0 1px 4px rgba(91,108,255,0.25) !important;
+}
+#start-btn:hover { background: #4a59e8 !important; }
+
+/* Status bar (RUNNING) */
+.status-bar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 14px; background: #fff;
+    border-radius: 12px; border: 1px solid #e6e8f0;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    font-size: 13px;
+}
+.status-bar .sb-badge {
+    padding: 4px 10px; border-radius: 6px; font-weight: 600; font-size: 12px;
+}
+.status-bar .sb-meta { color: #475569; }
+.status-bar .sb-meta code {
+    background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.status-bar .sb-bar {
+    flex: 1 1 auto; height: 6px; background: #e6e8f0; border-radius: 3px;
+    overflow: hidden; min-width: 80px;
+}
+.status-bar .sb-bar-fill { height: 100%; transition: width 0.3s ease; }
+
+#cancel-btn {
+    background: #fff !important; color: #ef4444 !important;
+    border: 1px solid #ef4444 !important; border-radius: 8px !important;
+    font-weight: 600 !important; font-size: 13px !important;
+    padding: 6px 14px !important;
+}
+#cancel-btn:hover { background: #fef2f2 !important; }
+
+#restart-btn {
+    background: #5b6cff !important; color: #fff !important;
+    border: none !important; border-radius: 8px !important;
+    font-weight: 600 !important; font-size: 13px !important;
+    padding: 6px 14px !important;
+}
+
+#follow-btn, #timeline-btn {
+    background: #fff !important; color: #475569 !important;
+    border: 1px solid #cbd5e1 !important; border-radius: 8px !important;
+    font-size: 12px !important; padding: 4px 10px !important; font-weight: 500 !important;
+}
+#follow-btn:hover, #timeline-btn:hover { background: #f8fafc !important; }
+
+/* Stepper Radio styled as horizontal stepper */
+#stepper {
+    background: #fff; padding: 12px; border-radius: 12px;
     border: 1px solid #e6e8f0;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
 }
-#run-btn {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-    color: white !important;
-    font-weight: 600 !important;
-    font-size: 16px !important;
-    padding: 14px !important;
-    border: none !important;
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.35) !important;
-    transition: transform .15s ease;
+#stepper > label > span { display: none !important; }  /* hide "Radio" label text */
+#stepper .wrap, #stepper fieldset {
+    flex-direction: row !important; gap: 6px !important;
+    flex-wrap: wrap !important;
 }
-#run-btn:hover { transform: translateY(-1px); }
-#status-box textarea {
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important;
-    font-size: 13px !important;
-    background: #1a1d24 !important;
-    color: #c8d3e1 !important;
-    border-radius: 10px !important;
+#stepper label {
+    flex: 1 1 0 !important; min-width: 110px !important;
+    border: 1px solid #e6e8f0 !important; border-radius: 8px !important;
+    padding: 8px 10px !important; cursor: pointer !important;
+    background: #f8fafc !important; transition: all .15s ease;
+    font-size: 12px !important;
 }
-.tabs button.selected {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-    color: white !important;
+#stepper label:hover { background: #f1f5f9 !important; border-color: #cbd5e1 !important; }
+#stepper input[type="radio"]:checked + span,
+#stepper label:has(input:checked) {
+    background: #eef2ff !important; border-color: #5b6cff !important;
+    color: #4338ca !important; font-weight: 600 !important;
 }
-h2 { color: #2d3748 !important; }
-.gr-form, .gr-box { border-radius: 10px !important; }
+
+/* Active panel cards */
+.kpi-row {
+    display: flex; gap: 12px; margin: 12px 0;
+}
+.kpi-card {
+    flex: 1 1 0; min-width: 110px;
+    background: #fff; border-radius: 10px; padding: 14px;
+    border: 1px solid #e6e8f0;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+}
+.kpi-card .kpi-num {
+    font-size: 22px; font-weight: 700; color: #1f2937;
+    margin-bottom: 4px; letter-spacing: -0.01em;
+}
+.kpi-card .kpi-label {
+    font-size: 12px; color: #6b7280;
+}
+
+/* Stage panel container */
+.stage-panel {
+    background: #fff; padding: 16px; border-radius: 12px;
+    border: 1px solid #e6e8f0;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+}
 """
 
-HERO_HTML = """
-<div id="hero">
-    <h1>🛠️ Knowledge Mining Studio</h1>
-    <p>上传文档 → 一键跑完 9 阶段 pipeline → 每阶段「统计图表 + 全量数据」</p>
-</div>
-"""
-
+_GRADIO_THEME = gr.themes.Soft(
+    primary_hue="indigo",
+    neutral_hue="slate",
+    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui"],
+)
 
 with gr.Blocks(title="Knowledge Mining Studio") as demo:
-    gr.HTML(HERO_HTML)
+    state = gr.State(value=INITIAL_STATE)
 
-    with gr.Row(equal_height=False):
-        # ---------- 左侧：参数 ----------
-        with gr.Column(scale=1, min_width=340, elem_id="sidebar"):
-            gr.Markdown("### 📎 上传文档")
-            files = gr.Files(
-                label="支持 .md / .txt / .html / .pdf / .docx / .chm / .hdx",
-                file_count="multiple",
-                height=180,
-            )
-            gr.Markdown("### 🏷️ Batch 参数")
-            product = gr.Textbox(label="产品名", value="UI-Test", info="写入 batch_scope.products")
-            tags = gr.Textbox(label="标签", value="ui,test", info="逗号分隔")
-            doc_type = gr.Dropdown(
-                label="document_type",
-                choices=[
-                    "procedure", "feature", "command", "troubleshooting",
-                    "alarm", "constraint", "checklist", "expert_note",
-                    "project_note", "standard", "training", "reference", "other",
-                ],
-                value="procedure",
-                info="数据库 CHECK 约束允许的枚举值（chm 安装/部署文档建议选 procedure）",
-            )
+    # ===== Header =====
+    with gr.Row(elem_id="app-header"):
+        gr.HTML('<h1>🛠️ Knowledge Mining Studio</h1>'
+                '<span class="subtitle">v1.1 · PostgreSQL backend</span>')
 
-            _pack_choices = _list_domain_packs()
-            _pack_default = (
-                "cloud_core_network" if "cloud_core_network" in _pack_choices
-                else _pack_choices[0]
-            )
-            domain_pack = gr.Dropdown(
-                label="domain_pack",
-                choices=_pack_choices,
-                value=_pack_default,
-                info="选择领域知识包（决定实体抽取规则、语义角色关键词、LLM 模板）",
-            )
-
-            with gr.Accordion("⚙️ LLM / Embedding（可选）", open=False):
-                use_llm = gr.Checkbox(label="启用 LLM Service", value=False)
-                llm_url = gr.Textbox(label="LLM URL", value="http://localhost:8900")
-                embedding_key = gr.Textbox(
-                    label="Embedding API Key",
-                    type="password",
-                    info="留空则跳过 embedding",
+    # ===== READY region =====
+    with gr.Group(visible=True, elem_id="ready-group") as ready_group:
+        with gr.Row(equal_height=False):
+            with gr.Column(scale=1, min_width=340):
+                gr.Markdown("### 📎 上传文档")
+                files = gr.Files(
+                    label="支持 .md / .txt / .html / .pdf / .docx / .chm / .hdx",
+                    file_count="multiple",
+                    height=160,
                 )
+                gr.Markdown("### 🏷️ Batch 参数")
+                product = gr.Textbox(label="产品名", value="UI-Test", info="写入 batch_scope.products")
+                tags = gr.Textbox(label="标签", value="ui,test", info="逗号分隔")
+                doc_type = gr.Dropdown(
+                    label="document_type",
+                    choices=[
+                        "procedure", "feature", "command", "troubleshooting",
+                        "alarm", "constraint", "checklist", "expert_note",
+                        "project_note", "standard", "training", "reference", "other",
+                    ],
+                    value="procedure",
+                )
+                _pack_choices = _list_domain_packs()
+                _pack_default = (
+                    "cloud_core_network" if "cloud_core_network" in _pack_choices
+                    else _pack_choices[0]
+                )
+                domain_pack = gr.Dropdown(
+                    label="domain_pack",
+                    choices=_pack_choices,
+                    value=_pack_default,
+                )
+                with gr.Accordion("⚙️ LLM / Embedding（可选）", open=False):
+                    use_llm = gr.Checkbox(label="启用 LLM Service", value=False)
+                    llm_url = gr.Textbox(label="LLM URL", value="http://localhost:8900")
+                    embedding_key = gr.Textbox(
+                        label="Embedding API Key",
+                        type="password",
+                        info="留空则跳过 embedding",
+                    )
+            with gr.Column(scale=2):
+                gr.Markdown("### ✅ 准备开始")
+                gr.Markdown(
+                    "上传文件并选择领域包后，点击下方按钮开始 9 阶段挖掘流水线。\n\n"
+                    "运行期间：实时显示阶段进度 / 阶段产出 / 可终止 / 可点 stepper 切换查看任一已完成阶段的结果。"
+                )
+                start_btn = gr.Button("▶  开始挖掘", variant="primary", size="lg", elem_id="start-btn")
 
-            btn = gr.Button("🚀 开始挖掘", variant="primary", size="lg", elem_id="run-btn")
+    # ===== RUNNING / DONE / FAILED / CANCELLED region =====
+    with gr.Group(visible=False) as run_group:
+        # Top status bar + actions
+        with gr.Row():
+            with gr.Column(scale=4):
+                status_bar = gr.HTML('<div class="status-bar">⏳ 启动中…</div>')
+            with gr.Column(scale=1, min_width=120):
+                cancel_btn = gr.Button("▣  终止", visible=True, elem_id="cancel-btn")
+                restart_btn = gr.Button("🔄  上传新批次重跑", visible=False, elem_id="restart-btn")
 
-        # ---------- 右侧：运行状态 + 结果 ----------
-        with gr.Column(scale=2):
-            gr.Markdown("### 📡 运行状态")
-            status = gr.Textbox(
-                label="",
-                interactive=False,
-                lines=5,
-                show_label=False,
-                elem_id="status-box",
-                placeholder="点击「开始挖掘」后这里会实时刷新阶段、文档计数...",
-            )
-            with gr.Accordion("📦 run() 完整返回值", open=False):
-                result = gr.JSON(label="")
+        # Stepper
+        gr.Markdown("#### 流程进度")
+        stepper = gr.Radio(
+            choices=[(f"○ {s['short']} · 待运行", s["id"]) for s in STAGES if s["id"] != "timeline"],
+            value=PIPELINE_STAGE_IDS[0],
+            show_label=False,
+            elem_id="stepper",
+        )
 
-    gr.Markdown("## 📊 阶段产物")
-    gr.Markdown("_每个 Tab 展示该阶段的统计图表与全量数据。_")
+        # Focus label + auto-follow toggle
+        with gr.Row():
+            focus_label = gr.Markdown("### 当前焦点")
+            with gr.Column(scale=0, min_width=200):
+                follow_btn = gr.Button("📍  跟随最新", elem_id="follow-btn", size="sm")
+                timeline_btn = gr.Button("⏱  事件时间线", elem_id="timeline-btn", size="sm")
 
-    stage_components_flat: list[Any] = []
-    with gr.Tabs():
+        # Active panel — one Group per stage (only one visible at a time)
+        stage_groups: list[Any] = []
+        stage_kpi_components: list[Any] = []
+        stage_components_flat: list[Any] = []  # nested in stage order
+        stage_components_per_stage: list[list[Any]] = []
         for stage in STAGES:
-            with gr.Tab(stage["label"]):
+            with gr.Group(visible=False, elem_classes=f"stage-panel stage-panel-{stage['id']}") as g:
+                kpi_html = gr.HTML("<div class='kpi-row'></div>")
                 comps = stage["build"]()
-                stage_components_flat.extend(comps)
+            stage_groups.append(g)
+            stage_kpi_components.append(kpi_html)
+            stage_components_per_stage.append(comps)
+            stage_components_flat.extend(comps)
 
-    btn.click(
-        do_mining,
-        inputs=[files, product, tags, doc_type, domain_pack, use_llm, llm_url, embedding_key],
-        outputs=[status, result] + stage_components_flat,
+    # Hidden timer (1s) — drives polling while phase=='running'
+    timer = gr.Timer(1.0, active=False)
+
+    # ===== Wiring =====
+    # Flat output list shape (used by all callbacks):
+    #   [state,
+    #    ready_group, run_group, timer, cancel_btn, restart_btn,
+    #    status_bar, stepper, focus_label,
+    #    *for each stage: [group, kpi_html, *components]]
+    per_stage_outputs: list[Any] = []
+    for i, stage in enumerate(STAGES):
+        per_stage_outputs.append(stage_groups[i])
+        per_stage_outputs.append(stage_kpi_components[i])
+        per_stage_outputs.extend(stage_components_per_stage[i])
+
+    common_outputs = [
+        state,
+        ready_group, run_group, timer, cancel_btn, restart_btn,
+        status_bar, stepper, focus_label,
+    ] + per_stage_outputs
+
+    start_btn.click(
+        cb_start_mining,
+        inputs=[state, files, product, tags, doc_type, domain_pack, use_llm, llm_url, embedding_key],
+        outputs=common_outputs,
     )
+    timer.tick(cb_poll_tick, inputs=[state], outputs=common_outputs)
+    cancel_btn.click(cb_cancel, inputs=[state], outputs=common_outputs)
+    stepper.change(cb_stepper_change, inputs=[state, stepper], outputs=common_outputs)
+    follow_btn.click(cb_enable_follow, inputs=[state], outputs=common_outputs)
+    timeline_btn.click(cb_show_timeline, inputs=[state], outputs=common_outputs)
+    restart_btn.click(cb_restart, inputs=[state], outputs=common_outputs)
 
 
 if __name__ == "__main__":
@@ -1294,11 +2011,6 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         inbrowser=False,
-        theme=gr.themes.Soft(
-            primary_hue="indigo",
-            secondary_hue="purple",
-            neutral_hue="slate",
-            font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui"],
-        ),
         css=CUSTOM_CSS,
+        theme=_GRADIO_THEME,
     )

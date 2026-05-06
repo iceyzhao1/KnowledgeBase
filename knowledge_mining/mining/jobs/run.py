@@ -50,6 +50,26 @@ from knowledge_mining.mining.pipeline import (
 )
 
 
+class MiningCancelled(Exception):
+    """Raised internally when a checkpoint observes mining_runs.status='cancelled'.
+
+    Caught at the top of _run_pipeline; never propagates out of run().
+    """
+
+
+def _check_cancelled(runtime_db: "MiningRuntimeDB", run_id: str) -> None:
+    """Cooperative cancel checkpoint.
+
+    Reads the current run row's status from PG; raises MiningCancelled if the
+    UI (or anyone else) has flipped it to 'cancelled'. Cheap (<1ms point query).
+    """
+    row = runtime_db._fetchone(
+        "SELECT status FROM mining_runs WHERE id = %s", (run_id,)
+    )
+    if row and row["status"] == "cancelled":
+        raise MiningCancelled()
+
+
 def _create_dbs(cfg: MiningDbConfig | None = None) -> tuple[AssetCoreDB, MiningRuntimeDB]:
     """Create and open PG-backed database adapters."""
     if cfg is None:
@@ -131,6 +151,10 @@ def run(
             publish_on_partial_failure, llm_services, embedding_generator,
             max_workers, profile,
         )
+    except MiningCancelled:
+        # Cancelled by user — DB already has status='cancelled' (set by UI/API).
+        # Return a cancelled summary; do NOT call fail_run.
+        return {"run_id": run_id, "status": "cancelled"}
     except Exception as e:
         try:
             tracker = RuntimeTracker(runtime_db)
@@ -357,6 +381,7 @@ def _run_pipeline(
     work_items: list[dict[str, Any]] = []  # docs that need pipeline processing
 
     for doc in docs:
+        _check_cancelled(runtime_db, run_id)
         rd_id = uuid.uuid4().hex
         doc_key = f"doc:/{doc.relative_path}"
 
@@ -426,6 +451,7 @@ def _run_pipeline(
         })
 
     # -- Phase 1b: Run streaming pipeline (all non-SKIP docs concurrently) --
+    _check_cancelled(runtime_db, run_id)
     if work_items:
         config = pipeline_config
         stages = [
@@ -442,6 +468,7 @@ def _run_pipeline(
 
     # -- Phase 1c: Write results to DB (main thread, serial, no concurrency issues) --
     for i, item in enumerate(work_items):
+        _check_cancelled(runtime_db, run_id)
         ctx = ctxs[i]
         doc = item["doc"]
         rd_id = item["rd_id"]
@@ -622,6 +649,7 @@ def _run_pipeline(
     has_failures = failed_count > 0
 
     # Build is always created if there are committed documents
+    _check_cancelled(runtime_db, run_id)
     if not phase1_only and snapshot_decisions:
         # Classify documents: NEW/UPDATE/SKIP/REMOVE against previous active build
         snapshot_decisions = classify_documents(asset_db, snapshot_decisions)
@@ -644,6 +672,7 @@ def _run_pipeline(
         runtime_db.commit()
 
         # Stage 9: Publish release — only if no failures or explicitly allowed
+        _check_cancelled(runtime_db, run_id)
         if not has_failures or publish_on_partial_failure:
             evt = tracker.start_stage(run_id, "publish_release")
             release_id = publish_release(
