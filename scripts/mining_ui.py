@@ -8,9 +8,14 @@
     1. 上传若干文档（.md/.txt/.html/.pdf/.docx/.chm/.hdx）
        - .chm/.hdx 会在 ingest 阶段自动解压并转成 markdown
     2. 填写 batch 参数（产品、标签、文档类型）
-    3. 可选启用 LLM / Embedding
-    4. 点击"开始挖掘" → 后端线程跑 run()，前端轮询 PostgreSQL (kb_db) 实时显示阶段
-    5. 完成后每个阶段都展示：KPI + 统计图表（ECharts）+ 全量数据表格（AG Grid）
+    3. 点击"开始挖掘" → 后端线程跑 run()，前端轮询 PostgreSQL (kb_db) 实时显示阶段
+    4. 完成后每个阶段都展示：KPI + 统计图表（ECharts）+ 全量数据表格（AG Grid）
+
+LLM / Embedding 由后端 .env 配置，不通过前端表单暴露：
+    LLM_SERVICE_URL                — 本地 llm_service 入口 (默认 http://localhost:8900)
+    MINING_LLM_BYPASS_PROXY        — 是否对 LLM URL 跳过系统代理 (默认 true)
+    MINING_LLM_ENABLED             — 总开关 (默认 true；置 false 全部走规则)
+    EMBEDDING_API_KEY              — embedding API key；缺省则跳过 embedding 阶段
 """
 from __future__ import annotations
 
@@ -36,6 +41,35 @@ os.environ["no_proxy"] = _no_proxy
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from dotenv import load_dotenv  # noqa: E402
+    load_dotenv(PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_mining_llm_settings() -> tuple[str | None, bool, str | None]:
+    """Read LLM / embedding settings from environment.
+
+    Returns (llm_base_url, llm_bypass_proxy, embedding_api_key).
+    llm_base_url is None when MINING_LLM_ENABLED=false, disabling the entire LLM path.
+    """
+    if not _env_bool("MINING_LLM_ENABLED", default=True):
+        llm_url: str | None = None
+    else:
+        llm_url = (os.environ.get("LLM_SERVICE_URL") or "http://localhost:8900").strip() or None
+    bypass = _env_bool("MINING_LLM_BYPASS_PROXY", default=True)
+    emb_key = (os.environ.get("EMBEDDING_API_KEY") or "").strip() or None
+    return llm_url, bypass, emb_key
+
 
 import pandas as pd  # noqa: E402
 from nicegui import app, ui  # noqa: E402
@@ -498,7 +532,7 @@ def render_enrich(run_id: str) -> list[Any]:
         entity_hint = (
             "" if total_entities > 0
             else "\n\n> ℹ️ 实体提取无产出。rule-based 提取器靠领域包正则（命令/IP/参数等），"
-                 "对非命令类文档常无命中；可启用 LLM enricher（左侧勾选 LLM Service）补强。"
+                 "对非命令类文档常无命中；可在 .env 设置 MINING_LLM_ENABLED=true + LLM_SERVICE_URL 启用 LLM enricher 补强。"
         )
         summary = (
             f"### 增强统计\n\n"
@@ -1528,10 +1562,14 @@ def main_page():
                     label="domain_pack",
                 ).props("dense outlined").classes("w-full")
 
-                with ui.expansion("⚙️ LLM / Embedding（可选）", icon="settings").classes("w-full"):
-                    use_llm = ui.checkbox("启用 LLM Service", value=False)
-                    llm_url = ui.input("LLM URL", value="http://localhost:8900").props("dense outlined").classes("w-full")
-                    embedding_key = ui.input("Embedding API Key", password=True).props("dense outlined").classes("w-full")
+                _llm_cfg_url, _, _llm_cfg_emb = _resolve_mining_llm_settings()
+                ui.html(
+                    "<div style='font-size:12px;color:#666;line-height:1.6;'>"
+                    f"⚙️ LLM: <code>{_llm_cfg_url or '未配置（走规则）'}</code>"
+                    f" · Embedding: <code>{'已配置' if _llm_cfg_emb else '未配置（跳过）'}</code>"
+                    "<br/>修改 <code>.env</code> 后重启本服务生效。"
+                    "</div>"
+                ).classes("w-full")
 
             # Right: prompt + start button
             with ui.column().classes("flex-1 min-w-[300px] gap-3 justify-between"):
@@ -1664,9 +1702,7 @@ def main_page():
         tags_v = (tags.value or "").strip()
         doc_type_v = (doc_type.value or "").strip()
         domain_pack_v = (domain_pack.value or "cloud_core_network").strip() or "cloud_core_network"
-        llm_url_v = (llm_url.value or "").strip()
-        embedding_key_v = (embedding_key.value or "").strip()
-        use_llm_v = bool(use_llm.value)
+        llm_base_url, llm_bypass_proxy, embedding_api_key = _resolve_mining_llm_settings()
 
         def worker():
             try:
@@ -1679,9 +1715,9 @@ def main_page():
                         tags=[t.strip() for t in tags_v.split(",") if t.strip()],
                     ),
                     domain_pack=domain_pack_v,
-                    llm_base_url=(llm_url_v if (use_llm_v and llm_url_v) else None),
-                    llm_bypass_proxy=True,
-                    embedding_api_key=(embedding_key_v or None),
+                    llm_base_url=llm_base_url,
+                    llm_bypass_proxy=llm_bypass_proxy,
+                    embedding_api_key=embedding_api_key,
                 )
             except Exception:
                 traceback.print_exc()
