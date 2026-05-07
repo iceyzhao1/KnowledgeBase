@@ -49,13 +49,13 @@ class ModelService:
         """
         if self._db is None:
             return
+        now = _utcnow()
+        task_id = uuid.uuid4().hex
+        request_id = uuid.uuid4().hex
+        attempt_id = uuid.uuid4().hex
         try:
-            now = _utcnow()
-            task_id = uuid.uuid4().hex
-            request_id = uuid.uuid4().hex
-            attempt_id = uuid.uuid4().hex
+            await self._db.execute("BEGIN IMMEDIATE")
 
-            # agent_llm_tasks
             await self._db.execute(
                 """INSERT INTO agent_llm_tasks
                    (id, caller_domain, pipeline_stage, task_type, status,
@@ -66,7 +66,6 @@ class ModelService:
                  now, now, now, now),
             )
 
-            # agent_llm_requests
             await self._db.execute(
                 """INSERT INTO agent_llm_requests
                    (id, task_id, provider, model, messages_json, input_json,
@@ -76,7 +75,6 @@ class ModelService:
                  json.dumps(input_json, ensure_ascii=False), now),
             )
 
-            # agent_llm_attempts
             await self._db.execute(
                 """INSERT INTO agent_llm_attempts
                    (id, task_id, request_id, attempt_no, status,
@@ -89,7 +87,6 @@ class ModelService:
                  error_type, error_message),
             )
 
-            # agent_llm_results (only on success)
             if status == "succeeded":
                 result_id = uuid.uuid4().hex
                 await self._db.execute(
@@ -102,7 +99,12 @@ class ModelService:
                      text_output, now),
                 )
 
+            await self._db.execute("COMMIT")
         except Exception:
+            try:
+                await self._db.execute("ROLLBACK")
+            except Exception:
+                pass
             logger.exception("Failed to record sync %s task", task_type)
 
     async def embed(self, body: EmbeddingRequest) -> EmbeddingResponse:
@@ -127,12 +129,12 @@ class ModelService:
                 input_json=input_json, raw_response=raw, text_output=text_output,
             )
 
-            data = sorted(raw.get("data", []), key=lambda item: item.get("index", 0))
+            data = sorted(raw.get("data", []), key=lambda item: item.get("index") or 0)
             return EmbeddingResponse(
                 model=raw.get("model") or model or "",
                 data=[
                     EmbeddingData(
-                        index=int(item.get("index", idx)),
+                        index=item.get("index") if item.get("index") is not None else idx,
                         embedding=item.get("embedding", []),
                     )
                     for idx, item in enumerate(data)
@@ -188,7 +190,7 @@ class ModelService:
                 model=raw.get("model") or model or "",
                 results=[
                     RerankResult(
-                        index=int(item.get("index", idx)),
+                        index=item.get("index") if item.get("index") is not None else idx,
                         relevance_score=float(item.get("relevance_score", 0.0)),
                         document=item.get("document"),
                     )

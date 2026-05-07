@@ -27,7 +27,11 @@ class BigModelProvider:
         self._rerank_base_url = rerank_base_url.rstrip("/")
         self._rerank_model = rerank_model
         self._timeout = timeout
-        self._bypass_proxy = bypass_proxy
+        transport = httpx.AsyncHTTPTransport() if bypass_proxy else None
+        self._client = httpx.AsyncClient(transport=transport, timeout=timeout)
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
     def _headers(self, api_key: str, capability: str) -> dict[str, str]:
         if not api_key:
@@ -48,18 +52,16 @@ class BigModelProvider:
         path: str,
         payload: dict,
     ) -> dict:
-        transport = httpx.AsyncHTTPTransport() if self._bypass_proxy else None
-        async with httpx.AsyncClient(transport=transport, timeout=self._timeout) as client:
-            try:
-                resp = await client.post(
-                    f"{base_url}/{path.lstrip('/')}",
-                    json=payload,
-                    headers=self._headers(api_key, capability),
-                )
-            except httpx.TimeoutException as e:
-                raise ModelProviderError("timeout", str(e)) from e
-            except httpx.ConnectError as e:
-                raise ModelProviderError("connection_error", str(e)) from e
+        try:
+            resp = await self._client.post(
+                f"{base_url}/{path.lstrip('/')}",
+                json=payload,
+                headers=self._headers(api_key, capability),
+            )
+        except httpx.TimeoutException as e:
+            raise ModelProviderError("timeout", str(e)) from e
+        except httpx.ConnectError as e:
+            raise ModelProviderError("connection_error", str(e)) from e
 
         if resp.status_code == 429:
             raise ModelProviderError("rate_limited", resp.text)
@@ -67,7 +69,12 @@ class BigModelProvider:
             raise ModelProviderError("server_error", f"HTTP {resp.status_code}: {resp.text}")
         if resp.status_code >= 400:
             raise ModelProviderError("client_error", f"HTTP {resp.status_code}: {resp.text}")
-        return resp.json()
+        try:
+            return resp.json()
+        except Exception as e:
+            raise ModelProviderError(
+                "invalid_response", f"Non-JSON response from provider: {e}"
+            ) from e
 
     async def embed(
         self,
@@ -107,7 +114,7 @@ class BigModelProvider:
             "model": model or self._rerank_model,
             "query": query,
             "documents": documents,
-            "top_n": top_n or len(documents),
+            "top_n": top_n if top_n is not None else len(documents),
             "return_documents": True,
         }
         data = await self._post(
@@ -119,13 +126,24 @@ class BigModelProvider:
         )
         results = data.get("results", [])
         # rerank-pro omits "index" — reconstruct from document content
+        doc_to_idx: dict[str, list[int]] = {}
+        for i, d in enumerate(documents):
+            doc_to_idx.setdefault(d, []).append(i)
+        used_indices: set[int] = set()
         for item in results:
-            if "index" not in item:
-                doc_text = item.get("document", "")
-                try:
-                    item["index"] = documents.index(doc_text)
-                except ValueError:
-                    item["index"] = -1
+            if "index" in item:
+                used_indices.add(item["index"])
+                continue
+            doc_text = item.get("document", "")
+            candidates = doc_to_idx.get(doc_text, [])
+            # Pick first unused index to handle duplicate documents
+            for ci in candidates:
+                if ci not in used_indices:
+                    item["index"] = ci
+                    used_indices.add(ci)
+                    break
+            else:
+                item["index"] = -1
         return {
             "model": payload["model"],
             "results": results,

@@ -20,7 +20,11 @@ class OpenAICompatibleProvider:
         self._model = model
         self._extra_headers = headers or {}
         self._timeout = timeout
-        self._bypass_proxy = bypass_proxy
+        transport = httpx.AsyncHTTPTransport() if bypass_proxy else None
+        self._client = httpx.AsyncClient(transport=transport, timeout=timeout)
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
     @property
     def provider_name(self) -> str:
@@ -50,14 +54,12 @@ class OpenAICompatibleProvider:
         }
         if response_format is not None:
             body["response_format"] = response_format
-        transport = httpx.AsyncHTTPTransport() if self._bypass_proxy else None
-        async with httpx.AsyncClient(transport=transport, timeout=self._timeout) as client:
-            try:
-                resp = await client.post(url, json=body, headers=headers)
-            except httpx.TimeoutException as e:
-                raise ProviderError("timeout", str(e)) from e
-            except httpx.ConnectError as e:
-                raise ProviderError("connection_error", str(e)) from e
+        try:
+            resp = await self._client.post(url, json=body, headers=headers)
+        except httpx.TimeoutException as e:
+            raise ProviderError("timeout", str(e)) from e
+        except httpx.ConnectError as e:
+            raise ProviderError("connection_error", str(e)) from e
 
         if resp.status_code == 429:
             raise ProviderError("rate_limited", resp.text)
@@ -66,7 +68,12 @@ class OpenAICompatibleProvider:
         if resp.status_code >= 400:
             raise ProviderError("client_error", f"HTTP {resp.status_code}: {resp.text}")
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as e:
+            raise ProviderError(
+                "invalid_response", f"Non-JSON response from provider: {e}"
+            ) from e
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         usage = data.get("usage", {})
         return ProviderResponse(

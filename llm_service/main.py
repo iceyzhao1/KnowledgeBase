@@ -140,10 +140,26 @@ def create_app(
             await recovery.stop()
         if worker:
             await worker.stop()
+            # Re-queue in-flight tasks so they're recoverable on next startup
+            try:
+                cur = await worker_db.execute(
+                    "UPDATE agent_llm_tasks SET status = 'queued', lease_expires_at = NULL "
+                    "WHERE status = 'running'"
+                )
+                await worker_db.commit()
+                n = cur.rowcount
+                if n:
+                    logger.info("Re-queued %d in-flight tasks on shutdown", n)
+            except Exception:
+                logger.exception("Failed to re-queue in-flight tasks")
         if recovery_db:
             await recovery_db.close()
         if worker_db:
             await worker_db.close()
+        if hasattr(provider, 'close'):
+            await provider.close()
+        if hasattr(model_provider, 'close'):
+            await model_provider.close()
         await db.close()
 
     app = FastAPI(title="LLM Service", version="0.1.0", lifespan=lifespan)

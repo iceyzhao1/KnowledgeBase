@@ -157,9 +157,12 @@ class TaskManager:
 
     async def cancel(self, task_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            "UPDATE agent_llm_tasks SET status = 'cancelled', finished_at = ?, updated_at = ? WHERE id = ?",
+        cur = await self._db.execute(
+            "UPDATE agent_llm_tasks SET status = 'cancelled', finished_at = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'queued'",
             (now, now, task_id),
         )
         await self._db.commit()
+        if cur.rowcount == 0:
+            raise ValueError(f"Task {task_id} cannot be cancelled (not in 'queued' status)")
         await self._bus.emit(task_id, "cancelled", "task cancelled")
