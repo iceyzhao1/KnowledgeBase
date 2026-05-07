@@ -1,4 +1,4 @@
-"""Gradio UI for running the knowledge_mining pipeline.
+"""NiceGUI UI for the knowledge_mining pipeline.
 
 启动方式：
     py -3.10 scripts/mining_ui.py
@@ -10,7 +10,7 @@
     2. 填写 batch 参数（产品、标签、文档类型）
     3. 可选启用 LLM / Embedding
     4. 点击"开始挖掘" → 后端线程跑 run()，前端轮询 PostgreSQL (kb_db) 实时显示阶段
-    5. 完成后每个阶段都展示：统计图表 + 全量数据表格
+    5. 完成后每个阶段都展示：KPI + 统计图表（ECharts）+ 全量数据表格（AG Grid）
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 import traceback
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -37,7 +38,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd  # noqa: E402
-import gradio as gr  # noqa: E402
+from nicegui import app, ui  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
 from psycopg_pool import ConnectionPool  # noqa: E402
 
@@ -229,7 +230,8 @@ def _ordered_bin_df(counter: dict[str, int], order: list[str], key: str) -> pd.D
 
 # =====================================================================
 # Per-stage data renderers
-# Each renderer returns a list of values matching its components in builder.
+# Each renderer returns [summary_md_text, *small_dfs_for_plots, full_df_for_grid]
+# These are framework-agnostic — same shape as Gradio version.
 # =====================================================================
 
 EMPTY_RUN_TEXT = "_（尚未运行）_"
@@ -874,170 +876,73 @@ def render_timeline(run_id: str) -> list[Any]:
 
 
 # =====================================================================
-# Stage registry — every stage knows how to build its UI and render data
+# Stage spec — declarative description of each panel's plots and value-axis key
 # =====================================================================
 
-_PLOT_KW = dict(height=180, container=False)
-
-
-def build_ingest_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Row():
-        action_plot = gr.BarPlot(x="action", y="count", title="按 action 分布", **_PLOT_KW)
-        status_plot = gr.BarPlot(x="status", y="count", title="按 status 分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="全量文档列表", wrap=True, interactive=False)
-    return [summary, action_plot, status_plot, table]
-
-
-def build_parse_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Row():
-        per_doc = gr.BarPlot(x="doc", y="count", title="每文档小节数", **_PLOT_KW)
-        depth_plot = gr.BarPlot(x="depth", y="count", title="小节层级分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="全部小节", wrap=True, interactive=False)
-    return [summary, per_doc, depth_plot, table]
-
-
-def build_segment_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Row():
-        bt_plot = gr.BarPlot(x="block_type", y="count", title="block_type 分布", **_PLOT_KW)
-        token_plot = gr.BarPlot(x="token_bin", y="count", title="token_count 分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="全部段落", wrap=True, interactive=False)
-    return [summary, bt_plot, token_plot, table]
-
-
-def build_enrich_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Row():
-        role_plot = gr.BarPlot(x="semantic_role", y="count", title="semantic_role 分布", **_PLOT_KW)
-        type_plot = gr.BarPlot(x="entity_type", y="count", title="实体类型分布", **_PLOT_KW)
-    per_seg_plot = gr.BarPlot(x="count_per_seg", y="count", title="每段实体数分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="全部实体引用", wrap=True, interactive=False)
-    return [summary, role_plot, type_plot, per_seg_plot, table]
-
-
-def build_relations_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Row():
-        type_plot = gr.BarPlot(x="relation_type", y="count", title="relation_type 分布", **_PLOT_KW)
-        dist_plot = gr.BarPlot(x="distance_bin", y="count", title="距离分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="全部关系", wrap=True, interactive=False)
-    return [summary, type_plot, dist_plot, table]
-
-
-def build_retrieval_units_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Row():
-        ut_plot = gr.BarPlot(x="unit_type", y="count", title="unit_type 分布", **_PLOT_KW)
-        tt_plot = gr.BarPlot(x="target_type", y="count", title="target_type 分布", **_PLOT_KW)
-    len_plot = gr.BarPlot(x="text_len_bin", y="count", title="文本长度分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="全部检索单元", wrap=True, interactive=False)
-    return [summary, ut_plot, tt_plot, len_plot, table]
-
-
-def build_snapshot_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Row():
-        action_plot = gr.BarPlot(x="action", y="count", title="action 分布", **_PLOT_KW)
-        mime_plot = gr.BarPlot(x="mime_type", y="count", title="mime_type 分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="document → snapshot 映射", wrap=True, interactive=False)
-    return [summary, action_plot, mime_plot, table]
-
-
-def build_build_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    reason_plot = gr.BarPlot(x="reason", y="count", title="reason 分布", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="构建包含的快照", wrap=True, interactive=False)
-    return [summary, reason_plot, table]
-
-
-def build_release_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="Release 列表", wrap=True, interactive=False)
-    return [summary, table]
-
-
-def build_timeline_tab():
-    summary = gr.Markdown(EMPTY_RUN_TEXT)
-    dur_plot = gr.BarPlot(x="stage", y="ms", title="按阶段累计耗时", **_PLOT_KW)
-    with gr.Accordion("展开明细表格", open=False):
-        table = gr.Dataframe(label="全部阶段事件", wrap=True, interactive=False)
-    return [summary, dur_plot, table]
-
-
-# Stage spec: id (stable key), label (UI), short (stepper), build, render, n_components
-STAGES: list[dict[str, Any]] = [
-    {"id": "ingest",    "label": "Ingest 摄取",       "short": "Ingest",    "build": build_ingest_tab,           "render": render_ingest,           "n": 4},
-    {"id": "parse",     "label": "Parse 解析",        "short": "Parse",     "build": build_parse_tab,            "render": render_parse,            "n": 4},
-    {"id": "segment",   "label": "Segment 分块",      "short": "Segment",   "build": build_segment_tab,          "render": render_segment,          "n": 4},
-    {"id": "enrich",    "label": "Enrich 增强",       "short": "Enrich",    "build": build_enrich_tab,           "render": render_enrich,           "n": 5},
-    {"id": "relations", "label": "Relations 关系",    "short": "Relations", "build": build_relations_tab,        "render": render_relations,        "n": 4},
-    {"id": "units",     "label": "Retrieval Units",   "short": "Units",     "build": build_retrieval_units_tab,  "render": render_retrieval_units,  "n": 5},
-    {"id": "snapshot",  "label": "Snapshot 快照",     "short": "Snapshot",  "build": build_snapshot_tab,         "render": render_snapshot,         "n": 4},
-    {"id": "build",     "label": "Build 构建",        "short": "Build",     "build": build_build_tab,            "render": render_build,            "n": 3},
-    {"id": "release",   "label": "Release 发布",      "short": "Release",   "build": build_release_tab,          "render": render_release,          "n": 2},
-    {"id": "timeline",  "label": "事件时间线",         "short": "Timeline",  "build": build_timeline_tab,         "render": render_timeline,         "n": 3},
+# Each plot spec: (title, x_axis_column, y_axis_column)
+STAGE_SPECS: list[dict[str, Any]] = [
+    {"id": "ingest", "label": "Ingest 摄取", "short": "Ingest", "render": render_ingest,
+     "plots": [("按 action 分布", "action", "count"),
+               ("按 status 分布", "status", "count")]},
+    {"id": "parse", "label": "Parse 解析", "short": "Parse", "render": render_parse,
+     "plots": [("每文档小节数", "doc", "count"),
+               ("小节层级分布", "depth", "count")]},
+    {"id": "segment", "label": "Segment 分块", "short": "Segment", "render": render_segment,
+     "plots": [("block_type 分布", "block_type", "count"),
+               ("token_count 分布", "token_bin", "count")]},
+    {"id": "enrich", "label": "Enrich 增强", "short": "Enrich", "render": render_enrich,
+     "plots": [("semantic_role 分布", "semantic_role", "count"),
+               ("实体类型分布", "entity_type", "count"),
+               ("每段实体数分布", "count_per_seg", "count")]},
+    {"id": "relations", "label": "Relations 关系", "short": "Relations", "render": render_relations,
+     "plots": [("relation_type 分布", "relation_type", "count"),
+               ("距离分布", "distance_bin", "count")]},
+    {"id": "units", "label": "Retrieval Units", "short": "Units", "render": render_retrieval_units,
+     "plots": [("unit_type 分布", "unit_type", "count"),
+               ("target_type 分布", "target_type", "count"),
+               ("文本长度分布", "text_len_bin", "count")]},
+    {"id": "snapshot", "label": "Snapshot 快照", "short": "Snapshot", "render": render_snapshot,
+     "plots": [("action 分布", "action", "count"),
+               ("mime_type 分布", "mime_type", "count")]},
+    {"id": "build", "label": "Build 构建", "short": "Build", "render": render_build,
+     "plots": [("reason 分布", "reason", "count")]},
+    {"id": "release", "label": "Release 发布", "short": "Release", "render": render_release,
+     "plots": []},
+    {"id": "timeline", "label": "事件时间线", "short": "Timeline", "render": render_timeline,
+     "plots": [("按阶段累计耗时", "stage", "ms")]},
 ]
-STAGE_BY_ID = {s["id"]: s for s in STAGES}
-STAGE_IDS = [s["id"] for s in STAGES]
-PIPELINE_STAGE_IDS = [sid for sid in STAGE_IDS if sid != "timeline"]  # 9 pipeline stages for stepper
+STAGE_BY_ID = {s["id"]: s for s in STAGE_SPECS}
+STAGE_IDS = [s["id"] for s in STAGE_SPECS]
+PIPELINE_STAGE_IDS = [sid for sid in STAGE_IDS if sid != "timeline"]
 
 
-def _empty_render_for(stage: dict[str, Any]) -> list[Any]:
-    """Default placeholder per stage when run not started or stage not yet reached."""
-    if stage["id"] == "ingest":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("action"), _empty_counts_df("status"), pd.DataFrame()]
-    if stage["id"] == "parse":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("doc"), _empty_counts_df("depth"), pd.DataFrame()]
-    if stage["id"] == "segment":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("block_type"), _empty_counts_df("token_bin"), pd.DataFrame()]
-    if stage["id"] == "enrich":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("semantic_role"), _empty_counts_df("entity_type"),
-                _empty_counts_df("count_per_seg"), pd.DataFrame()]
-    if stage["id"] == "relations":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("relation_type"), _empty_counts_df("distance_bin"), pd.DataFrame()]
-    if stage["id"] == "units":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("unit_type"), _empty_counts_df("target_type"),
-                _empty_counts_df("text_len_bin"), pd.DataFrame()]
-    if stage["id"] == "snapshot":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("action"), _empty_counts_df("mime_type"), pd.DataFrame()]
-    if stage["id"] == "build":
-        return [EMPTY_RUN_TEXT, _empty_counts_df("reason"), pd.DataFrame()]
-    if stage["id"] == "release":
-        return [EMPTY_RUN_TEXT, pd.DataFrame()]
-    return [EMPTY_RUN_TEXT, _empty_counts_df("stage"), pd.DataFrame()]  # timeline
+def _empty_render_for(spec: dict[str, Any]) -> list[Any]:
+    """Default placeholder per stage when run not started."""
+    n_plots = len(spec["plots"])
+    keys_for_plots = [p[1] for p in spec["plots"]]
+    out: list[Any] = [EMPTY_RUN_TEXT]
+    for k in keys_for_plots:
+        out.append(_empty_counts_df(k))
+    out.append(pd.DataFrame())
+    return out
 
 
-def _safe_render(stage: dict[str, Any], run_id: str | None) -> list[Any]:
-    """Render a stage, falling back to placeholder on error or missing run."""
+def _safe_render(spec: dict[str, Any], run_id: str | None) -> list[Any]:
     if not run_id:
-        return _empty_render_for(stage)
+        return _empty_render_for(spec)
     try:
-        return stage["render"](run_id)
+        return spec["render"](run_id)
     except Exception as e:
-        msg = f"❌ 渲染失败：{type(e).__name__}: {e}"
-        out = _empty_render_for(stage)
-        out[0] = msg
+        out = _empty_render_for(spec)
+        out[0] = f"❌ 渲染失败：{type(e).__name__}: {e}"
         return out
 
 
 # =====================================================================
-# Per-stage state derivation (status + KPI) from PG
+# Per-stage status derivation (status + KPI) from PG
 # =====================================================================
 
 def _stage_event_status(events_by_stage: dict[str, dict], names: tuple[str, ...]) -> str | None:
-    """Return 'completed' if any of the named stage_events is completed,
-    'started' if any started but none completed, else None."""
     seen = "none"
     for name in names:
         ev = events_by_stage.get(name)
@@ -1053,11 +958,7 @@ def _stage_event_status(events_by_stage: dict[str, dict], names: tuple[str, ...]
 
 
 def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
-    """Compute per-stage UI status: pending / running / done / failed / cancelled.
-
-    Returns dict keyed by stage id (only the 9 pipeline stages, no timeline).
-    Each value has: {status, kpi_text, duration_ms}
-    """
+    """Compute per-stage UI status: pending / running / done / failed / cancelled."""
     if run_row is None:
         return {sid: {"status": "pending", "kpi": None, "duration_ms": None}
                 for sid in PIPELINE_STAGE_IDS}
@@ -1066,7 +967,6 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
     overall_status = run_row["status"]
     is_terminal = overall_status in ("completed", "failed", "cancelled")
     try:
-        # Latest stage event per stage name
         ev_rows = rt.execute(
             "SELECT stage, status, duration_ms, error_message, created_at "
             "FROM mining_run_stage_events "
@@ -1076,14 +976,12 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         events_by_stage: dict[str, dict] = {}
         for r in ev_rows:
             cur = events_by_stage.get(r["stage"])
-            # Keep the latest for each stage; "completed" trumps "started".
             if cur is None or (cur["status"] == "started" and r["status"] in ("completed", "failed")):
                 events_by_stage[r["stage"]] = dict(r)
 
         snap_ids = _snapshot_ids(rt, run_id)
         snap_ph = ",".join(["%s"] * len(snap_ids)) if snap_ids else None
 
-        # ingest: based on mining_run_documents
         doc_rows = rt.execute(
             "SELECT status, action FROM mining_run_documents WHERE run_id = %s",
             (run_id,),
@@ -1092,7 +990,6 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         n_docs_failed = sum(1 for r in doc_rows if r["status"] == "failed")
         n_docs_committed = sum(1 for r in doc_rows if r["status"] == "committed")
 
-        # asset-side counts for downstream stages
         n_segments = 0
         n_enriched_segs = 0
         n_relations = 0
@@ -1121,7 +1018,6 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
                 snap_ids,
             ).fetchone() or {"c": 0})["c"]
 
-        # build / release
         build_id = run_row.get("build_id")
         n_releases = 0
         if build_id:
@@ -1141,7 +1037,6 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
     pr_evt = events_by_stage.get("publish_release")
 
     def derive(has_data: bool, evt: dict | None, *, started_others: bool = False) -> tuple[str, int | None]:
-        """Return (status, duration_ms)."""
         if evt and evt["status"] == "failed":
             return ("failed", evt.get("duration_ms"))
         if evt and evt["status"] == "completed":
@@ -1159,7 +1054,6 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         return ("pending", None)
 
     stages: dict[str, dict] = {}
-    # ingest
     if n_docs > 0:
         st = "failed" if (n_docs_failed > 0 and n_docs_committed == 0 and overall_status == "failed") else "done"
         kpi = f"📄 {n_docs} 个 · ✓{n_docs_committed} ✗{n_docs_failed}"
@@ -1168,17 +1062,14 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         kpi = "—"
     stages["ingest"] = {"status": st, "kpi": kpi, "duration_ms": None}
 
-    # parse — segment events are written together with seg DB write; parse alone has no event
-    parse_status, parse_dur = derive(n_segments > 0, seg_evt)
+    parse_status, _ = derive(n_segments > 0, seg_evt)
     stages["parse"] = {"status": parse_status, "kpi": f"≈{n_segments} 段" if n_segments else "—", "duration_ms": None}
 
-    # segment
     seg_st, seg_dur = derive(n_segments > 0, seg_evt)
     stages["segment"] = {"status": seg_st, "kpi": f"{n_segments} 段" if n_segments else "—", "duration_ms": seg_dur}
 
-    # enrich — no explicit event; presence of enriched segs OR completion of relations implies done
     if n_enriched_segs > 0:
-        en_st, en_kpi = ("done" if is_terminal else "done"), f"{n_enriched_segs} 段含实体"
+        en_st, en_kpi = "done", f"{n_enriched_segs} 段含实体"
     elif rel_evt and rel_evt.get("status") == "completed":
         en_st, en_kpi = "done", "0 实体（rule-based 无命中）"
     elif n_segments > 0:
@@ -1189,28 +1080,22 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         en_kpi = "—"
     stages["enrich"] = {"status": en_st, "kpi": en_kpi, "duration_ms": None}
 
-    # relations
     rel_st, rel_dur = derive(n_relations > 0, rel_evt)
     stages["relations"] = {"status": rel_st, "kpi": f"{n_relations} 条" if n_relations else "—", "duration_ms": rel_dur}
 
-    # units
     ru_st, ru_dur = derive(n_units > 0, ru_evt)
     stages["units"] = {"status": ru_st, "kpi": f"{n_units} 单元" if n_units else "—", "duration_ms": ru_dur}
 
-    # snapshot
     snap_st, snap_dur = derive(n_snapshots > 0, snap_evt)
     stages["snapshot"] = {"status": snap_st, "kpi": f"{n_snapshots} 快照" if n_snapshots else "—", "duration_ms": snap_dur}
 
-    # build
     has_build = bool(build_id)
     bd_st, bd_dur = derive(has_build, ab_evt)
     stages["build"] = {"status": bd_st, "kpi": f"build {build_id[:8]}" if has_build and build_id else "—", "duration_ms": bd_dur}
 
-    # release
     rel2_st, rel2_dur = derive(n_releases > 0, pr_evt)
     stages["release"] = {"status": rel2_st, "kpi": f"{n_releases} release" if n_releases else "—", "duration_ms": rel2_dur}
 
-    # If overall is cancelled and stage is still pending, mark as cancelled
     if overall_status == "cancelled":
         for sid, sd in stages.items():
             if sd["status"] in ("pending", "running"):
@@ -1220,22 +1105,19 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
 
 
 # =====================================================================
-# UI helpers (rendering)
+# UI helpers
 # =====================================================================
 
 _STATUS_GLYPH = {
-    "done":      "✓",
-    "running":   "⟳",
-    "pending":   "○",
-    "failed":    "✗",
-    "cancelled": "⊘",
+    "done": "✓", "running": "⟳", "pending": "○", "failed": "✗", "cancelled": "⊘",
 }
 _STATUS_COLOR = {
-    "done":      "#10b981",
-    "running":   "#3b82f6",
-    "pending":   "#94a3b8",
-    "failed":    "#ef4444",
-    "cancelled": "#f59e0b",
+    "done": "#10b981", "running": "#3b82f6", "pending": "#94a3b8",
+    "failed": "#ef4444", "cancelled": "#f59e0b",
+}
+_STATUS_LABEL = {
+    "done": "已完成", "running": "运行中", "pending": "等待中",
+    "failed": "失败", "cancelled": "已取消",
 }
 
 
@@ -1250,36 +1132,9 @@ def _fmt_duration(ms: int | None) -> str:
     return f"{m}m{s:02d}s"
 
 
-def _stepper_choices(stages: dict[str, dict]) -> list[tuple[str, str]]:
-    """Build the list of (label, value) tuples for the Stepper Radio (9 stages)."""
-    out: list[tuple[str, str]] = []
-    for sid in PIPELINE_STAGE_IDS:
-        s = STAGE_BY_ID[sid]
-        st = stages.get(sid, {}).get("status", "pending")
-        glyph = _STATUS_GLYPH[st]
-        dur = _fmt_duration(stages.get(sid, {}).get("duration_ms"))
-        kpi = stages.get(sid, {}).get("kpi", "—")
-        if st == "running":
-            extra = "运行中…"
-        elif st == "done":
-            extra = dur
-        elif st == "failed":
-            extra = "失败"
-        elif st == "cancelled":
-            extra = "已取消"
-        else:
-            extra = "待运行"
-        label = f"{glyph} {s['short']} · {extra}"
-        if kpi != "—" and st in ("done", "running", "failed"):
-            label += f" · {kpi}"
-        out.append((label, sid))
-    return out
-
-
 def _phase_from_run(run_row: dict | None) -> str:
-    """Map mining_runs.status → UI phase."""
     if run_row is None:
-        return "running"  # run not yet appeared, but worker spawned
+        return "running"
     s = run_row["status"]
     if s == "completed":
         return "done"
@@ -1290,20 +1145,27 @@ def _phase_from_run(run_row: dict | None) -> str:
     return "running"
 
 
-def _elapsed_seconds(started_at: str | None, finished_at: str | None) -> int:
+def _elapsed_seconds(started_at, finished_at) -> int:
     if not started_at:
         return 0
     try:
-        from datetime import datetime, timezone
-        start = datetime.fromisoformat(started_at)
-        end = datetime.fromisoformat(finished_at) if finished_at else datetime.now(timezone.utc)
+        from datetime import timezone
+        start = started_at if isinstance(started_at, datetime) else datetime.fromisoformat(str(started_at))
+        if finished_at:
+            end = finished_at if isinstance(finished_at, datetime) else datetime.fromisoformat(str(finished_at))
+        else:
+            end = datetime.now(timezone.utc)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
         return max(0, int((end - start).total_seconds()))
     except Exception:
         return 0
 
 
 def _progress_pct(stages: dict[str, dict]) -> int:
-    done = sum(1 for sid in PIPELINE_STAGE_IDS if stages.get(sid, {}).get("status") in ("done",))
+    done = sum(1 for sid in PIPELINE_STAGE_IDS if stages.get(sid, {}).get("status") == "done")
     return int(done / len(PIPELINE_STAGE_IDS) * 100)
 
 
@@ -1313,7 +1175,7 @@ def _status_bar_html(run_row: dict | None, stages: dict[str, dict], phase: str) 
     elapsed = _elapsed_seconds(run_row.get("started_at"), run_row.get("finished_at"))
     mm, ss = divmod(elapsed, 60)
     pct = _progress_pct(stages)
-    rid = (run_row.get("id") or "")[:8]
+    rid = (str(run_row.get("id") or ""))[:8]
     if phase == "running":
         icon, label, color = "🏃", "运行中", "#3b82f6"
     elif phase == "done":
@@ -1335,34 +1197,17 @@ def _status_bar_html(run_row: dict | None, stages: dict[str, dict], phase: str) 
     )
 
 
-def _focus_label_md(focus_stage: str | None, stages: dict[str, dict], auto_follow: bool) -> str:
-    if not focus_stage:
-        return "_（请选择阶段）_"
-    s = STAGE_BY_ID.get(focus_stage)
-    if not s:
-        return "_（未知阶段）_"
-    st = stages.get(focus_stage, {}).get("status", "pending")
-    glyph = _STATUS_GLYPH.get(st, "•")
-    follow = " · 📍 自动跟随最新已完成阶段" if auto_follow else ""
-    return f"### {glyph} 当前焦点 · {s['label']}{follow}"
-
-
 def _kpi_html(stage_id: str, stages: dict[str, dict]) -> str:
-    """4-card KPI strip for the focused stage panel."""
     sd = stages.get(stage_id, {})
     st = sd.get("status", "pending")
     glyph = _STATUS_GLYPH.get(st, "•")
     color = _STATUS_COLOR.get(st, "#94a3b8")
     dur = _fmt_duration(sd.get("duration_ms"))
     kpi = sd.get("kpi", "—")
-    label_map = {
-        "done": "已完成", "running": "运行中",
-        "pending": "等待中", "failed": "失败", "cancelled": "已取消",
-    }
     return (
         f'<div class="kpi-row">'
         f'  <div class="kpi-card"><div class="kpi-num" style="color:{color};">{glyph}</div>'
-        f'    <div class="kpi-label">{label_map.get(st, st)}</div></div>'
+        f'    <div class="kpi-label">{_STATUS_LABEL.get(st, st)}</div></div>'
         f'  <div class="kpi-card"><div class="kpi-num">{dur}</div>'
         f'    <div class="kpi-label">耗时</div></div>'
         f'  <div class="kpi-card"><div class="kpi-num">{kpi}</div>'
@@ -1371,25 +1216,127 @@ def _kpi_html(stage_id: str, stages: dict[str, dict]) -> str:
     )
 
 
+def _stepper_btn_html(spec: dict, stages: dict[str, dict], focused: bool) -> str:
+    sid = spec["id"]
+    sd = stages.get(sid, {})
+    st = sd.get("status", "pending")
+    glyph = _STATUS_GLYPH.get(st, "○")
+    color = _STATUS_COLOR.get(st, "#94a3b8")
+    if st == "running":
+        extra = "运行中…"
+    elif st == "done":
+        extra = _fmt_duration(sd.get("duration_ms"))
+    elif st == "failed":
+        extra = "失败"
+    elif st == "cancelled":
+        extra = "已取消"
+    else:
+        extra = "待运行"
+    kpi = sd.get("kpi", "—")
+    kpi_part = f'<div class="step-kpi">{kpi}</div>' if (kpi and kpi != "—" and st in ("done", "running", "failed")) else ''
+    focus_class = " step-focused" if focused else ""
+    return (
+        f'<div class="step-btn step-{st}{focus_class}">'
+        f'  <div class="step-glyph" style="color:{color};">{glyph}</div>'
+        f'  <div class="step-name">{spec["short"]}</div>'
+        f'  <div class="step-extra">{extra}</div>'
+        f'  {kpi_part}'
+        f'</div>'
+    )
+
+
 # =====================================================================
-# Run-orchestration helpers
+# ECharts / AG Grid option builders
 # =====================================================================
 
+def _bar_option(df: pd.DataFrame, x_col: str, y_col: str, title: str) -> dict:
+    if df is None or df.empty:
+        xs, ys = [], []
+    else:
+        xs = df[x_col].astype(str).tolist() if x_col in df.columns else []
+        ys = df[y_col].tolist() if y_col in df.columns else []
+    return {
+        "title": {
+            "text": title,
+            "left": "center",
+            "textStyle": {"fontSize": 13, "fontWeight": "normal", "color": "#475569"},
+        },
+        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+        "grid": {"left": 50, "right": 20, "top": 40, "bottom": 40, "containLabel": True},
+        "xAxis": {
+            "type": "category",
+            "data": xs,
+            "axisLabel": {"fontSize": 11, "color": "#64748b", "interval": 0, "rotate": 30 if any(len(str(x)) > 6 for x in xs) else 0},
+            "axisLine": {"lineStyle": {"color": "#cbd5e1"}},
+        },
+        "yAxis": {
+            "type": "value",
+            "axisLabel": {"fontSize": 11, "color": "#64748b"},
+            "splitLine": {"lineStyle": {"color": "#e2e8f0"}},
+        },
+        "series": [{
+            "type": "bar",
+            "data": ys,
+            "itemStyle": {"color": "#5b6cff", "borderRadius": [4, 4, 0, 0]},
+            "barMaxWidth": 40,
+        }],
+    }
+
+
+def _grid_options(df: pd.DataFrame) -> dict:
+    if df is None or df.empty:
+        return {"columnDefs": [{"field": "(无数据)"}], "rowData": [], "domLayout": "autoHeight"}
+    cols = []
+    for c in df.columns:
+        col_def = {
+            "field": str(c),
+            "headerName": str(c),
+            "filter": True,
+            "sortable": True,
+            "resizable": True,
+            "minWidth": 80,
+        }
+        cols.append(col_def)
+    rows = df.fillna("").to_dict("records")
+    return {
+        "columnDefs": cols,
+        "rowData": rows,
+        "defaultColDef": {"flex": 1, "minWidth": 80, "resizable": True},
+        "domLayout": "autoHeight",
+        "rowHeight": 28,
+        "headerHeight": 32,
+    }
+
+
+# =====================================================================
+# State
+# =====================================================================
+
+@dataclass
+class MiningState:
+    phase: str = "ready"  # ready / running / done / failed / cancelled
+    run_id: str | None = None
+    input_path: str | None = None
+    focus_stage: str | None = None
+    auto_follow: bool = True
+    started_at_local: float | None = None
+    stages: dict[str, dict] = field(
+        default_factory=lambda: {sid: {"status": "pending", "kpi": "—", "duration_ms": None}
+                                 for sid in PIPELINE_STAGE_IDS}
+    )
+    files: list[Path] = field(default_factory=list)
+
+
+STATE = MiningState()
 _RUN_LOCK = threading.Lock()
 
 
 def _next_focus(prev: str | None, stages: dict[str, dict], auto_follow: bool) -> str:
-    """Pick the stage to focus on.
-
-    auto_follow=True: latest stage with status='done', else first 'running', else first 'pending'.
-    auto_follow=False: keep prev (or fallback if invalid).
-    """
     valid = [sid for sid in PIPELINE_STAGE_IDS if stages.get(sid, {}).get("status") != "pending"]
     if not auto_follow and prev and prev in PIPELINE_STAGE_IDS and (
         stages.get(prev, {}).get("status") != "pending"
     ):
         return prev
-    # auto follow: latest done first, then running, else first pipeline stage
     last_done = None
     first_running = None
     for sid in PIPELINE_STAGE_IDS:
@@ -1402,10 +1349,9 @@ def _next_focus(prev: str | None, stages: dict[str, dict], auto_follow: bool) ->
 
 
 def _cancel_run_in_db(run_id: str) -> None:
-    """Best-effort: flip mining_runs.status to 'cancelled' (UI-side cancel signal)."""
     pool = _get_pool()
     with pool.connection() as conn:
-        from datetime import datetime, timezone
+        from datetime import timezone
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "UPDATE mining_runs SET status = 'cancelled', finished_at = %s "
@@ -1415,602 +1361,440 @@ def _cancel_run_in_db(run_id: str) -> None:
 
 
 # =====================================================================
-# Callbacks
-# =====================================================================
-
-INITIAL_STATE: dict[str, Any] = {
-    "phase": "ready",          # ready | running | done | failed | cancelled
-    "run_id": None,
-    "input_path": None,
-    "focus_stage": None,
-    "auto_follow": True,
-    "started_at_local": None,  # python time, for orphan-detection
-    "stages": {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS},
-}
-
-
-def _build_outputs_for_phase(
-    state: dict[str, Any],
-    run_row: dict | None = None,
-) -> tuple[list[Any], list[Any]]:
-    """Build (focus-area updates, per-stage updates) lists for current state.
-
-    Returns:
-      focus_updates — [status_bar_html, stepper_choices, focus_label_md]
-      stage_updates — flat list of per-stage [group_visible, kpi_html, *components(n)]
-                      for all 10 stages (pipeline 9 + timeline)
-    """
-    phase = state["phase"]
-    stages_state = state["stages"]
-    focus = state["focus_stage"]
-    auto_follow = state.get("auto_follow", True)
-
-    sb_html = _status_bar_html(run_row, stages_state, phase)
-    stepper_choices = _stepper_choices(stages_state)
-    if focus and focus in PIPELINE_STAGE_IDS:
-        focus_value = focus
-    else:
-        focus_value = PIPELINE_STAGE_IDS[0]
-    focus_label = _focus_label_md(focus, stages_state, auto_follow)
-    focus_updates = [
-        sb_html,
-        gr.update(choices=stepper_choices, value=focus_value),
-        focus_label,
-    ]
-
-    # Per-stage updates: render only the focused stage; others get their components untouched (gr.skip)
-    run_id = state.get("run_id")
-    stage_updates: list[Any] = []
-    for stage in STAGES:
-        sid = stage["id"]
-        is_focus = (sid == focus) or (sid == "timeline" and focus == "timeline")
-        # Group visibility: focus visible; non-pipeline timeline visible if focus == 'timeline'
-        # For pipeline stages, only the focused one is visible
-        visible = (sid == focus) if focus else (sid == PIPELINE_STAGE_IDS[0])
-        stage_updates.append(gr.update(visible=visible))  # group
-        # KPI HTML
-        if sid in PIPELINE_STAGE_IDS:
-            stage_updates.append(_kpi_html(sid, stages_state))
-        else:
-            stage_updates.append("<div class='kpi-row'></div>")
-        # Components
-        if is_focus and run_id:
-            rendered = _safe_render(stage, run_id)
-            stage_updates.extend(rendered)
-        else:
-            # Don't touch other stages' components; pad with gr.skip()
-            stage_updates.extend([gr.skip()] * stage["n"])
-    return focus_updates, stage_updates
-
-
-def _empty_outputs() -> tuple[list[Any], list[Any]]:
-    """Outputs for the READY phase (run group hidden)."""
-    sb_html = ""
-    empty_choices = [(f"○ {s['short']} · 待运行", s["id"]) for s in STAGES if s["id"] != "timeline"]
-    focus_updates = [sb_html, gr.update(choices=empty_choices, value=PIPELINE_STAGE_IDS[0]), ""]
-    stage_updates: list[Any] = []
-    for stage in STAGES:
-        stage_updates.append(gr.update(visible=False))  # group
-        stage_updates.append("<div class='kpi-row'></div>")
-        stage_updates.extend(_empty_render_for(stage))
-    return focus_updates, stage_updates
-
-
-def _ingest_files(files, target: Path) -> list[Path]:
-    target.mkdir(parents=True, exist_ok=True)
-    out: list[Path] = []
-    for f in files or []:
-        src = Path(f.name if hasattr(f, "name") else f)
-        dst = target / src.name
-        shutil.copy(src, dst)
-        out.append(dst)
-    return out
-
-
-def cb_start_mining(
-    state, files, product, tags, doc_type, domain_pack, use_llm, llm_url, embedding_key,
-):
-    """Click handler for the Start button. Spawns worker, switches to RUNNING."""
-    if not files:
-        gr.Warning("请先上传文件")
-        # Return current outputs unchanged (basically gr.skip everywhere except maybe state)
-        focus_updates, stage_updates = _empty_outputs()
-        return [
-            state,                      # state
-            gr.update(visible=True),    # ready_group
-            gr.update(visible=False),   # run_group
-            gr.update(active=False),    # timer
-            gr.update(visible=False),   # cancel_btn
-            gr.update(visible=False),   # restart_btn
-        ] + focus_updates + stage_updates
-
-    # Acquire run lock
-    if not _RUN_LOCK.acquire(blocking=False):
-        gr.Warning("已经有挖掘任务在执行")
-        focus_updates, stage_updates = _empty_outputs()
-        return [
-            state,
-            gr.update(visible=True), gr.update(visible=False), gr.update(active=False),
-            gr.update(visible=False), gr.update(visible=False),
-        ] + focus_updates + stage_updates
-
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    target = UPLOADS_ROOT / ts
-    _ingest_files(files, target)
-
-    product_v = (product or "").strip()
-    tags_v = (tags or "").strip()
-    doc_type_v = (doc_type or "").strip()
-    domain_pack_v = (domain_pack or "cloud_core_network").strip() or "cloud_core_network"
-    llm_url_v = (llm_url or "").strip()
-    embedding_key_v = (embedding_key or "").strip()
-
-    def worker():
-        try:
-            mining_run(
-                input_path=target,
-                batch_params=BatchParams(
-                    default_source_type="folder_scan",
-                    default_document_type=doc_type_v or None,
-                    batch_scope=({"products": [product_v]} if product_v else {}),
-                    tags=[t.strip() for t in tags_v.split(",") if t.strip()],
-                ),
-                domain_pack=domain_pack_v,
-                llm_base_url=(llm_url_v if (use_llm and llm_url_v) else None),
-                llm_bypass_proxy=True,
-                embedding_api_key=(embedding_key_v or None),
-            )
-        except Exception:
-            traceback.print_exc()
-        finally:
-            _RUN_LOCK.release()
-
-    th = threading.Thread(target=worker, daemon=True)
-    th.start()
-
-    new_state = {
-        **state,
-        "phase": "running",
-        "input_path": str(target),
-        "started_at_local": time.time(),
-        "auto_follow": True,
-        "focus_stage": PIPELINE_STAGE_IDS[0],
-        "run_id": None,
-        "stages": INITIAL_STATE["stages"].copy(),
-    }
-    focus_updates, stage_updates = _build_outputs_for_phase(new_state, None)
-    return [
-        new_state,
-        gr.update(visible=False),  # ready_group hidden
-        gr.update(visible=True),   # run_group visible
-        gr.update(active=True),    # timer ON
-        gr.update(visible=True),   # cancel_btn visible
-        gr.update(visible=False),  # restart_btn hidden
-    ] + focus_updates + stage_updates
-
-
-def cb_poll_tick(state):
-    """Timer callback — read PG, refresh UI."""
-    if state["phase"] == "ready":
-        # Should not happen (timer disabled), but guard anyway
-        focus_updates, stage_updates = _empty_outputs()
-        return [
-            state, gr.update(visible=True), gr.update(visible=False),
-            gr.update(active=False), gr.update(visible=False), gr.update(visible=False),
-        ] + focus_updates + stage_updates
-
-    input_path = state.get("input_path")
-    if not input_path:
-        focus_updates, stage_updates = _build_outputs_for_phase(state, None)
-        return [
-            state, gr.update(visible=False), gr.update(visible=True),
-            gr.update(active=True), gr.update(visible=True), gr.update(visible=False),
-        ] + focus_updates + stage_updates
-
-    snap = _query_latest_run(input_path)
-    if snap is None:
-        # Run not yet visible in DB
-        if state.get("started_at_local") and time.time() - state["started_at_local"] > 30:
-            # Orphan — worker likely failed before creating run row
-            new_state = {**state, "phase": "failed"}
-            focus_updates, stage_updates = _build_outputs_for_phase(new_state, None)
-            return [
-                new_state, gr.update(visible=False), gr.update(visible=True),
-                gr.update(active=False), gr.update(visible=False), gr.update(visible=True),
-            ] + focus_updates + stage_updates
-        focus_updates, stage_updates = _build_outputs_for_phase(state, None)
-        return [
-            state, gr.update(visible=False), gr.update(visible=True),
-            gr.update(active=True), gr.update(visible=True), gr.update(visible=False),
-        ] + focus_updates + stage_updates
-
-    run_row = snap["run"]
-    run_id = run_row["id"]
-    new_phase = _phase_from_run(run_row)
-    stages_state = _compute_pipeline_status(run_id, run_row)
-    focus = _next_focus(state.get("focus_stage"), stages_state, state.get("auto_follow", True))
-
-    new_state = {
-        **state,
-        "phase": new_phase,
-        "run_id": run_id,
-        "stages": stages_state,
-        "focus_stage": focus,
-    }
-
-    is_terminal = new_phase in ("done", "failed", "cancelled")
-    focus_updates, stage_updates = _build_outputs_for_phase(new_state, run_row)
-    return [
-        new_state,
-        gr.update(visible=False),                 # ready_group hidden
-        gr.update(visible=True),                  # run_group visible
-        gr.update(active=not is_terminal),        # timer
-        gr.update(visible=(new_phase == "running")),    # cancel_btn
-        gr.update(visible=is_terminal),                 # restart_btn
-    ] + focus_updates + stage_updates
-
-
-def cb_cancel(state):
-    """Click handler for ▣ 终止."""
-    run_id = state.get("run_id")
-    if not run_id:
-        gr.Warning("尚未拿到 run_id，请稍等再点")
-        focus_updates, stage_updates = _build_outputs_for_phase(state, None)
-        return [
-            state, gr.update(visible=False), gr.update(visible=True),
-            gr.update(active=True), gr.update(visible=True), gr.update(visible=False),
-        ] + focus_updates + stage_updates
-    try:
-        _cancel_run_in_db(run_id)
-        gr.Info("已发送终止信号，worker 将在最近一次检查点退出")
-    except Exception as e:
-        gr.Warning(f"发送终止失败：{e}")
-    # Disable cancel button visually until next poll
-    focus_updates, stage_updates = _build_outputs_for_phase(state, None)
-    return [
-        state,
-        gr.update(visible=False), gr.update(visible=True),
-        gr.update(active=True),
-        gr.update(visible=False, value="⏳ 正在停止…"),  # cancel_btn disabled visually
-        gr.update(visible=False),
-    ] + focus_updates + stage_updates
-
-
-def cb_stepper_change(state, new_focus):
-    """User clicked a different stage on the stepper — pin focus, disable auto-follow."""
-    if not new_focus or new_focus not in PIPELINE_STAGE_IDS:
-        return [state] + [gr.skip()] * (5 + 3 + sum(2 + s["n"] for s in STAGES))
-    new_state = {**state, "focus_stage": new_focus, "auto_follow": False}
-    focus_updates, stage_updates = _build_outputs_for_phase(
-        new_state, _query_latest_run(state["input_path"])["run"] if state.get("input_path") else None
-    )
-    return [
-        new_state,
-        gr.update(),  # ready_group
-        gr.update(),  # run_group
-        gr.update(),  # timer
-        gr.update(),  # cancel_btn
-        gr.update(),  # restart_btn
-    ] + focus_updates + stage_updates
-
-
-def cb_enable_follow(state):
-    new_state = {**state, "auto_follow": True}
-    snap = _query_latest_run(state["input_path"]) if state.get("input_path") else None
-    run_row = snap["run"] if snap else None
-    if run_row:
-        stages_state = _compute_pipeline_status(run_row["id"], run_row)
-        new_state["stages"] = stages_state
-        new_state["focus_stage"] = _next_focus(None, stages_state, True)
-    focus_updates, stage_updates = _build_outputs_for_phase(new_state, run_row)
-    return [
-        new_state,
-        gr.update(),  # ready_group
-        gr.update(),  # run_group
-        gr.update(),  # timer
-        gr.update(),  # cancel_btn
-        gr.update(),  # restart_btn
-    ] + focus_updates + stage_updates
-
-
-def cb_restart(state):
-    """Reset to READY phase."""
-    new_state = INITIAL_STATE.copy()
-    new_state["stages"] = {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS}
-    focus_updates, stage_updates = _empty_outputs()
-    return [
-        new_state,
-        gr.update(visible=True),   # ready_group
-        gr.update(visible=False),  # run_group
-        gr.update(active=False),
-        gr.update(visible=False, value="▣ 终止"),
-        gr.update(visible=False),
-    ] + focus_updates + stage_updates
-
-
-def cb_show_timeline(state):
-    """Switch focus to timeline tab."""
-    new_state = {**state, "focus_stage": "timeline", "auto_follow": False}
-    snap = _query_latest_run(state["input_path"]) if state.get("input_path") else None
-    run_row = snap["run"] if snap else None
-    focus_updates, stage_updates = _build_outputs_for_phase(new_state, run_row)
-    return [
-        new_state,
-        gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-    ] + focus_updates + stage_updates
-
-
-# =====================================================================
-# UI layout
+# CSS
 # =====================================================================
 
 CUSTOM_CSS = """
-.gradio-container {
-    max-width: 1480px !important;
-    margin: 0 auto !important;
-    font-family: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: #f5f7fb !important;
-}
-#app-header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 4px 8px 4px; margin-bottom: 6px;
-    border-bottom: 1px solid #e6e8f0;
-}
-#app-header h1 {
-    margin: 0 !important; font-size: 22px !important; font-weight: 700 !important;
-    color: #1f2937 !important; letter-spacing: -0.01em;
-}
-#app-header .subtitle { color: #6b7280; font-size: 13px; }
+body { background: #f5f7fb; font-family: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.nicegui-content { max-width: 1480px; margin: 0 auto; padding: 16px; }
 
-/* READY group */
-#ready-group .gr-block {
-    background: #fff; border-radius: 12px; padding: 16px;
-    border: 1px solid #e6e8f0; box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-}
-#start-btn {
-    background: #5b6cff !important; color: #fff !important;
-    font-weight: 600 !important; font-size: 15px !important; padding: 12px !important;
-    border: none !important; border-radius: 10px !important;
-    box-shadow: 0 1px 4px rgba(91,108,255,0.25) !important;
-}
-#start-btn:hover { background: #4a59e8 !important; }
+.app-header { display: flex; align-items: baseline; gap: 12px; padding: 4px 0 16px 0; border-bottom: 1px solid #e6e8f0; margin-bottom: 16px; }
+.app-header .title { font-size: 22px; font-weight: 700; color: #1f2937; letter-spacing: -0.01em; }
+.app-header .subtitle { color: #6b7280; font-size: 13px; }
 
-/* Status bar (RUNNING) */
-.status-bar {
-    display: flex; align-items: center; gap: 14px;
-    padding: 10px 14px; background: #fff;
-    border-radius: 12px; border: 1px solid #e6e8f0;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-    font-size: 13px;
-}
-.status-bar .sb-badge {
-    padding: 4px 10px; border-radius: 6px; font-weight: 600; font-size: 12px;
-}
+.section-card { background: #fff; border-radius: 12px; padding: 16px 18px; border: 1px solid #e6e8f0; box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
+.section-title { font-size: 14px; font-weight: 600; color: #334155; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+
+/* Buttons */
+.btn-primary { background: #5b6cff !important; color: #fff !important; font-weight: 600 !important; border-radius: 10px !important; box-shadow: 0 1px 4px rgba(91,108,255,0.25) !important; }
+.btn-primary:hover { background: #4a59e8 !important; }
+.btn-danger-outline { background: #fff !important; color: #ef4444 !important; border: 1px solid #ef4444 !important; border-radius: 8px !important; font-weight: 600 !important; }
+.btn-danger-outline:hover { background: #fef2f2 !important; }
+.btn-ghost { background: #fff !important; color: #475569 !important; border: 1px solid #cbd5e1 !important; border-radius: 8px !important; font-size: 12px !important; font-weight: 500 !important; }
+.btn-ghost:hover { background: #f8fafc !important; }
+
+/* Status bar */
+.status-bar { display: flex; align-items: center; gap: 14px; padding: 10px 14px; background: #fff; border-radius: 12px; border: 1px solid #e6e8f0; box-shadow: 0 1px 2px rgba(15,23,42,0.04); font-size: 13px; }
+.status-bar .sb-badge { padding: 4px 10px; border-radius: 6px; font-weight: 600; font-size: 12px; }
 .status-bar .sb-meta { color: #475569; }
-.status-bar .sb-meta code {
-    background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12px;
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-}
-.status-bar .sb-bar {
-    flex: 1 1 auto; height: 6px; background: #e6e8f0; border-radius: 3px;
-    overflow: hidden; min-width: 80px;
-}
+.status-bar .sb-meta code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.status-bar .sb-bar { flex: 1 1 auto; height: 6px; background: #e6e8f0; border-radius: 3px; overflow: hidden; min-width: 80px; }
 .status-bar .sb-bar-fill { height: 100%; transition: width 0.3s ease; }
 
-#cancel-btn {
-    background: #fff !important; color: #ef4444 !important;
-    border: 1px solid #ef4444 !important; border-radius: 8px !important;
-    font-weight: 600 !important; font-size: 13px !important;
-    padding: 6px 14px !important;
-}
-#cancel-btn:hover { background: #fef2f2 !important; }
+/* Stepper */
+.stepper-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.step-btn { flex: 1 1 0; min-width: 130px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e6e8f0; border-radius: 10px; cursor: pointer; transition: all .15s ease; user-select: none; }
+.step-btn:hover { background: #f1f5f9; border-color: #cbd5e1; }
+.step-btn .step-glyph { font-size: 16px; font-weight: 700; line-height: 1; }
+.step-btn .step-name { font-size: 13px; font-weight: 600; color: #1f2937; margin-top: 4px; }
+.step-btn .step-extra { font-size: 11px; color: #64748b; margin-top: 2px; }
+.step-btn .step-kpi { font-size: 11px; color: #475569; margin-top: 4px; padding-top: 4px; border-top: 1px dashed #e2e8f0; }
+.step-focused { background: #eef2ff !important; border-color: #5b6cff !important; box-shadow: 0 0 0 2px rgba(91,108,255,0.15); }
+.step-running { background: #eff6ff; border-color: #93c5fd; }
+.step-done { background: #ecfdf5; border-color: #6ee7b7; }
+.step-failed { background: #fef2f2; border-color: #fca5a5; }
+.step-cancelled { background: #fffbeb; border-color: #fcd34d; }
 
-#restart-btn {
-    background: #5b6cff !important; color: #fff !important;
-    border: none !important; border-radius: 8px !important;
-    font-weight: 600 !important; font-size: 13px !important;
-    padding: 6px 14px !important;
-}
+/* KPI strip */
+.kpi-row { display: flex; gap: 12px; margin: 0 0 14px 0; }
+.kpi-card { flex: 1 1 0; min-width: 110px; background: #fff; border-radius: 10px; padding: 14px 16px; border: 1px solid #e6e8f0; box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
+.kpi-card .kpi-num { font-size: 22px; font-weight: 700; color: #1f2937; margin-bottom: 4px; letter-spacing: -0.01em; }
+.kpi-card .kpi-label { font-size: 12px; color: #6b7280; }
 
-#follow-btn, #timeline-btn {
-    background: #fff !important; color: #475569 !important;
-    border: 1px solid #cbd5e1 !important; border-radius: 8px !important;
-    font-size: 12px !important; padding: 4px 10px !important; font-weight: 500 !important;
-}
-#follow-btn:hover, #timeline-btn:hover { background: #f8fafc !important; }
-
-/* Stepper Radio styled as horizontal stepper */
-#stepper {
-    background: #fff; padding: 12px; border-radius: 12px;
-    border: 1px solid #e6e8f0;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-}
-#stepper > label > span { display: none !important; }  /* hide "Radio" label text */
-#stepper .wrap, #stepper fieldset {
-    flex-direction: row !important; gap: 6px !important;
-    flex-wrap: wrap !important;
-}
-#stepper label {
-    flex: 1 1 0 !important; min-width: 110px !important;
-    border: 1px solid #e6e8f0 !important; border-radius: 8px !important;
-    padding: 8px 10px !important; cursor: pointer !important;
-    background: #f8fafc !important; transition: all .15s ease;
-    font-size: 12px !important;
-}
-#stepper label:hover { background: #f1f5f9 !important; border-color: #cbd5e1 !important; }
-#stepper input[type="radio"]:checked + span,
-#stepper label:has(input:checked) {
-    background: #eef2ff !important; border-color: #5b6cff !important;
-    color: #4338ca !important; font-weight: 600 !important;
-}
-
-/* Active panel cards */
-.kpi-row {
-    display: flex; gap: 12px; margin: 12px 0;
-}
-.kpi-card {
-    flex: 1 1 0; min-width: 110px;
-    background: #fff; border-radius: 10px; padding: 14px;
-    border: 1px solid #e6e8f0;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-}
-.kpi-card .kpi-num {
-    font-size: 22px; font-weight: 700; color: #1f2937;
-    margin-bottom: 4px; letter-spacing: -0.01em;
-}
-.kpi-card .kpi-label {
-    font-size: 12px; color: #6b7280;
-}
-
-/* Stage panel container */
-.stage-panel {
-    background: #fff; padding: 16px; border-radius: 12px;
-    border: 1px solid #e6e8f0;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-}
+/* Chart container */
+.chart-card { background: #fff; border-radius: 10px; padding: 8px; border: 1px solid #e6e8f0; box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
 """
 
-_GRADIO_THEME = gr.themes.Soft(
-    primary_hue="indigo",
-    neutral_hue="slate",
-    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui"],
-)
 
-with gr.Blocks(title="Knowledge Mining Studio") as demo:
-    state = gr.State(value=INITIAL_STATE)
+# =====================================================================
+# StagePanel — encapsulates one stage's UI components
+# =====================================================================
 
-    # ===== Header =====
-    with gr.Row(elem_id="app-header"):
-        gr.HTML('<h1>🛠️ Knowledge Mining Studio</h1>'
-                '<span class="subtitle">v1.1 · PostgreSQL backend</span>')
+class StagePanel:
+    """Holds references to the components of one stage panel.
 
-    # ===== READY region =====
-    with gr.Group(visible=True, elem_id="ready-group") as ready_group:
-        with gr.Row(equal_height=False):
-            with gr.Column(scale=1, min_width=340):
-                gr.Markdown("### 📎 上传文档")
-                files = gr.Files(
-                    label="支持 .md / .txt / .html / .pdf / .docx / .chm / .hdx",
-                    file_count="multiple",
-                    height=160,
-                )
-                gr.Markdown("### 🏷️ Batch 参数")
-                product = gr.Textbox(label="产品名", value="UI-Test", info="写入 batch_scope.products")
-                tags = gr.Textbox(label="标签", value="ui,test", info="逗号分隔")
-                doc_type = gr.Dropdown(
-                    label="document_type",
-                    choices=[
+    The panel container is created hidden; render(data) updates the components.
+    """
+
+    def __init__(self, spec: dict[str, Any]):
+        self.spec = spec
+        self.id = spec["id"]
+        # Outer container — we'll toggle visibility on this.
+        self.container = ui.column().classes("w-full gap-3")
+        self.container.set_visibility(False)
+        with self.container:
+            self.kpi_html = ui.html(_kpi_html(self.id, {})) if self.id != "timeline" else None
+            self.summary_md = ui.markdown(EMPTY_RUN_TEXT)
+            n_plots = len(spec["plots"])
+            self.charts: list[ui.echart] = []
+            if n_plots > 0:
+                with ui.row().classes("w-full gap-3 flex-wrap"):
+                    for (title, x, y) in spec["plots"]:
+                        with ui.card().classes("chart-card flex-1 min-w-[280px] p-2"):
+                            chart = ui.echart(_bar_option(None, x, y, title)).classes("w-full h-[220px]")
+                            self.charts.append(chart)
+            with ui.expansion("展开明细表格", icon="table_view").classes("w-full"):
+                self.grid = ui.aggrid(_grid_options(None)).classes("w-full")
+
+    def render(self, data: list[Any], stages_state: dict[str, dict]):
+        """Update components with new data. data shape: [summary, *small_dfs, full_df]."""
+        if self.kpi_html is not None:
+            self.kpi_html.set_content(_kpi_html(self.id, stages_state))
+        # data[0] is the summary string
+        summary_text = data[0] if data else EMPTY_RUN_TEXT
+        self.summary_md.set_content(summary_text or EMPTY_RUN_TEXT)
+        # data[1..n_plots] are small DFs; data[-1] is the full DF (if there is a table slot)
+        n_plots = len(self.spec["plots"])
+        for i, (title, x, y) in enumerate(self.spec["plots"]):
+            if 1 + i < len(data):
+                df = data[1 + i]
+            else:
+                df = None
+            self.charts[i].options = _bar_option(df, x, y, title)
+            self.charts[i].update()
+        # full grid (last element in data, if more than n_plots+1)
+        if len(data) >= n_plots + 2:
+            full_df = data[-1]
+        elif len(data) == n_plots + 1:
+            # only summary + plots, no separate grid (e.g., release sometimes)
+            full_df = None
+        else:
+            full_df = None
+        self.grid.options = _grid_options(full_df)
+        self.grid.update()
+
+    def show(self):
+        self.container.set_visibility(True)
+
+    def hide(self):
+        self.container.set_visibility(False)
+
+
+# =====================================================================
+# Page layout & handlers
+# =====================================================================
+
+ui.add_css(CUSTOM_CSS, shared=True)
+
+
+@ui.page("/")
+def main_page():
+    # ---- Header ----
+    with ui.row().classes("app-header w-full"):
+        ui.html('<span class="title">🛠️ Knowledge Mining Studio</span>'
+                '<span class="subtitle">v2.0 · NiceGUI · PostgreSQL backend</span>')
+
+    # ---- READY area ----
+    ready_card = ui.card().classes("section-card w-full")
+    with ready_card:
+        with ui.row().classes("w-full gap-4 no-wrap items-stretch"):
+            # Left: upload + parameters
+            with ui.column().classes("flex-1 min-w-[380px] gap-3"):
+                ui.html('<div class="section-title">📎 上传文档</div>')
+                upload = ui.upload(
+                    label="拖入或点击上传 .md/.txt/.html/.pdf/.docx/.chm/.hdx",
+                    multiple=True,
+                    auto_upload=True,
+                    on_upload=lambda e: _on_file_upload(e),
+                ).classes("w-full").props('color=indigo flat bordered')
+
+                ui.html('<div class="section-title">🏷️ Batch 参数</div>')
+                product = ui.input("产品名", value="UI-Test").props("dense outlined").classes("w-full")
+                tags = ui.input("标签（逗号分隔）", value="ui,test").props("dense outlined").classes("w-full")
+                doc_type = ui.select(
+                    options=[
                         "procedure", "feature", "command", "troubleshooting",
                         "alarm", "constraint", "checklist", "expert_note",
                         "project_note", "standard", "training", "reference", "other",
                     ],
                     value="procedure",
-                )
-                _pack_choices = _list_domain_packs()
-                _pack_default = (
-                    "cloud_core_network" if "cloud_core_network" in _pack_choices
-                    else _pack_choices[0]
-                )
-                domain_pack = gr.Dropdown(
+                    label="document_type",
+                ).props("dense outlined").classes("w-full")
+                pack_choices = _list_domain_packs()
+                pack_default = "cloud_core_network" if "cloud_core_network" in pack_choices else pack_choices[0]
+                domain_pack = ui.select(
+                    options=pack_choices,
+                    value=pack_default,
                     label="domain_pack",
-                    choices=_pack_choices,
-                    value=_pack_default,
-                )
-                with gr.Accordion("⚙️ LLM / Embedding（可选）", open=False):
-                    use_llm = gr.Checkbox(label="启用 LLM Service", value=False)
-                    llm_url = gr.Textbox(label="LLM URL", value="http://localhost:8900")
-                    embedding_key = gr.Textbox(
-                        label="Embedding API Key",
-                        type="password",
-                        info="留空则跳过 embedding",
-                    )
-            with gr.Column(scale=2):
-                gr.Markdown("### ✅ 准备开始")
-                gr.Markdown(
-                    "上传文件并选择领域包后，点击下方按钮开始 9 阶段挖掘流水线。\n\n"
-                    "运行期间：实时显示阶段进度 / 阶段产出 / 可终止 / 可点 stepper 切换查看任一已完成阶段的结果。"
-                )
-                start_btn = gr.Button("▶  开始挖掘", variant="primary", size="lg", elem_id="start-btn")
+                ).props("dense outlined").classes("w-full")
 
-    # ===== RUNNING / DONE / FAILED / CANCELLED region =====
-    with gr.Group(visible=False) as run_group:
-        # Top status bar + actions
-        with gr.Row():
-            with gr.Column(scale=4):
-                status_bar = gr.HTML('<div class="status-bar">⏳ 启动中…</div>')
-            with gr.Column(scale=1, min_width=120):
-                cancel_btn = gr.Button("▣  终止", visible=True, elem_id="cancel-btn")
-                restart_btn = gr.Button("🔄  上传新批次重跑", visible=False, elem_id="restart-btn")
+                with ui.expansion("⚙️ LLM / Embedding（可选）", icon="settings").classes("w-full"):
+                    use_llm = ui.checkbox("启用 LLM Service", value=False)
+                    llm_url = ui.input("LLM URL", value="http://localhost:8900").props("dense outlined").classes("w-full")
+                    embedding_key = ui.input("Embedding API Key", password=True).props("dense outlined").classes("w-full")
+
+            # Right: prompt + start button
+            with ui.column().classes("flex-1 min-w-[300px] gap-3 justify-between"):
+                with ui.column().classes("gap-2"):
+                    ui.html('<div class="section-title">✅ 准备开始</div>')
+                    ui.markdown(
+                        "上传文件并选择领域包后，点击下方按钮开始 9 阶段挖掘流水线。\n\n"
+                        "运行期间：实时显示阶段进度 / 阶段产出 / 可终止 / 可点 stepper 切换查看任一已完成阶段的结果。"
+                    ).classes("text-sm text-gray-600")
+                start_btn = ui.button("▶  开始挖掘", on_click=lambda: on_start()).classes(
+                    "btn-primary w-full"
+                ).props("size=lg unelevated")
+
+    # ---- RUN area ----
+    run_card = ui.card().classes("section-card w-full")
+    run_card.set_visibility(False)
+    with run_card:
+        # Top: status bar + actions
+        with ui.row().classes("w-full items-center gap-3"):
+            status_bar = ui.html(_status_bar_html(None, {}, "running")).classes("flex-1")
+            cancel_btn = ui.button("▣  终止", on_click=lambda: on_cancel()).classes("btn-danger-outline").props("flat")
+            restart_btn = ui.button("🔄  上传新批次重跑", on_click=lambda: on_restart()).classes("btn-primary").props("unelevated")
+            restart_btn.set_visibility(False)
 
         # Stepper
-        gr.Markdown("#### 流程进度")
-        stepper = gr.Radio(
-            choices=[(f"○ {s['short']} · 待运行", s["id"]) for s in STAGES if s["id"] != "timeline"],
-            value=PIPELINE_STAGE_IDS[0],
-            show_label=False,
-            elem_id="stepper",
-        )
+        ui.html('<div class="section-title" style="margin-top:8px;">流程进度</div>')
+        stepper_btns: dict[str, ui.element] = {}
+        with ui.row().classes("w-full stepper-row"):
+            for spec in STAGE_SPECS:
+                if spec["id"] == "timeline":
+                    continue
+                sid = spec["id"]
+                btn = ui.html(_stepper_btn_html(spec, STATE.stages, focused=False))
+                btn.on("click", lambda _, sid=sid: on_stepper_click(sid))
+                stepper_btns[sid] = btn
 
-        # Focus label + auto-follow toggle
-        with gr.Row():
-            focus_label = gr.Markdown("### 当前焦点")
-            with gr.Column(scale=0, min_width=200):
-                follow_btn = gr.Button("📍  跟随最新", elem_id="follow-btn", size="sm")
-                timeline_btn = gr.Button("⏱  事件时间线", elem_id="timeline-btn", size="sm")
+        # Focus row
+        with ui.row().classes("w-full items-center justify-between"):
+            focus_label = ui.markdown("### 当前焦点")
+            with ui.row().classes("gap-2"):
+                follow_btn = ui.button("📍  跟随最新", on_click=lambda: on_follow()).classes("btn-ghost").props("flat dense")
+                timeline_btn = ui.button("⏱  事件时间线", on_click=lambda: on_timeline()).classes("btn-ghost").props("flat dense")
 
-        # Active panel — one Group per stage (only one visible at a time)
-        stage_groups: list[Any] = []
-        stage_kpi_components: list[Any] = []
-        stage_components_flat: list[Any] = []  # nested in stage order
-        stage_components_per_stage: list[list[Any]] = []
-        for stage in STAGES:
-            with gr.Group(visible=False, elem_classes=f"stage-panel stage-panel-{stage['id']}") as g:
-                kpi_html = gr.HTML("<div class='kpi-row'></div>")
-                comps = stage["build"]()
-            stage_groups.append(g)
-            stage_kpi_components.append(kpi_html)
-            stage_components_per_stage.append(comps)
-            stage_components_flat.extend(comps)
+        # Stage panels container
+        panels: dict[str, StagePanel] = {}
+        with ui.column().classes("w-full gap-3"):
+            for spec in STAGE_SPECS:
+                panels[spec["id"]] = StagePanel(spec)
 
-    # Hidden timer (1s) — drives polling while phase=='running'
-    timer = gr.Timer(1.0, active=False)
+    # =====================================================================
+    # Handlers (closures over UI element refs)
+    # =====================================================================
 
-    # ===== Wiring =====
-    # Flat output list shape (used by all callbacks):
-    #   [state,
-    #    ready_group, run_group, timer, cancel_btn, restart_btn,
-    #    status_bar, stepper, focus_label,
-    #    *for each stage: [group, kpi_html, *components]]
-    per_stage_outputs: list[Any] = []
-    for i, stage in enumerate(STAGES):
-        per_stage_outputs.append(stage_groups[i])
-        per_stage_outputs.append(stage_kpi_components[i])
-        per_stage_outputs.extend(stage_components_per_stage[i])
+    def _on_file_upload(e):
+        """ui.upload callback — save uploaded file to a temp staging area and remember its path."""
+        # NiceGUI uploads come as in-memory bytes via e.content (SpooledTemporaryFile).
+        target_dir = UPLOADS_ROOT / "_staging"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dst = target_dir / e.name
+        with dst.open("wb") as f:
+            shutil.copyfileobj(e.content, f)
+        STATE.files.append(dst)
+        ui.notify(f"已上传 {e.name}", type="positive", position="bottom-right")
 
-    common_outputs = [
-        state,
-        ready_group, run_group, timer, cancel_btn, restart_btn,
-        status_bar, stepper, focus_label,
-    ] + per_stage_outputs
+    def refresh_ui():
+        """Synchronize UI components with STATE."""
+        if STATE.phase == "ready":
+            ready_card.set_visibility(True)
+            run_card.set_visibility(False)
+        else:
+            ready_card.set_visibility(False)
+            run_card.set_visibility(True)
 
-    start_btn.click(
-        cb_start_mining,
-        inputs=[state, files, product, tags, doc_type, domain_pack, use_llm, llm_url, embedding_key],
-        outputs=common_outputs,
-    )
-    timer.tick(cb_poll_tick, inputs=[state], outputs=common_outputs)
-    cancel_btn.click(cb_cancel, inputs=[state], outputs=common_outputs)
-    stepper.change(cb_stepper_change, inputs=[state, stepper], outputs=common_outputs)
-    follow_btn.click(cb_enable_follow, inputs=[state], outputs=common_outputs)
-    timeline_btn.click(cb_show_timeline, inputs=[state], outputs=common_outputs)
-    restart_btn.click(cb_restart, inputs=[state], outputs=common_outputs)
+        # Status bar
+        run_row = None
+        if STATE.input_path:
+            snap = _query_latest_run(STATE.input_path)
+            run_row = snap["run"] if snap else None
+        status_bar.set_content(_status_bar_html(run_row, STATE.stages, STATE.phase))
+
+        # Stepper buttons
+        for sid, btn in stepper_btns.items():
+            spec = STAGE_BY_ID[sid]
+            focused = (sid == STATE.focus_stage)
+            btn.set_content(_stepper_btn_html(spec, STATE.stages, focused))
+
+        # Focus label
+        if STATE.focus_stage:
+            spec = STAGE_BY_ID.get(STATE.focus_stage)
+            if spec:
+                st = STATE.stages.get(STATE.focus_stage, {}).get("status", "pending")
+                glyph = _STATUS_GLYPH.get(st, "•")
+                follow = " · 📍 自动跟随最新已完成阶段" if STATE.auto_follow else ""
+                focus_label.set_content(f"### {glyph} 当前焦点 · {spec['label']}{follow}")
+        else:
+            focus_label.set_content("### 当前焦点")
+
+        # Panel visibility + render
+        for sid, panel in panels.items():
+            if sid == STATE.focus_stage:
+                panel.show()
+                data = _safe_render(panel.spec, STATE.run_id)
+                panel.render(data, STATE.stages)
+            else:
+                panel.hide()
+
+        # Buttons
+        is_terminal = STATE.phase in ("done", "failed", "cancelled")
+        cancel_btn.set_visibility(STATE.phase == "running")
+        restart_btn.set_visibility(is_terminal)
+
+    def on_start():
+        if not STATE.files:
+            ui.notify("请先上传文件", type="warning")
+            return
+        if not _RUN_LOCK.acquire(blocking=False):
+            ui.notify("已经有挖掘任务在执行", type="warning")
+            return
+
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = UPLOADS_ROOT / ts
+        target.mkdir(parents=True, exist_ok=True)
+        for src in STATE.files:
+            try:
+                shutil.copy(src, target / src.name)
+            except Exception:
+                traceback.print_exc()
+
+        product_v = (product.value or "").strip()
+        tags_v = (tags.value or "").strip()
+        doc_type_v = (doc_type.value or "").strip()
+        domain_pack_v = (domain_pack.value or "cloud_core_network").strip() or "cloud_core_network"
+        llm_url_v = (llm_url.value or "").strip()
+        embedding_key_v = (embedding_key.value or "").strip()
+        use_llm_v = bool(use_llm.value)
+
+        def worker():
+            try:
+                mining_run(
+                    input_path=target,
+                    batch_params=BatchParams(
+                        default_source_type="folder_scan",
+                        default_document_type=doc_type_v or None,
+                        batch_scope=({"products": [product_v]} if product_v else {}),
+                        tags=[t.strip() for t in tags_v.split(",") if t.strip()],
+                    ),
+                    domain_pack=domain_pack_v,
+                    llm_base_url=(llm_url_v if (use_llm_v and llm_url_v) else None),
+                    llm_bypass_proxy=True,
+                    embedding_api_key=(embedding_key_v or None),
+                )
+            except Exception:
+                traceback.print_exc()
+            finally:
+                _RUN_LOCK.release()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        STATE.phase = "running"
+        STATE.input_path = str(target)
+        STATE.started_at_local = time.time()
+        STATE.auto_follow = True
+        STATE.focus_stage = PIPELINE_STAGE_IDS[0]
+        STATE.run_id = None
+        STATE.stages = {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS}
+        refresh_ui()
+
+    def poll_tick():
+        if STATE.phase != "running":
+            return
+        input_path = STATE.input_path
+        if not input_path:
+            return
+        snap = _query_latest_run(input_path)
+        if snap is None:
+            if STATE.started_at_local and time.time() - STATE.started_at_local > 30:
+                STATE.phase = "failed"
+                refresh_ui()
+            return
+        run_row = snap["run"]
+        STATE.run_id = run_row["id"]
+        new_phase = _phase_from_run(run_row)
+        STATE.phase = new_phase
+        STATE.stages = _compute_pipeline_status(STATE.run_id, run_row)
+        if STATE.auto_follow:
+            STATE.focus_stage = _next_focus(STATE.focus_stage, STATE.stages, True)
+        refresh_ui()
+
+    def on_cancel():
+        if not STATE.run_id:
+            ui.notify("尚未拿到 run_id，请稍等再点", type="warning")
+            return
+        try:
+            _cancel_run_in_db(STATE.run_id)
+            ui.notify("已发送终止信号，worker 将在最近一次检查点退出", type="info")
+        except Exception as e:
+            ui.notify(f"发送终止失败：{e}", type="negative")
+        cancel_btn.set_visibility(False)
+
+    def on_stepper_click(sid: str):
+        if sid not in PIPELINE_STAGE_IDS:
+            return
+        STATE.focus_stage = sid
+        STATE.auto_follow = False
+        refresh_ui()
+
+    def on_follow():
+        STATE.auto_follow = True
+        if STATE.input_path:
+            snap = _query_latest_run(STATE.input_path)
+            if snap:
+                STATE.stages = _compute_pipeline_status(snap["run"]["id"], snap["run"])
+                STATE.focus_stage = _next_focus(None, STATE.stages, True)
+        refresh_ui()
+
+    def on_timeline():
+        STATE.focus_stage = "timeline"
+        STATE.auto_follow = False
+        refresh_ui()
+
+    def on_restart():
+        STATE.phase = "ready"
+        STATE.run_id = None
+        STATE.input_path = None
+        STATE.focus_stage = None
+        STATE.auto_follow = True
+        STATE.started_at_local = None
+        STATE.stages = {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS}
+        STATE.files = []
+        upload.reset()
+        refresh_ui()
+
+    # ---- Polling timer (1Hz) ----
+    ui.timer(1.0, poll_tick)
+
+    # ---- Initial render ----
+    refresh_ui()
 
 
-if __name__ == "__main__":
-    demo.queue().launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        inbrowser=False,
-        css=CUSTOM_CSS,
-        theme=_GRADIO_THEME,
+# =====================================================================
+# Main
+# =====================================================================
+
+def _shutdown():
+    global _pg_pool
+    if _pg_pool is not None:
+        try:
+            _pg_pool.close()
+        except Exception:
+            pass
+        _pg_pool = None
+
+
+app.on_shutdown(_shutdown)
+
+
+if __name__ in {"__main__", "__mp_main__"}:
+    ui.run(
+        host="127.0.0.1",
+        port=7860,
+        title="Knowledge Mining Studio",
+        show=False,
+        reload=False,
+        dark=False,
+        favicon="🛠️",
     )
