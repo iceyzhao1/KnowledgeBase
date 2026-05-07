@@ -140,9 +140,11 @@ def run(
     # LLM integration: create question generator if URL provided
     llm_services = _init_llm(llm_base_url, llm_bypass_proxy, profile)
 
-    # Embedding integration: create ZhipuEmbeddingGenerator if key provided
+    # Embedding integration: prefer llm_service shared embedding only when it's actually reachable;
+    # otherwise fall back to direct Zhipu client (or None when no key configured).
+    effective_embed_llm_url = llm_base_url if llm_services else None
     embedding_generator = _init_embedding(
-        llm_base_url, embedding_api_key, embedding_model, embedding_base_url, embedding_dimensions,
+        effective_embed_llm_url, embedding_api_key, embedding_model, embedding_base_url, embedding_dimensions,
     )
 
     try:
