@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 
 from llm_service.providers.model_base import ModelProviderError
+from llm_service.providers.utils import extract_doc_text
 
 
 class BigModelProvider:
@@ -135,7 +136,7 @@ class BigModelProvider:
                 used_indices.add(item["index"])
                 continue
             _doc = item.get("document")
-            doc_text = _doc.get("text", "") if isinstance(_doc, dict) else str(_doc or "")
+            doc_text = extract_doc_text(_doc)
             candidates = doc_to_idx.get(doc_text, [])
             # Pick first unused index to handle duplicate documents
             for ci in candidates:
