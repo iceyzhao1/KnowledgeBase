@@ -25,9 +25,13 @@ def _utcnow() -> str:
 class ModelService:
     """Synchronous-style model facade exposed over HTTP for mining/serving."""
 
-    def __init__(self, provider: ModelProviderProtocol, db=None):
+    def __init__(self, provider: ModelProviderProtocol, db=None, *,
+                 default_embedding_model: str = "embedding-3",
+                 default_rerank_model: str = ""):
         self._provider = provider
         self._db = db
+        self._default_embedding_model = default_embedding_model
+        self._default_rerank_model = default_rerank_model
 
     async def _record_sync_task(
         self,
@@ -109,7 +113,7 @@ class ModelService:
 
     async def embed(self, body: EmbeddingRequest) -> EmbeddingResponse:
         t0 = datetime.now(timezone.utc)
-        model = body.model or "embedding-3"
+        model = body.model or self._default_embedding_model
         texts = body.input
         input_json = {"texts": texts, "model": model, "dimensions": body.dimensions}
         try:
@@ -154,7 +158,7 @@ class ModelService:
 
     async def rerank(self, body: RerankRequest) -> RerankResponse:
         t0 = datetime.now(timezone.utc)
-        model = body.model or "rerank-pro"
+        model = body.model or self._default_rerank_model
         input_json = {
             "query": body.query,
             "documents": body.documents,
