@@ -1,7 +1,7 @@
 """CLI: Extract documentation archives (.chm / .hdx) into folders of HTML + assets.
 
 This is now a thin wrapper around
-`knowledge_mining.mining.ingestion.preprocessing` so there is a single source
+`knowledge_mining_zym.mining.ingestion.preprocessing` so there is a single source
 of truth for chm/hdx handling. The mining ingestion pipeline calls the same
 extraction code automatically when it encounters `.chm`/`.hdx` files.
 
@@ -23,7 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from knowledge_mining.mining.ingestion.preprocessing import (  # noqa: E402
+from knowledge_mining_zym.mining.ingestion.preprocessing import (  # noqa: E402
     SUPPORTED_ARCHIVE_EXTS,
     extract_archive,
 )
