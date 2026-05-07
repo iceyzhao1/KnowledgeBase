@@ -4,7 +4,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_db_init_creates_all_tables(db):
-    """All 6 agent_llm_* tables must exist after init."""
+    """All agent_llm_* tables must exist after init."""
     cursor = await db.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'agent_llm_%' ORDER BY name"
     )
@@ -12,6 +12,7 @@ async def test_db_init_creates_all_tables(db):
     expected = [
         "agent_llm_attempts",
         "agent_llm_events",
+        "agent_llm_model_calls",
         "agent_llm_prompt_templates",
         "agent_llm_requests",
         "agent_llm_results",

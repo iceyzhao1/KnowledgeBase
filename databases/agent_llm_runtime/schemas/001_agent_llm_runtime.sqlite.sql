@@ -116,3 +116,19 @@ CREATE TABLE IF NOT EXISTS agent_llm_events (
 
 CREATE INDEX IF NOT EXISTS idx_agent_llm_events_task
     ON agent_llm_events(task_id, created_at);
+
+-- Model call logs (embedding / rerank — lightweight, append-only)
+CREATE TABLE IF NOT EXISTS agent_llm_model_calls (
+    id             TEXT PRIMARY KEY,
+    call_type      TEXT NOT NULL CHECK (call_type IN ('embedding', 'rerank')),
+    model          TEXT NOT NULL,
+    input_count    INTEGER NOT NULL DEFAULT 0,
+    status         TEXT NOT NULL CHECK (status IN ('succeeded', 'failed')),
+    latency_ms     INTEGER,
+    token_usage    INTEGER,
+    error_message  TEXT,
+    created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_llm_model_calls_type
+    ON agent_llm_model_calls(call_type, created_at DESC);

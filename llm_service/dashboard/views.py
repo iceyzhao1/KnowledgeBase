@@ -9,10 +9,17 @@ from fastapi.responses import HTMLResponse
 router = APIRouter()
 
 _ALL_STATUSES = ["queued", "running", "succeeded", "failed", "dead_letter", "cancelled"]
+_PAGE_SIZE = 50
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request, status: str = "", domain: str = "", stage: str = ""):
+async def dashboard(
+    request: Request,
+    status: str = "",
+    domain: str = "",
+    stage: str = "",
+    page: int = 1,
+):
     db = request.app.state.db
 
     # --- Stats (always show global) ---
@@ -25,6 +32,24 @@ async def dashboard(request: Request, status: str = "", domain: str = "", stage:
     cur = await db.execute("SELECT COALESCE(SUM(total_tokens), 0) as t FROM agent_llm_attempts")
     total_tokens = (await cur.fetchone())["t"]
 
+    # --- Model call stats (embedding / rerank) ---
+    cur = await db.execute(
+        "SELECT call_type, COUNT(*) as cnt, COALESCE(SUM(token_usage),0) as tok "
+        "FROM agent_llm_model_calls GROUP BY call_type"
+    )
+    model_stats = {row["call_type"]: dict(row) for row in await cur.fetchall()}
+    embed_count = model_stats.get("embedding", {}).get("cnt", 0)
+    embed_tokens = model_stats.get("embedding", {}).get("tok", 0)
+    rerank_count = model_stats.get("rerank", {}).get("cnt", 0)
+    rerank_tokens = model_stats.get("rerank", {}).get("tok", 0)
+
+    # --- Recent model calls (last 50) ---
+    cur = await db.execute(
+        "SELECT id, call_type, model, input_count, status, latency_ms, token_usage, created_at "
+        "FROM agent_llm_model_calls ORDER BY created_at DESC LIMIT 50"
+    )
+    model_calls = [dict(r) for r in await cur.fetchall()]
+
     # --- Filter options (from all tasks, not filtered) ---
     cur = await db.execute("SELECT DISTINCT caller_domain FROM agent_llm_tasks ORDER BY caller_domain")
     all_domains = [row["caller_domain"] for row in await cur.fetchall()]
@@ -32,9 +57,13 @@ async def dashboard(request: Request, status: str = "", domain: str = "", stage:
     cur = await db.execute("SELECT DISTINCT pipeline_stage FROM agent_llm_tasks ORDER BY pipeline_stage")
     all_stages = [row["pipeline_stage"] for row in await cur.fetchall()]
 
-    # --- Filtered task list ---
+    # --- Pagination ---
+    page = max(1, page)
+    offset = (page - 1) * _PAGE_SIZE
+
+    # --- Count filtered ---
     conditions = []
-    params = []
+    params: list = []
     if status:
         conditions.append("t.status = ?")
         params.append(status)
@@ -47,6 +76,12 @@ async def dashboard(request: Request, status: str = "", domain: str = "", stage:
 
     where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    count_sql = f"SELECT COUNT(*) as cnt FROM agent_llm_tasks t{where}"
+    cur = await db.execute(count_sql, params)
+    filtered_total = (await cur.fetchone())["cnt"]
+    total_pages = max(1, (filtered_total + _PAGE_SIZE - 1) // _PAGE_SIZE)
+
+    # --- Filtered task list (paginated) ---
     sql = f"""
         SELECT t.id, t.caller_domain, t.pipeline_stage, t.status,
                t.attempt_count, t.created_at, t.metadata_json,
@@ -59,9 +94,9 @@ async def dashboard(request: Request, status: str = "", domain: str = "", stage:
         ) a ON a.task_id = t.id AND a.rn = 1
         {where}
         ORDER BY t.created_at DESC
-        LIMIT 100
+        LIMIT ? OFFSET ?
     """
-    cur = await db.execute(sql, params)
+    cur = await db.execute(sql, params + [_PAGE_SIZE, offset])
     tasks = [dict(r) for r in await cur.fetchall()]
 
     templates = request.app.state.templates
@@ -69,6 +104,11 @@ async def dashboard(request: Request, status: str = "", domain: str = "", stage:
         total=total,
         by_status=by_status,
         total_tokens=total_tokens,
+        embed_count=embed_count,
+        embed_tokens=embed_tokens,
+        rerank_count=rerank_count,
+        rerank_tokens=rerank_tokens,
+        model_calls=model_calls,
         tasks=tasks,
         all_statuses=_ALL_STATUSES,
         all_domains=all_domains,
@@ -76,6 +116,9 @@ async def dashboard(request: Request, status: str = "", domain: str = "", stage:
         filter_status=status,
         filter_domain=domain,
         filter_stage=stage,
+        page=page,
+        total_pages=total_pages,
+        filtered_total=filtered_total,
     )
     return HTMLResponse(content=html)
 

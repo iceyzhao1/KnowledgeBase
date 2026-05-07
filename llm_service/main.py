@@ -67,7 +67,7 @@ def create_app(
             )
         )
         svc = LLMService(db=db, provider=provider, config=cfg)
-        model_svc = ModelService(model_provider)
+        model_svc = ModelService(model_provider, db=db)
         app.state.llm_service = svc
         app.state.model_service = model_svc
         app.state.db = db
