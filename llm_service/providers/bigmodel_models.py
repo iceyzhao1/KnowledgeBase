@@ -12,20 +12,20 @@ class BigModelProvider:
         self,
         *,
         embedding_api_key: str = "",
-        embedding_base_url: str = "https://open.bigmodel.cn/api/paas/v4",
+        embedding_url: str = "https://open.bigmodel.cn/api/paas/v4/embeddings",
         embedding_model: str = "embedding-3",
         rerank_api_key: str = "",
-        rerank_base_url: str = "https://open.bigmodel.cn/api/paas/v4",
+        rerank_url: str = "https://open.bigmodel.cn/api/paas/v4/rerank",
         rerank_model: str = "",
         timeout: int = 60,
         bypass_proxy: bool = False,
         extra_headers: dict | None = None,
     ) -> None:
         self._embedding_api_key = embedding_api_key
-        self._embedding_base_url = embedding_base_url.rstrip("/")
+        self._embedding_url = embedding_url.rstrip("/")
         self._embedding_model = embedding_model
         self._rerank_api_key = rerank_api_key
-        self._rerank_base_url = rerank_base_url.rstrip("/")
+        self._rerank_url = rerank_url.rstrip("/")
         self._rerank_model = rerank_model
         self._extra_headers = extra_headers or {}
         self._timeout = timeout
@@ -49,15 +49,14 @@ class BigModelProvider:
 
     async def _post(
         self,
-        base_url: str,
+        url: str,
         api_key: str,
         capability: str,
-        path: str,
         payload: dict,
     ) -> dict:
         try:
             resp = await self._client.post(
-                f"{base_url}/{path.lstrip('/')}",
+                url,
                 json=payload,
                 headers=self._headers(api_key, capability),
             )
@@ -93,10 +92,9 @@ class BigModelProvider:
         if dimensions is not None:
             payload["dimensions"] = dimensions
         data = await self._post(
-            self._embedding_base_url,
+            self._embedding_url,
             self._embedding_api_key,
             "embedding",
-            "/embeddings",
             payload,
         )
         return {
@@ -121,10 +119,9 @@ class BigModelProvider:
             "return_documents": True,
         }
         data = await self._post(
-            self._rerank_base_url,
+            self._rerank_url,
             self._rerank_api_key,
             "rerank",
-            "/rerank",
             payload,
         )
         results = data.get("results", [])

@@ -240,10 +240,11 @@ POST /api/v1/models/embeddings
 ```json
 {
   "input": ["what is amf", "how to add upf"],
-  "model": "embedding-3",
-  "dimensions": 2048
+  "model": "embedding-3"
 }
 ```
+
+> `dimensions` 可选。内网网关不支持时不传即可。
 
 响应示例：
 
@@ -629,10 +630,11 @@ Content-Type: application/json
 
 {
   "input": ["什么是SBA？", "云计算基础知识"],
-  "model": "embedding-3",
-  "dimensions": 1024
+  "model": "embedding-3"
 }
 ```
+
+> `dimensions` 为可选参数。部分内网网关不支持此参数，不传即可。
 
 成功返回：
 ```json

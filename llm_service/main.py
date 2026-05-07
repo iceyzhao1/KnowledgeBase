@@ -57,10 +57,10 @@ def create_app(
             if model_provider_factory
             else BigModelProvider(
                 embedding_api_key=cfg.embedding_api_key,
-                embedding_base_url=cfg.embedding_base_url,
+                embedding_url=cfg.embedding_url,
                 embedding_model=cfg.embedding_model,
                 rerank_api_key=cfg.rerank_api_key,
-                rerank_base_url=cfg.rerank_base_url,
+                rerank_url=cfg.rerank_url,
                 rerank_model=cfg.rerank_model,
                 timeout=cfg.model_timeout,
                 bypass_proxy=cfg.model_bypass_proxy,
