@@ -30,6 +30,9 @@
         .badge.queued { background: var(--blue-bg); color: var(--blue); border: 1px solid #bfdbfe; }
         .badge.failed, .badge.dead_letter { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
         .badge.cancelled { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+        .badge.embedding { background: #f5f3ff; color: #7c3aed; border: 1px solid #ddd6fe; }
+        .badge.rerank { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+        .badge.chat { background: var(--blue-bg); color: var(--blue); border: 1px solid #bfdbfe; }
 
         .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
         .detail-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.1rem; }
@@ -64,6 +67,7 @@
             <h1>
                 <a href="/dashboard">&larr; Dashboard</a>
                 Task <span class="mono">{{ task.id[:8] }}...</span>
+                <span class="badge {{ task.task_type }}">{{ task.task_type }}</span>
                 <span class="badge {{ task.status }}">{{ task.status }}</span>
             </h1>
         </div>
@@ -101,6 +105,32 @@
         {% endif %}
 
         <!-- Request Info -->
+        {% if task_type == 'embedding' %}
+        {% if embed_texts %}
+        <div class="detail-card full-width" style="margin-bottom:1.5rem;">
+            <h3>Source Texts ({{ embed_texts | length }})</h3>
+            <pre style="max-height:300px;">{% for t in embed_texts %}{{ t }}
+---
+{% endfor %}</pre>
+        </div>
+        {% endif %}
+
+        {% elif task_type == 'rerank' %}
+        <div class="detail-card full-width" style="margin-bottom:1.5rem;">
+            <h3>Query</h3>
+            <pre>{{ rerank_query }}</pre>
+        </div>
+        {% if rerank_documents %}
+        <div class="detail-card full-width" style="margin-bottom:1.5rem;">
+            <h3>Input Documents ({{ rerank_documents | length }})</h3>
+            <pre style="max-height:250px;">{% for d in rerank_documents %}[{{ loop.index }}] {{ d }}
+---
+{% endfor %}</pre>
+        </div>
+        {% endif %}
+
+        {% else %}
+        {# chat task #}
         {% if request %}
         <div class="detail-grid">
             <div class="detail-card">
@@ -135,9 +165,42 @@
             {% endif %}
         </div>
         {% endif %}
+        {% endif %}
 
         <!-- Result -->
         {% if result %}
+        {% if task_type == 'rerank' and rerank_results %}
+        <div class="detail-card full-width" style="margin-bottom:1.5rem;">
+            <h3>Reranked Results</h3>
+            <table class="kv-table" style="width:100%;">
+                <thead>
+                    <tr><th style="width:50px;">Rank</th><th style="width:80px;">Score</th><th>Document</th></tr>
+                </thead>
+                <tbody>
+                {% for r in rerank_results %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td style="font-weight:600;">{{ "%.4f" | format(r.relevance_score) }}</td>
+                        <td>{{ (r.document or '')[:200] }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% elif task_type == 'embedding' %}
+        <div class="detail-card full-width" style="margin-bottom:1.5rem;">
+            <h3>Embedding Result</h3>
+            {% if result.text_output %}
+            <h4 style="margin-bottom:0.5rem;font-size:0.8rem;color:var(--text-muted);">Source Texts</h4>
+            <pre style="max-height:200px;">{{ result.text_output }}</pre>
+            {% endif %}
+            <details style="margin-top:0.75rem;">
+                <summary style="color:#94a3b8;cursor:pointer;font-size:0.8rem;">Raw JSON (includes vectors)</summary>
+                <pre style="max-height:300px;">{{ parsed_str }}</pre>
+            </details>
+        </div>
+        {% else %}
+        {# chat result #}
         <div class="detail-card full-width" style="margin-bottom:1.5rem;">
             <h3>Result (parse: {{ result.parse_status }})</h3>
             {% if result.parsed_output_json and result.parsed_output_json != '{}' %}
@@ -156,6 +219,7 @@
             <pre style="color:#f87171;">{{ validation_errors_str }}</pre>
             {% endif %}
         </div>
+        {% endif %}
         {% endif %}
 
         <!-- Attempts -->

@@ -74,6 +74,7 @@
         .badge.cancelled { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
         .badge.embedding { background: var(--purple-bg); color: var(--purple); border: 1px solid #ddd6fe; }
         .badge.rerank { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+        .badge.chat { background: var(--blue-bg); color: var(--blue); border: 1px solid #bfdbfe; }
 
         /* Pagination */
         .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-secondary); }
@@ -126,35 +127,16 @@
             </div>
         </div>
 
-        <!-- Model Calls (Embedding / Rerank) -->
-        {% if model_calls %}
-        <div class="section">
-            <div class="section-title">Model Calls <span class="count">(recent {{ model_calls|length }})</span></div>
-            <table>
-                <thead>
-                    <tr><th>Type</th><th>Model</th><th>Inputs</th><th>Status</th><th>Latency</th><th>Tokens</th><th>Time</th></tr>
-                </thead>
-                <tbody>
-                {% for mc in model_calls %}
-                    <tr>
-                        <td><span class="badge {{ mc.call_type }}">{{ mc.call_type }}</span></td>
-                        <td class="mono">{{ mc.model }}</td>
-                        <td>{{ mc.input_count }}</td>
-                        <td><span class="badge {{ mc.status }}">{{ mc.status }}</span></td>
-                        <td>{{ mc.latency_ms ~ 'ms' if mc.latency_ms else '-' }}</td>
-                        <td>{{ mc.token_usage or '-' }}</td>
-                        <td style="color:var(--text-muted);">{{ mc.created_at[:19].replace('T', ' ') }}</td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
-
         <!-- LLM Tasks -->
         <div class="section">
             <div class="section-title">LLM Tasks <span class="count">({{ filtered_total }} total{% if filtered_total != total %}, filtered{% endif %})</span></div>
             <form class="filter-bar" hx-get="/dashboard" hx-target="body" hx-swap="outerHTML">
+                <select name="type">
+                    <option value="">All Types</option>
+                    {% for t in all_types %}
+                    <option value="{{ t }}" {{ 'selected' if filter_type == t else '' }}>{{ t }}</option>
+                    {% endfor %}
+                </select>
                 <select name="status">
                     <option value="">All Status</option>
                     {% for s in all_statuses %}
@@ -181,6 +163,7 @@
                 <thead>
                     <tr>
                         <th>ID</th>
+                        <th>Type</th>
                         <th>Domain</th>
                         <th>Stage</th>
                         <th>Status</th>
@@ -194,6 +177,7 @@
                     {% for task in tasks %}
                     <tr>
                         <td><a href="/dashboard/tasks/{{ task.id }}" class="mono">{{ task.id[:8] }}...</a></td>
+                        <td><span class="badge {{ task.task_type }}">{{ task.task_type }}</span></td>
                         <td>{{ task.caller_domain }}</td>
                         <td>{{ task.pipeline_stage }}</td>
                         <td><span class="badge {{ task.status }}">{{ task.status }}</span></td>
@@ -204,7 +188,7 @@
                     </tr>
                     {% endfor %}
                     {% if not tasks %}
-                    <tr><td colspan="8" class="empty">No tasks found</td></tr>
+                    <tr><td colspan="9" class="empty">No tasks found</td></tr>
                     {% endif %}
                 </tbody>
             </table>
@@ -214,7 +198,7 @@
                 <span>{{ filtered_total }} results, page {{ page }} / {{ total_pages }}</span>
                 <div class="pages">
                     {% if page > 1 %}
-                    <a href="/dashboard?status={{ filter_status }}&domain={{ filter_domain }}&stage={{ filter_stage }}&page={{ page - 1 }}"
+                    <a href="/dashboard?type={{ filter_type }}&status={{ filter_status }}&domain={{ filter_domain }}&stage={{ filter_stage }}&page={{ page - 1 }}"
                        class="page-btn">&laquo;</a>
                     {% endif %}
 
@@ -222,7 +206,7 @@
                         {% if p == page %}
                         <span class="page-btn active">{{ p }}</span>
                         {% elif p <= 3 or p > total_pages - 3 or (p >= page - 2 and p <= page + 2) %}
-                        <a href="/dashboard?status={{ filter_status }}&domain={{ filter_domain }}&stage={{ filter_stage }}&page={{ p }}"
+                        <a href="/dashboard?type={{ filter_type }}&status={{ filter_status }}&domain={{ filter_domain }}&stage={{ filter_stage }}&page={{ p }}"
                            class="page-btn">{{ p }}</a>
                         {% elif p == 4 and page > 5 or p == total_pages - 3 and page < total_pages - 4 %}
                         <span class="page-btn" style="border:none;background:none;">...</span>
@@ -230,7 +214,7 @@
                     {% endfor %}
 
                     {% if page < total_pages %}
-                    <a href="/dashboard?status={{ filter_status }}&domain={{ filter_domain }}&stage={{ filter_stage }}&page={{ page + 1 }}"
+                    <a href="/dashboard?type={{ filter_type }}&status={{ filter_status }}&domain={{ filter_domain }}&stage={{ filter_stage }}&page={{ page + 1 }}"
                        class="page-btn">&raquo;</a>
                     {% endif %}
                 </div>

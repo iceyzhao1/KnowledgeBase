@@ -11,6 +11,7 @@ import aiosqlite
 
 from llm_service.config import LLMServiceConfig
 from llm_service.providers.base import ProviderProtocol
+from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.runtime.event_bus import EventBus
 from llm_service.runtime.executor import Executor
 from llm_service.runtime.task_manager import TaskManager
@@ -28,6 +29,7 @@ class LLMService:
         db: aiosqlite.Connection,
         provider: ProviderProtocol,
         config: LLMServiceConfig,
+        model_provider: ModelProviderProtocol | None = None,
     ):
         self._db = db
         self._config = config
@@ -42,6 +44,8 @@ class LLMService:
         )
         self._executor = Executor(db, self._mgr, self._bus, provider)
         self._templates = TemplateRegistry(db)
+        self._model_provider = model_provider
+        self._provider = provider
 
     # ------------------------------------------------------------------
     # Template resolution
@@ -208,6 +212,141 @@ class LLMService:
                 raise
 
             await self._bus.emit(task_id, "submitted", "task submitted")
+
+        return task_id
+
+    # ------------------------------------------------------------------
+    # Submit embedding / rerank (async)
+    # ------------------------------------------------------------------
+
+    async def submit_embedding(
+        self,
+        texts: list[str],
+        *,
+        model: str | None = None,
+        dimensions: int | None = None,
+        caller_domain: str = "model",
+        pipeline_stage: str = "embedding",
+        idempotency_key: str | None = None,
+        metadata: dict | None = None,
+        max_attempts: int = 2,
+        priority: int = 100,
+    ) -> str:
+        actual_model = model or getattr(self._model_provider, "embedding_model", None) or "embedding-3"
+
+        task_id = None
+        async with self._submit_lock:
+            if idempotency_key:
+                cur = await self._db.execute(
+                    """SELECT id FROM agent_llm_tasks
+                       WHERE idempotency_key = ?
+                         AND status NOT IN ('failed', 'dead_letter', 'cancelled')
+                       ORDER BY created_at DESC
+                       LIMIT 1""",
+                    (idempotency_key,),
+                )
+                existing = await cur.fetchone()
+                if existing:
+                    return existing["id"]
+
+            in_transaction = False
+            try:
+                await self._db.execute("BEGIN IMMEDIATE")
+                in_transaction = True
+                task_id = await self._mgr.insert_task_row(
+                    caller_domain, pipeline_stage,
+                    task_type="embedding",
+                    idempotency_key=idempotency_key,
+                    max_attempts=max_attempts, priority=priority,
+                    metadata=metadata,
+                )
+                now = datetime.now(timezone.utc).isoformat()
+                request_id = str(uuid.uuid4())
+                await self._db.execute(
+                    """INSERT INTO agent_llm_requests
+                       (id, task_id, provider, model, prompt_template_key, messages_json, input_json,
+                        params_json, expected_output_type, output_schema_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        request_id, task_id, "embedding", actual_model, None,
+                        "[]", json.dumps({"texts": texts, "model": actual_model, "dimensions": dimensions}),
+                        "{}", "embedding", "{}", now,
+                    ),
+                )
+                await self._db.execute("COMMIT")
+                in_transaction = False
+            except Exception:
+                if in_transaction:
+                    await self._db.execute("ROLLBACK")
+                raise
+
+            await self._bus.emit(task_id, "submitted", "embedding task submitted")
+
+        return task_id
+
+    async def submit_rerank(
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        model: str | None = None,
+        top_n: int | None = None,
+        caller_domain: str = "model",
+        pipeline_stage: str = "rerank",
+        idempotency_key: str | None = None,
+        metadata: dict | None = None,
+        max_attempts: int = 2,
+        priority: int = 100,
+    ) -> str:
+        actual_model = model or getattr(self._model_provider, "rerank_model", None) or "rerank"
+
+        task_id = None
+        async with self._submit_lock:
+            if idempotency_key:
+                cur = await self._db.execute(
+                    """SELECT id FROM agent_llm_tasks
+                       WHERE idempotency_key = ?
+                         AND status NOT IN ('failed', 'dead_letter', 'cancelled')
+                       ORDER BY created_at DESC
+                       LIMIT 1""",
+                    (idempotency_key,),
+                )
+                existing = await cur.fetchone()
+                if existing:
+                    return existing["id"]
+
+            in_transaction = False
+            try:
+                await self._db.execute("BEGIN IMMEDIATE")
+                in_transaction = True
+                task_id = await self._mgr.insert_task_row(
+                    caller_domain, pipeline_stage,
+                    task_type="rerank",
+                    idempotency_key=idempotency_key,
+                    max_attempts=max_attempts, priority=priority,
+                    metadata=metadata,
+                )
+                now = datetime.now(timezone.utc).isoformat()
+                request_id = str(uuid.uuid4())
+                await self._db.execute(
+                    """INSERT INTO agent_llm_requests
+                       (id, task_id, provider, model, prompt_template_key, messages_json, input_json,
+                        params_json, expected_output_type, output_schema_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        request_id, task_id, "rerank", actual_model, None,
+                        "[]", json.dumps({"query": query, "documents": documents, "model": actual_model, "top_n": top_n}),
+                        "{}", "rerank", "{}", now,
+                    ),
+                )
+                await self._db.execute("COMMIT")
+                in_transaction = False
+            except Exception:
+                if in_transaction:
+                    await self._db.execute("ROLLBACK")
+                raise
+
+            await self._bus.emit(task_id, "submitted", "rerank task submitted")
 
         return task_id
 

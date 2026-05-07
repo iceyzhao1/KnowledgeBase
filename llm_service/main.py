@@ -66,7 +66,7 @@ def create_app(
                 bypass_proxy=cfg.model_bypass_proxy,
             )
         )
-        svc = LLMService(db=db, provider=provider, config=cfg)
+        svc = LLMService(db=db, provider=provider, config=cfg, model_provider=model_provider)
         model_svc = ModelService(model_provider, db=db)
         app.state.llm_service = svc
         app.state.model_service = model_svc
@@ -98,6 +98,7 @@ def create_app(
                     task_manager=worker_mgr,
                     event_bus=worker_bus,
                     provider=provider,
+                    model_provider=model_provider,
                     templates=worker_tmpl,
                     concurrency=cfg.worker_concurrency,
                 )
