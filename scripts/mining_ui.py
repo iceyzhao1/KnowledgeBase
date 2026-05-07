@@ -1,4 +1,4 @@
-"""NiceGUI UI for the knowledge_mining pipeline.
+"""NiceGUI UI for the knowledge_mining_zym pipeline.
 
 启动方式：
     py -3.10 scripts/mining_ui.py
@@ -76,12 +76,12 @@ from nicegui import app, ui  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
 from psycopg_pool import ConnectionPool  # noqa: E402
 
-from knowledge_mining.mining.jobs.run import run as mining_run  # noqa: E402
-from knowledge_mining.mining.contracts.models import BatchParams  # noqa: E402
-from knowledge_mining.mining.infra.pg_config import MiningDbConfig  # noqa: E402
+from knowledge_mining_zym.mining.jobs.run import run as mining_run  # noqa: E402
+from knowledge_mining_zym.mining.contracts.models import BatchParams  # noqa: E402
+from knowledge_mining_zym.mining.infra.pg_config import MiningDbConfig  # noqa: E402
 
 UPLOADS_ROOT = PROJECT_ROOT / "data" / "uploads"
-DOMAIN_PACKS_ROOT = PROJECT_ROOT / "knowledge_mining" / "domain_packs"
+DOMAIN_PACKS_ROOT = PROJECT_ROOT / "knowledge_mining_zym" / "domain_packs"
 
 UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
 
