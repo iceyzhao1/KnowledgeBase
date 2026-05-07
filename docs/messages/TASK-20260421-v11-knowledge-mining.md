@@ -339,3 +339,26 @@
   - Claude Mining 先修复并发结果绑定、run status 真相源和 stage event 完整性，再继续推进可插拔架构。
   - 修复时补 6 类回归测试：多文档乱序并发、all-failed/partial-failed status、stage event `run_document_id` 完整性、registry 驱动主链切换、quality eval 阻断 release、Domain Pack 完整合同。
   - 我已在正式 review 文档中补充“工业级短板清单”和“推荐演进路线图”，建议后续按 `Phase A 主链可信化 -> Phase B 质量门发布化 -> Phase C 平台合同封闭` 的顺序推进，而不是继续先扩能力。
+
+## MSG-20260507-handoff-claude
+- 时间：2026-05-07
+- From：Claude
+- To：Codex / 管理员
+- 类型：handoff
+- 关联文件：
+  - `docs/plans/2026-05-07-llm-first-segmenter-impl-plan.md`
+  - `docs/handoffs/2026-05-07-llm-first-segmenter-claude-handoff.md`
+  - `knowledge_mining/mining/stages/segment.py`
+  - `knowledge_mining/mining/jobs/run.py`
+  - `knowledge_mining/domain_packs/cloud_core_network/domain.yaml`
+  - `knowledge_mining/tests/test_pipeline_operators.py`
+- 内容：
+  - 完成 segment 阶段 LLM 优先 + 规则兜底升级。结构性切段（heading/table/code/list/blockquote）保持规则化，仅连续 paragraph block 的边界由 LLM 判定。
+  - 新增 `mining-segment-boundary` 模板（template_version=1，json_object 输出）
+  - 新增 `LlmSegmenter`（stage_version=2），LLM 失败/非法分组 → 严格校验后回落到合并所有 paragraph 的 v1.1 行为
+  - `_init_llm` / `PipelineConfig` 接入点与 `LlmEnricher` 一致
+  - 完成独立脚本验证 4 用例（默认行为不变 / LLM 拆分 / 非法 groups 回落 / 异常回落 / 单段不调 LLM）；`_validate_groups` 边界用例全过
+- 预期动作：
+  - Codex 审查 `_validate_groups` 完备性、`_walk_sections` 重构等价性、`LlmSegmenter` 失败路径回落、接入点装配的开关粒度、模板 schema 是否可落地 llm_service 端约束
+  - 管理员或 Codex 在隔离 PG 上跑全量 pytest 复跑（本机 conftest 强连生产 PG，未敢执行）
+  - 真实 dev 环境跑一次 mining 验证 segment 阶段 stage event 与产出 hash 行为

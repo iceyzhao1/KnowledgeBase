@@ -409,6 +409,107 @@ class TestDefaultSegmenter:
         assert all(isinstance(s, RawSegmentData) for s in segments)
 
 
+class TestLlmSegmenter:
+    """LlmSegmenter: LLM-first paragraph boundary with rule-based fallback.
+
+    Structural splitting (heading/table/code/list) stays deterministic;
+    only consecutive paragraph runs go through the LLM grouper.
+    """
+
+    def _multi_para_md(self) -> str:
+        return (
+            "# Doc\n\n"
+            "First paragraph about topic A.\n\n"
+            "Second paragraph also about topic A.\n\n"
+            "Third paragraph switching to topic B.\n"
+        )
+
+    def _build_tree(self, md: str):
+        from knowledge_mining.mining.infra.structure import parse_structure
+        return parse_structure(md)
+
+    def _profile(self) -> DocumentProfile:
+        return DocumentProfile(document_key="doc:/test.md")
+
+    class _FakeClient:
+        """Test double for LlmClient capturing submit/poll behavior."""
+
+        def __init__(self, poll_result):
+            self._poll_result = poll_result
+            self.submitted = []
+
+        def submit_task(self, **kwargs):
+            self.submitted.append(kwargs)
+            return "task-123"
+
+        def poll_result(self, task_id, **kwargs):
+            return self._poll_result
+
+    def test_llm_splits_paragraphs_by_groups(self):
+        """LLM returns valid groups → segments are split accordingly."""
+        from knowledge_mining.mining.stages.segment import LlmSegmenter
+
+        client = self._FakeClient(poll_result=[{"groups": [[0, 1], [2, 2]]}])
+        segmenter = LlmSegmenter(client=client)
+        tree = self._build_tree(self._multi_para_md())
+        segments = segmenter.segment(tree, self._profile())
+
+        # Heading + 2 paragraph segments (LLM split 3 paragraphs into 2 groups)
+        para_segs = [s for s in segments if s.block_type == "paragraph"]
+        assert len(para_segs) == 2, f"expected 2 paragraph segments, got {len(para_segs)}"
+        assert "topic A" in para_segs[0].raw_text
+        assert "Second paragraph" in para_segs[0].raw_text  # merged with first
+        assert "topic B" in para_segs[1].raw_text
+        assert len(client.submitted) == 1
+        assert client.submitted[0]["template_key"] == "mining-segment-boundary"
+
+    def test_invalid_groups_fall_back_to_single_segment(self):
+        """LLM returns groups that don't cover all paragraphs → fall back to merge-all."""
+        from knowledge_mining.mining.stages.segment import LlmSegmenter
+
+        # Returns gap (missing index 2)
+        client = self._FakeClient(poll_result=[{"groups": [[0, 1]]}])
+        segmenter = LlmSegmenter(client=client)
+        tree = self._build_tree(self._multi_para_md())
+        segments = segmenter.segment(tree, self._profile())
+
+        para_segs = [s for s in segments if s.block_type == "paragraph"]
+        assert len(para_segs) == 1, "invalid groups should fall back to single merged segment"
+        assert "topic A" in para_segs[0].raw_text
+        assert "topic B" in para_segs[0].raw_text
+
+    def test_llm_exception_falls_back(self):
+        """submit_task raising → fall back to default merge-all."""
+        from knowledge_mining.mining.stages.segment import LlmSegmenter
+
+        class RaisingClient:
+            def submit_task(self, **kwargs):
+                raise RuntimeError("connection refused")
+
+            def poll_result(self, task_id, **kwargs):
+                raise AssertionError("should not reach poll on submit failure")
+
+        segmenter = LlmSegmenter(client=RaisingClient())
+        tree = self._build_tree(self._multi_para_md())
+        segments = segmenter.segment(tree, self._profile())
+
+        para_segs = [s for s in segments if s.block_type == "paragraph"]
+        assert len(para_segs) == 1
+
+    def test_single_paragraph_skips_llm(self):
+        """Run with only one paragraph block should not even call the LLM."""
+        from knowledge_mining.mining.stages.segment import LlmSegmenter
+
+        client = self._FakeClient(poll_result=[{"groups": [[0, 0]]}])
+        segmenter = LlmSegmenter(client=client)
+        tree = self._build_tree("# Title\n\nOnly one paragraph here.\n")
+        segments = segmenter.segment(tree, self._profile())
+
+        para_segs = [s for s in segments if s.block_type == "paragraph"]
+        assert len(para_segs) == 1
+        assert client.submitted == [], "single-paragraph runs should not invoke LLM"
+
+
 class TestDefaultRelationBuilder:
     """DefaultRelationBuilder should wrap build_relations."""
 

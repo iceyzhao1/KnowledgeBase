@@ -253,6 +253,16 @@ def _init_llm(
     except (ImportError, Exception):
         pass
 
+    # v1.2: Try to create LlmSegmenter (LLM-first paragraph boundary detection)
+    try:
+        from knowledge_mining.mining.stages.segment import LlmSegmenter
+        result["segmenter"] = LlmSegmenter(
+            base_url=llm_base_url,
+            bypass_proxy=bypass_proxy,
+        )
+    except (ImportError, Exception):
+        pass
+
     # v1.2: Create DiscourseRelationBuilder
     try:
         from knowledge_mining.mining.stages.relations import DiscourseRelationBuilder
@@ -360,7 +370,7 @@ def _run_pipeline(
 
     pipeline_config = PipelineConfig(
         parser_factory=create_parser,
-        segmenter=DefaultSegmenter(),
+        segmenter=llm.get("segmenter") or DefaultSegmenter(),
         enricher=llm.get("enricher") or enricher,
         relation_builder=DefaultRelationBuilder(),
         question_generator=llm.get("question_generator"),

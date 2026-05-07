@@ -217,6 +217,28 @@ llm_templates:
     expected_output_type: json_array
     output_schema_json: '{"type":"array","items":{"type":"object","properties":{"source":{"type":"integer"},"target":{"type":"integer"},"relation":{"type":"string"},"confidence":{"type":"number","minimum":0.0,"maximum":1.0}},"required":["source","target","relation","confidence"],"additionalProperties":false}}'
 
+  - template_key: mining-segment-boundary
+    template_version: "1"
+    purpose: "判定连续 paragraph 块的语义边界，决定如何分组"
+    system_prompt: "你是通信网络技术文档的段落边界分析助手。给定同一章节内的连续段落，判断哪些段落属于同一主题应合并为一个 segment，哪些应该独立成段。"
+    user_prompt_template: >
+      章节标题：$section_title
+
+      以下是同一章节内的连续 paragraph 段落（按文档顺序排列）：
+      $paragraphs
+
+      请按主题连贯性把这些段落分组：
+      - 主题相同、上下文紧密承接的相邻段落应合并为同一组
+      - 主题切换或讨论对象明显变化时应在该位置切开
+      - 每个段落必须且只能属于一个组
+      - 组内必须是连续的段落索引
+      - 所有索引 0 到 N-1 必须被完整覆盖
+
+      输出 JSON 对象，groups 字段为二维数组，每个内层数组是 [start_index, end_index]（闭区间）。
+      示例：3 个段落分两组可输出 {"groups": [[0,1], [2,2]]}。
+    expected_output_type: json_object
+    output_schema_json: '{"type":"object","properties":{"groups":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}}},"required":["groups"],"additionalProperties":false}'
+
   - template_key: mining-contextual-retrieval
     template_version: "2"
     purpose: "为每个段落生成上下文描述，增强检索效果"
