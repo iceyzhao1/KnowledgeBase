@@ -200,6 +200,11 @@ async def task_detail(request: Request, task_id: str):
             try:
                 parsed = json.loads(result["parsed_output_json"])
                 rerank_results = parsed.get("results", [])
+                # Normalize document: internal network returns {"text": "...", "multi_modal": null}
+                for item in rerank_results:
+                    doc = item.get("document")
+                    if isinstance(doc, dict):
+                        item["document"] = doc.get("text", "")
             except (json.JSONDecodeError, TypeError):
                 pass
 
