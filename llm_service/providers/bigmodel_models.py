@@ -16,7 +16,7 @@ class BigModelProvider:
         embedding_model: str = "embedding-3",
         rerank_api_key: str = "",
         rerank_base_url: str = "https://open.bigmodel.cn/api/paas/v4",
-        rerank_model: str = "rerank",
+        rerank_model: str = "",
         timeout: int = 60,
         bypass_proxy: bool = False,
     ) -> None:
@@ -108,6 +108,7 @@ class BigModelProvider:
             "query": query,
             "documents": documents,
             "top_n": top_n or len(documents),
+            "return_documents": True,
         }
         data = await self._post(
             self._rerank_base_url,
@@ -116,7 +117,17 @@ class BigModelProvider:
             "/rerank",
             payload,
         )
+        results = data.get("results", [])
+        # rerank-pro omits "index" — reconstruct from document content
+        for item in results:
+            if "index" not in item:
+                doc_text = item.get("document", "")
+                try:
+                    item["index"] = documents.index(doc_text)
+                except ValueError:
+                    item["index"] = -1
         return {
             "model": payload["model"],
-            "results": data.get("results", []),
+            "results": results,
+            "usage": data.get("usage"),
         }

@@ -298,7 +298,7 @@ class LLMService:
         max_attempts: int = 2,
         priority: int = 100,
     ) -> str:
-        actual_model = model or getattr(self._model_provider, "rerank_model", None) or "rerank"
+        actual_model = model or getattr(self._model_provider, "_rerank_model", None) or "rerank-pro"
 
         task_id = None
         async with self._submit_lock:

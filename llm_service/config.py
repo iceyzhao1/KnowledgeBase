@@ -21,7 +21,7 @@ class LLMServiceConfig(BaseSettings):
     embedding_dimensions: int = 1024
     rerank_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     rerank_api_key: str = ""
-    rerank_model: str = "rerank"
+    rerank_model: str = ""
     model_timeout: int = 60
     model_bypass_proxy: bool = False
 
