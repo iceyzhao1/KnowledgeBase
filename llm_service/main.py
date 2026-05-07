@@ -64,6 +64,7 @@ def create_app(
                 rerank_model=cfg.rerank_model,
                 timeout=cfg.model_timeout,
                 bypass_proxy=cfg.model_bypass_proxy,
+                extra_headers=cfg.model_extra_headers,
             )
         )
         svc = LLMService(db=db, provider=provider, config=cfg, model_provider=model_provider)

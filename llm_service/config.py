@@ -24,6 +24,7 @@ class LLMServiceConfig(BaseSettings):
     rerank_model: str = ""
     model_timeout: int = 60
     model_bypass_proxy: bool = False
+    model_extra_headers: dict = Field(default_factory=dict)
 
     worker_concurrency: int = 4
     default_max_attempts: int = 3

@@ -19,6 +19,7 @@ class BigModelProvider:
         rerank_model: str = "",
         timeout: int = 60,
         bypass_proxy: bool = False,
+        extra_headers: dict | None = None,
     ) -> None:
         self._embedding_api_key = embedding_api_key
         self._embedding_base_url = embedding_base_url.rstrip("/")
@@ -26,6 +27,7 @@ class BigModelProvider:
         self._rerank_api_key = rerank_api_key
         self._rerank_base_url = rerank_base_url.rstrip("/")
         self._rerank_model = rerank_model
+        self._extra_headers = extra_headers or {}
         self._timeout = timeout
         transport = httpx.AsyncHTTPTransport() if bypass_proxy else None
         self._client = httpx.AsyncClient(transport=transport, timeout=timeout)
@@ -42,6 +44,7 @@ class BigModelProvider:
         return {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            **self._extra_headers,
         }
 
     async def _post(
