@@ -8,9 +8,14 @@
     1. 上传若干文档（.md/.txt/.html/.pdf/.docx/.chm/.hdx）
        - .chm/.hdx 会在 ingest 阶段自动解压并转成 markdown
     2. 填写 batch 参数（产品、标签、文档类型）
-    3. 可选启用 LLM / Embedding
-    4. 点击"开始挖掘" → 后端线程跑 run()，前端轮询 PostgreSQL (kb_db) 实时显示阶段
-    5. 完成后每个阶段都展示：统计图表 + 全量数据表格
+    3. 点击"开始挖掘" → 后端线程跑 run()，前端轮询 PostgreSQL (kb_db) 实时显示阶段
+    4. 完成后每个阶段都展示：统计图表 + 全量数据表格
+
+LLM / Embedding 由后端 .env 配置，不通过前端表单暴露：
+    LLM_SERVICE_URL                — 本地 llm_service 入口 (默认 http://localhost:8900)
+    MINING_LLM_BYPASS_PROXY        — 是否对 LLM URL 跳过系统代理 (默认 true)
+    MINING_LLM_ENABLED             — 总开关 (默认 true；置 false 全部走规则)
+    EMBEDDING_API_KEY              — embedding API key；缺省则跳过 embedding 阶段
 """
 from __future__ import annotations
 
@@ -35,6 +40,34 @@ os.environ["no_proxy"] = _no_proxy
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from dotenv import load_dotenv  # noqa: E402
+    load_dotenv(PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_mining_llm_settings() -> tuple[str | None, bool, str | None]:
+    """Read LLM / embedding settings from environment.
+
+    Returns (llm_base_url, llm_bypass_proxy, embedding_api_key).
+    llm_base_url is None when MINING_LLM_ENABLED=false, disabling the entire LLM path.
+    """
+    if not _env_bool("MINING_LLM_ENABLED", default=True):
+        llm_url: str | None = None
+    else:
+        llm_url = (os.environ.get("LLM_SERVICE_URL") or "http://localhost:8900").strip() or None
+    bypass = _env_bool("MINING_LLM_BYPASS_PROXY", default=True)
+    emb_key = (os.environ.get("EMBEDDING_API_KEY") or "").strip() or None
+    return llm_url, bypass, emb_key
 
 import pandas as pd  # noqa: E402
 import gradio as gr  # noqa: E402
@@ -1508,9 +1541,12 @@ def _ingest_files(files, target: Path) -> list[Path]:
 
 
 def cb_start_mining(
-    state, files, product, tags, doc_type, domain_pack, use_llm, llm_url, embedding_key,
+    state, files, product, tags, doc_type, domain_pack,
 ):
-    """Click handler for the Start button. Spawns worker, switches to RUNNING."""
+    """Click handler for the Start button. Spawns worker, switches to RUNNING.
+
+    LLM / embedding settings are sourced from .env (see _resolve_mining_llm_settings).
+    """
     if not files:
         gr.Warning("请先上传文件")
         # Return current outputs unchanged (basically gr.skip everywhere except maybe state)
@@ -1542,8 +1578,7 @@ def cb_start_mining(
     tags_v = (tags or "").strip()
     doc_type_v = (doc_type or "").strip()
     domain_pack_v = (domain_pack or "cloud_core_network").strip() or "cloud_core_network"
-    llm_url_v = (llm_url or "").strip()
-    embedding_key_v = (embedding_key or "").strip()
+    llm_base_url, llm_bypass_proxy, embedding_api_key = _resolve_mining_llm_settings()
 
     def worker():
         try:
@@ -1556,9 +1591,9 @@ def cb_start_mining(
                     tags=[t.strip() for t in tags_v.split(",") if t.strip()],
                 ),
                 domain_pack=domain_pack_v,
-                llm_base_url=(llm_url_v if (use_llm and llm_url_v) else None),
-                llm_bypass_proxy=True,
-                embedding_api_key=(embedding_key_v or None),
+                llm_base_url=llm_base_url,
+                llm_bypass_proxy=llm_bypass_proxy,
+                embedding_api_key=embedding_api_key,
             )
         except Exception:
             traceback.print_exc()
@@ -1916,14 +1951,15 @@ with gr.Blocks(title="Knowledge Mining Studio") as demo:
                     choices=_pack_choices,
                     value=_pack_default,
                 )
-                with gr.Accordion("⚙️ LLM / Embedding（可选）", open=False):
-                    use_llm = gr.Checkbox(label="启用 LLM Service", value=False)
-                    llm_url = gr.Textbox(label="LLM URL", value="http://localhost:8900")
-                    embedding_key = gr.Textbox(
-                        label="Embedding API Key",
-                        type="password",
-                        info="留空则跳过 embedding",
-                    )
+                _llm_cfg_url, _, _llm_cfg_emb = _resolve_mining_llm_settings()
+                _llm_status_html = (
+                    f"<div style='font-size:12px;color:#666;'>"
+                    f"LLM: <code>{_llm_cfg_url or '未配置（走规则）'}</code>"
+                    f" · Embedding: <code>{'已配置' if _llm_cfg_emb else '未配置（跳过）'}</code>"
+                    f"<br/>修改 <code>.env</code> 后重启本服务生效。"
+                    f"</div>"
+                )
+                gr.HTML(_llm_status_html)
             with gr.Column(scale=2):
                 gr.Markdown("### ✅ 准备开始")
                 gr.Markdown(
@@ -1995,7 +2031,7 @@ with gr.Blocks(title="Knowledge Mining Studio") as demo:
 
     start_btn.click(
         cb_start_mining,
-        inputs=[state, files, product, tags, doc_type, domain_pack, use_llm, llm_url, embedding_key],
+        inputs=[state, files, product, tags, doc_type, domain_pack],
         outputs=common_outputs,
     )
     timer.tick(cb_poll_tick, inputs=[state], outputs=common_outputs)
