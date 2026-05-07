@@ -49,9 +49,7 @@ CREATE TABLE IF NOT EXISTS agent_llm_requests (
     messages_json            TEXT NOT NULL DEFAULT '[]',
     input_json               TEXT NOT NULL DEFAULT '{}',
     params_json              TEXT NOT NULL DEFAULT '{}',
-    expected_output_type     TEXT NOT NULL CHECK (
-        expected_output_type IN ('json_object', 'json_array', 'text')
-    ),
+    expected_output_type     TEXT NOT NULL,
     output_schema_json       TEXT NOT NULL DEFAULT '{}',
     created_at               TEXT NOT NULL,
     metadata_json            TEXT NOT NULL DEFAULT '{}'
