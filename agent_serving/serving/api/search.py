@@ -26,7 +26,6 @@ from agent_serving.serving.schemas.models import (
 )
 from agent_serving.serving.repositories.asset_repo import AssetRepository
 from agent_serving.serving.retrieval.bm25_retriever import FTS5BM25Retriever
-from agent_serving.serving.retrieval.entity_exact_retriever import EntityExactRetriever
 from agent_serving.serving.retrieval.dense_vector_retriever import DenseVectorRetriever
 from agent_serving.serving.retrieval.graph_expander import GraphExpander
 from agent_serving.serving.application.assembler import ContextAssembler
@@ -56,11 +55,9 @@ def _get_orchestrator(request: Request) -> RetrievalOrchestrator:
     pool = request.app.state.pool
     embedding_dimensions = getattr(request.app.state, "embedding_dimensions", 1024)
     bm25 = FTS5BM25Retriever(pool)
-    entity = EntityExactRetriever(pool)
     dense = DenseVectorRetriever(pool, embedding_dimensions=embedding_dimensions)
     return RetrievalOrchestrator({
         "lexical_bm25": bm25,
-        "entity_exact": entity,
         "dense_vector": dense,
     })
 
@@ -88,7 +85,7 @@ def _get_rerank_pipeline(request: Request) -> RerankPipeline:
             from agent_serving.serving.rerank.service_reranker import LLMServiceReranker
             model_reranker = LLMServiceReranker(
                 llm_client=llm_client,
-                model=os.environ.get("RERANK_MODEL", "rerank"),
+                model=os.environ.get("RERANK_MODEL", "rerank-pro"),
             )
         except Exception:
             logger.warning("Failed to create LLMServiceReranker", exc_info=True)
@@ -103,7 +100,7 @@ def _get_rerank_pipeline(request: Request) -> RerankPipeline:
                     base_url=os.environ.get(
                         "RERANK_BASE_URL", "https://open.bigmodel.cn/api/paas/v4",
                     ),
-                    model=os.environ.get("RERANK_MODEL", "rerank"),
+                    model=os.environ.get("RERANK_MODEL", "rerank-pro"),
                 )
             except Exception:
                 logger.warning("Failed to create ZhipuReranker", exc_info=True)

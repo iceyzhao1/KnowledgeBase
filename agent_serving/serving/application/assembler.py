@@ -45,6 +45,23 @@ from agent_serving.serving.evidence.role_classifier import EvidenceRoleClassifie
 
 logger = logging.getLogger(__name__)
 
+# RST relation type → evidence role mapping for expansion
+_RST_ROLE_MAP: dict[str, str] = {
+    "elaborates": "support",
+    "conditions": "support",
+    "causes": "support",
+    "results_in": "support",
+    "backgrounds": "background",
+    "enables": "support",
+    "parallels": "context",
+    "contrasts_with": "contrast",
+    "previous": "context",
+    "next": "context",
+    "same_section": "context",
+    "same_parent_section": "context",
+    "section_header_of": "context",
+}
+
 
 class ContextAssembler:
     """Assembles ContextPack from retrieval + expansion results."""
@@ -315,6 +332,8 @@ class ContextAssembler:
     ) -> list[ContextItem]:
         items = []
         for seg in expanded:
+            relation_type = seg.get("expansion_relation_type", "")
+            evidence_role = _RST_ROLE_MAP.get(relation_type, "background")
             items.append(ContextItem(
                 id=str(seg["id"]),
                 kind=KIND_RAW_SEGMENT,
@@ -325,8 +344,8 @@ class ContextAssembler:
                 block_type=seg.get("block_type", "unknown"),
                 semantic_role=seg.get("semantic_role", "unknown"),
                 source_id=str(seg.get("document_id", "")),
-                relation_to_seed=seg.get("expansion_relation_type", ""),
-                evidence_role="background",
+                relation_to_seed=relation_type,
+                evidence_role=evidence_role,
             ))
         return items
 

@@ -34,6 +34,11 @@ class ServingDbConfig(BaseSettings):
             f"sslmode={self.pg_sslmode} gssencmode={self.pg_gssencmode}"
         )
 
+    @staticmethod
+    async def _configure_connection(conn) -> None:
+        """Set autocommit on each connection pulled from the pool."""
+        await conn.set_autocommit(True)
+
     def create_pool(self) -> AsyncConnectionPool:
         return AsyncConnectionPool(
             self.conninfo,
@@ -41,5 +46,5 @@ class ServingDbConfig(BaseSettings):
             max_size=self.pg_pool_max,
             open=False,
             kwargs={"row_factory": dict_row},
-            autocommit=True,
+            configure=self._configure_connection,
         )

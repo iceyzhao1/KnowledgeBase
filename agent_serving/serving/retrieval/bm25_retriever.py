@@ -2,6 +2,10 @@
 
 Post-filtering (role/block_type preference, truncation) is handled
 by the Reranker stage, not the retriever.
+
+Query tokenization uses jieba (same as Mining's tokenize_for_search)
+to stay consistent with the search_vector index built from jieba-tokenized
+search_text.
 """
 from __future__ import annotations
 
@@ -16,6 +20,16 @@ from agent_serving.serving.schemas.models import RetrievalCandidate, RetrievalQu
 from agent_serving.serving.retrieval.retriever import Retriever
 
 logger = logging.getLogger(__name__)
+
+
+def _jieba_tokenize(text: str) -> list[str]:
+    """Tokenize text with jieba, matching Mining's tokenize_for_search()."""
+    try:
+        import jieba
+        return list(jieba.cut(text))
+    except ImportError:
+        # Fallback: split by whitespace
+        return text.split()
 
 
 class FTS5BM25Retriever(Retriever):
@@ -47,9 +61,21 @@ class FTS5BM25Retriever(Retriever):
         if not search_terms:
             return []
 
-        recall_limit = top_k * 5
-        query_text = " ".join(search_terms)
+        # Tokenize with jieba (consistent with Mining's tokenize_for_search)
+        # so the query tokens match the tsvector built from jieba-tokenized search_text
+        raw_query = " ".join(search_terms)
+        tokens = _jieba_tokenize(raw_query)
+        # Filter empty/whitespace tokens
+        tokens = [t.strip() for t in tokens if t.strip()]
+        if not tokens:
+            return []
 
+        # Build tsquery: each token as a term, OR-connected for recall
+        # Use plainto_tsquery with space-joined tokens (jieba already split them)
+        query_text = " ".join(tokens)
+        logger.debug("BM25 query: raw=%r → jieba tokens=%s", raw_query, tokens)
+
+        recall_limit = top_k * 5
         placeholders = ",".join("%s" for _ in snapshot_ids)
 
         # Scope/filter pushdown from query.scope (parameterized to prevent SQL injection)
@@ -88,6 +114,18 @@ class FTS5BM25Retriever(Retriever):
             logger.warning("tsvector query failed, falling back to trigram similarity", exc_info=True)
             return await self._fallback_trigram(query, snapshot_ids, top_k)
 
+        # If scope filter eliminated all results, retry without scope
+        if not rows and scope_filter:
+            logger.info("Scope filter eliminated all BM25 results, retrying without scope")
+            no_scope_sql = sql.replace(scope_filter, "")
+            no_scope_params = [query_text, query_text, *snapshot_ids, recall_limit]
+            try:
+                async with self._pool.connection() as conn:
+                    cursor = await conn.execute(no_scope_sql, no_scope_params)
+                    rows = await cursor.fetchall()
+            except Exception:
+                pass
+
         if not rows:
             return await self._fallback_trigram(query, snapshot_ids, top_k)
 
@@ -109,7 +147,11 @@ class FTS5BM25Retriever(Retriever):
         if not search_terms or not snapshot_ids:
             return []
 
-        query_text = " ".join(search_terms)
+        # Use jieba-tokenized text for trigram matching too
+        raw_query = " ".join(search_terms)
+        tokens = _jieba_tokenize(raw_query)
+        query_text = " ".join(t.strip() for t in tokens if t.strip()) or raw_query
+
         placeholders = ",".join("%s" for _ in snapshot_ids)
         recall_limit = top_k * 5
 
@@ -147,6 +189,18 @@ class FTS5BM25Retriever(Retriever):
             logger.warning("Trigram query also failed", exc_info=True)
             return await self._fallback_like(query, snapshot_ids, top_k)
 
+        # If scope filter eliminated all results, retry without scope
+        if not rows and scope_filter:
+            logger.info("Scope filter eliminated all trigram results, retrying without scope")
+            no_scope_sql = sql.replace(scope_filter, "")
+            no_scope_params = [query_text, query_text, *snapshot_ids, recall_limit]
+            try:
+                async with self._pool.connection() as conn:
+                    cursor = await conn.execute(no_scope_sql, no_scope_params)
+                    rows = await cursor.fetchall()
+            except Exception:
+                pass
+
         candidates = []
         for row in rows:
             r = dict(row)
@@ -170,11 +224,16 @@ class FTS5BM25Retriever(Retriever):
         if not search_terms or not snapshot_ids:
             return []
 
+        # Use jieba tokens for LIKE matching (individual tokens work better)
+        raw_query = " ".join(search_terms)
+        tokens = _jieba_tokenize(raw_query)
+        like_terms = [t.strip() for t in tokens if t.strip()] or search_terms
+
         placeholders = ",".join("%s" for _ in snapshot_ids)
         like_clauses = " OR ".join(
-            "ru.text LIKE %s" for _ in search_terms
+            "ru.text LIKE %s" for _ in like_terms
         )
-        params: list[Any] = [f"%{k}%" for k in search_terms]
+        params: list[Any] = [f"%{k}%" for k in like_terms]
         params.extend(snapshot_ids)
 
         recall_limit = top_k * 5
@@ -213,9 +272,9 @@ class FTS5BM25Retriever(Retriever):
             r = dict(row)
             text = (r.get("text", "") or "").lower()
             hit_count = sum(
-                1 for kw in search_terms if kw.lower() in text
+                1 for kw in like_terms if kw.lower() in text
             )
-            score = hit_count / max(len(search_terms), 1)
+            score = hit_count / max(len(like_terms), 1)
             candidates.append(self._row_to_candidate(r, score, source="like_fallback"))
 
         return candidates
