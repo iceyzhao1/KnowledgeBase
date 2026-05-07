@@ -41,9 +41,27 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+def _find_dotenv_path() -> Path | None:
+    """Locate .env. Looks at PROJECT_ROOT first, then walks up (handles git worktree)."""
+    candidate = PROJECT_ROOT / ".env"
+    if candidate.exists():
+        return candidate
+    cur = PROJECT_ROOT
+    for _ in range(6):
+        cur = cur.parent
+        if cur == cur.parent:
+            break
+        c = cur / ".env"
+        if c.exists():
+            return c
+    return None
+
+
 try:
     from dotenv import load_dotenv  # noqa: E402
-    load_dotenv(PROJECT_ROOT / ".env")
+    _dotenv_path = _find_dotenv_path()
+    if _dotenv_path is not None:
+        load_dotenv(_dotenv_path)
 except ImportError:
     pass
 
