@@ -134,7 +134,8 @@ class BigModelProvider:
             if "index" in item:
                 used_indices.add(item["index"])
                 continue
-            doc_text = item.get("document", "")
+            _doc = item.get("document")
+            doc_text = _doc.get("text", "") if isinstance(_doc, dict) else str(_doc or "")
             candidates = doc_to_idx.get(doc_text, [])
             # Pick first unused index to handle duplicate documents
             for ci in candidates:

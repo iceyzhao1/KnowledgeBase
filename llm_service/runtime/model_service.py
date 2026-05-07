@@ -18,6 +18,15 @@ from llm_service.providers.model_base import ModelProviderProtocol
 logger = logging.getLogger(__name__)
 
 
+def _extract_doc_text(doc) -> str:
+    """Normalize document field: str | dict | None → str."""
+    if doc is None:
+        return ""
+    if isinstance(doc, dict):
+        return doc.get("text", "")
+    return str(doc)
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -180,7 +189,7 @@ class ModelService:
             lines = [f"Query: {body.query}"]
             for r in raw.get("results", []):
                 score = r.get("relevance_score", 0)
-                doc = r.get("document", "")[:100]
+                doc = _extract_doc_text(r.get("document"))[:100]
                 lines.append(f"  [{r.get('index', '?')}] score={score:.4f}: {doc}")
             text_output = "\n".join(lines)
 
@@ -196,7 +205,7 @@ class ModelService:
                     RerankResult(
                         index=item.get("index") if item.get("index") is not None else idx,
                         relevance_score=float(item.get("relevance_score", 0.0)),
-                        document=item.get("document"),
+                        document=_extract_doc_text(item.get("document")),
                     )
                     for idx, item in enumerate(raw.get("results", []))
                 ],
