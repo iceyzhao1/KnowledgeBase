@@ -584,6 +584,16 @@ if result["result"]["parse_status"] == "schema_invalid":
 | `LLM_SERVICE_RETRY_BACKOFF_MAX` | `60.0` | 退避上限（秒） |
 | `LLM_SERVICE_LEASE_DURATION` | `300` | Worker 租约（秒） |
 | `LLM_SERVICE_EXECUTE_TIMEOUT` | `60` | 同步执行超时（秒） |
+| `LLM_SERVICE_EMBEDDING_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Embedding API 地址 |
+| `LLM_SERVICE_EMBEDDING_API_KEY` | — | Embedding API Key |
+| `LLM_SERVICE_EMBEDDING_MODEL` | `embedding-3` | Embedding 模型名 |
+| `LLM_SERVICE_EMBEDDING_DIMENSIONS` | `1024` | Embedding 向量维度 |
+| `LLM_SERVICE_RERANK_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Rerank API 地址 |
+| `LLM_SERVICE_RERANK_API_KEY` | — | Rerank API Key |
+| `LLM_SERVICE_RERANK_MODEL` | — | Rerank 模型名 |
+| `LLM_SERVICE_MODEL_TIMEOUT` | `60` | 模型请求超时（秒） |
+| `LLM_SERVICE_MODEL_BYPASS_PROXY` | `false` | 模型请求绕过系统代理 |
+| `LLM_SERVICE_MODEL_EXTRA_HEADERS` | `{}` | 内网网关认证 header（JSON dict，仅 embedding/rerank） |
 
 ## 9. 快速启动
 
@@ -606,6 +616,75 @@ curl http://localhost:8900/health
 # 6. 测试
 pytest llm_service/tests/ -v
 ```
+
+## 9.1 Postman 快速验证
+
+服务启动后，可用 Postman 直接测试 Embedding 和 Rerank 接口。
+
+**Embedding 测试：**
+
+```
+POST http://localhost:8900/api/v1/models/embeddings
+Content-Type: application/json
+
+{
+  "input": ["什么是SBA？", "云计算基础知识"],
+  "model": "embedding-3",
+  "dimensions": 1024
+}
+```
+
+成功返回：
+```json
+{
+  "model": "embedding-3",
+  "data": [
+    {"index": 0, "embedding": [0.012, -0.034, "..."]},
+    {"index": 1, "embedding": [0.056, 0.078, "..."]}
+  ],
+  "usage": {"prompt_tokens": 8, "total_tokens": 8}
+}
+```
+
+**Rerank 测试：**
+
+```
+POST http://localhost:8900/api/v1/models/rerank
+Content-Type: application/json
+
+{
+  "query": "什么是SBA？",
+  "documents": [
+    "SBA是一种云计算架构模式",
+    "Kubernetes是容器编排工具",
+    "SBA全称是Service Based Architecture"
+  ],
+  "top_n": 3
+}
+```
+
+成功返回：
+```json
+{
+  "model": "rerank",
+  "results": [
+    {"index": 2, "relevance_score": 0.95, "document": "SBA全称是Service Based Architecture"},
+    {"index": 0, "relevance_score": 0.82, "document": "SBA是一种云计算架构模式"},
+    {"index": 1, "relevance_score": 0.21, "document": "Kubernetes是容器编排工具"}
+  ]
+}
+```
+
+**内网部署验证步骤：**
+
+1. 外网模式：`.env` 不配 `MODEL_EXTRA_HEADERS`，确认 Embedding/Rerank 接口正常
+2. 切内网：修改 `EMBEDDING_BASE_URL` / `RERANK_BASE_URL` 为内网地址，配置认证 header：
+   ```
+   LLM_SERVICE_EMBEDDING_BASE_URL=https://internal-gateway/api/paas/v4
+   LLM_SERVICE_RERANK_BASE_URL=https://internal-gateway/api/paas/v4
+   LLM_SERVICE_MODEL_EXTRA_HEADERS={"X-HW-ID": "your-hw-id", "X-HW-APPKEY": "your-hw-appkey"}
+   ```
+3. 重启服务，发送相同请求验证
 
 ## 10. 当前状态
 
