@@ -20,8 +20,7 @@ class OpenAICompatibleProvider:
         self._model = model
         self._extra_headers = headers or {}
         self._timeout = timeout
-        transport = httpx.AsyncHTTPTransport() if bypass_proxy else None
-        self._client = httpx.AsyncClient(transport=transport, timeout=timeout)
+        self._client = httpx.AsyncClient(timeout=timeout, trust_env=not bypass_proxy)
 
     async def close(self) -> None:
         await self._client.aclose()
