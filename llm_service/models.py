@@ -65,7 +65,7 @@ class RerankTaskRequest(BaseModel):
 
 
 class EmbeddingRequest(BaseModel):
-    input: list[str] | str
+    input: list[str] | str = Field(..., max_length=100)
     model: str | None = None
     dimensions: int | None = Field(default=None, ge=1)
 
@@ -99,7 +99,7 @@ class EmbeddingResponse(BaseModel):
 
 class RerankRequest(BaseModel):
     query: str = Field(..., min_length=1)
-    documents: list[str]
+    documents: list[str] = Field(..., max_length=200)
     model: str | None = None
     top_n: int | None = Field(default=None, ge=1)
 

@@ -52,8 +52,13 @@ class ExpansionConfig(BaseModel):
     enable_relation_expansion: bool = True
     max_relation_depth: int = 2
     relation_types: list[str] = Field(default_factory=lambda: [
+        # Structural relations
         "previous", "next", "same_section",
         "same_parent_section", "section_header_of",
+        # RST / discourse semantic relations
+        "elaborates", "conditions", "causes",
+        "results_in", "contrasts_with",
+        "backgrounds", "enables", "parallels",
     ])
 
 
@@ -242,8 +247,13 @@ class AssemblyConfig(BaseModel):
     max_expanded: int = 20
     max_relation_depth: int = 2
     relation_types: list[str] = Field(default_factory=lambda: [
+        # Structural relations
         "previous", "next", "same_section",
         "same_parent_section", "section_header_of",
+        # RST / discourse semantic relations
+        "elaborates", "conditions", "causes",
+        "results_in", "contrasts_with",
+        "backgrounds", "enables", "parallels",
     ])
 
 

@@ -87,6 +87,18 @@ class DenseVectorRetriever(Retriever):
             logger.warning("pgvector query failed", exc_info=True)
             return []
 
+        # If scope filter eliminated all results, retry without scope
+        if not rows and scope_filter:
+            logger.info("Scope filter eliminated all dense results, retrying without scope")
+            no_scope_sql = sql.replace(scope_filter, "")
+            no_scope_params = [vec_literal, *snapshot_ids, top_k]
+            try:
+                async with self._pool.connection() as conn:
+                    cursor = await conn.execute(no_scope_sql, no_scope_params)
+                    rows = await cursor.fetchall()
+            except Exception:
+                pass
+
         candidates = []
         for row in rows:
             r = dict(row)

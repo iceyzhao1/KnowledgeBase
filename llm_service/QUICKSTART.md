@@ -54,20 +54,20 @@ pip install -e ".[llm]"
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=你的API密钥
-LLM_SERVICE_PROVIDER_BASE_URL=接口地址
+LLM_SERVICE_PROVIDER_BASE_URL=完整接口地址（含路径）
 LLM_SERVICE_PROVIDER_MODEL=模型名称
 ```
 
 如果要让 Mining / Serving 走共享 Embedding / Rerank 接口，再补这组配置：
 
 ```
-LLM_SERVICE_EMBEDDING_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+LLM_SERVICE_EMBEDDING_BASE_URL=https://open.bigmodel.cn/api/paas/v4/embeddings
 LLM_SERVICE_EMBEDDING_API_KEY=你的Embedding密钥
 LLM_SERVICE_EMBEDDING_MODEL=embedding-3
-LLM_SERVICE_EMBEDDING_DIMENSIONS=2048
-LLM_SERVICE_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+LLM_SERVICE_EMBEDDING_DIMENSIONS=1024
+LLM_SERVICE_RERANK_BASE_URL=https://open.bigmodel.cn/api/paas/v4/rerank
 LLM_SERVICE_RERANK_API_KEY=你的Rerank密钥
-LLM_SERVICE_RERANK_MODEL=rerank
+LLM_SERVICE_RERANK_MODEL=rerank-pro
 ```
 
 当前项目里，如果你用的是同一个 BigModel key，可以直接把
@@ -75,11 +75,11 @@ LLM_SERVICE_RERANK_MODEL=rerank
 
 ### 各平台配置示例
 
-#### DeepSeek（默认，不用改 BASE_URL）
+#### DeepSeek（默认）
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=sk-xxxxxxxxxxxx
-LLM_SERVICE_PROVIDER_BASE_URL=https://api.deepseek.com
+LLM_SERVICE_PROVIDER_BASE_URL=https://api.deepseek.com/chat/completions
 LLM_SERVICE_PROVIDER_MODEL=deepseek-chat
 ```
 
@@ -87,7 +87,7 @@ LLM_SERVICE_PROVIDER_MODEL=deepseek-chat
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=xxxxxxxxxxxx.xxxxxx
-LLM_SERVICE_PROVIDER_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+LLM_SERVICE_PROVIDER_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
 LLM_SERVICE_PROVIDER_MODEL=glm-4-flash
 ```
 
@@ -95,7 +95,7 @@ LLM_SERVICE_PROVIDER_MODEL=glm-4-flash
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=sk-xxxxxxxxxxxx
-LLM_SERVICE_PROVIDER_BASE_URL=https://api.openai.com/v1
+LLM_SERVICE_PROVIDER_BASE_URL=https://api.openai.com/v1/chat/completions
 LLM_SERVICE_PROVIDER_MODEL=gpt-4o-mini
 ```
 
@@ -103,7 +103,7 @@ LLM_SERVICE_PROVIDER_MODEL=gpt-4o-mini
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=sk-xxxxxxxxxxxx
-LLM_SERVICE_PROVIDER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_SERVICE_PROVIDER_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
 LLM_SERVICE_PROVIDER_MODEL=qwen-plus
 ```
 
@@ -111,7 +111,7 @@ LLM_SERVICE_PROVIDER_MODEL=qwen-plus
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=sk-xxxxxxxxxxxx
-LLM_SERVICE_PROVIDER_BASE_URL=https://api.siliconflow.cn/v1
+LLM_SERVICE_PROVIDER_BASE_URL=https://api.siliconflow.cn/v1/chat/completions
 LLM_SERVICE_PROVIDER_MODEL=Qwen/Qwen2.5-7B-Instruct
 ```
 
@@ -119,7 +119,7 @@ LLM_SERVICE_PROVIDER_MODEL=Qwen/Qwen2.5-7B-Instruct
 
 ```
 LLM_SERVICE_PROVIDER_API_KEY=ollama
-LLM_SERVICE_PROVIDER_BASE_URL=http://localhost:11434/v1
+LLM_SERVICE_PROVIDER_BASE_URL=http://localhost:11434/v1/chat/completions
 LLM_SERVICE_PROVIDER_MODEL=qwen2.5:7b
 ```
 
@@ -133,14 +133,17 @@ LLM_SERVICE_PROVIDER_MODEL=qwen2.5:7b
 | `LLM_SERVICE_DEFAULT_MAX_ATTEMPTS` | 3 | 最大重试次数 |
 | `LLM_SERVICE_EXECUTE_TIMEOUT` | 60 | 同步执行超时秒数 |
 | `LLM_SERVICE_PROVIDER_TIMEOUT` | 30 | Provider 请求超时秒数 |
-| `LLM_SERVICE_PROVIDER_BYPASS_PROXY` | false | 绕过系统代理（内网机器设 true） |
-| `LLM_SERVICE_EMBEDDING_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Embedding 模型接口地址 |
+| `LLM_SERVICE_PROVIDER_BYPASS_PROXY` | false | Chat 请求绕过系统代理 |
+| `LLM_SERVICE_EMBEDDING_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4/embeddings` | Embedding 完整 API 地址 |
 | `LLM_SERVICE_EMBEDDING_API_KEY` | 空 | Embedding 模型密钥 |
 | `LLM_SERVICE_EMBEDDING_MODEL` | `embedding-3` | Embedding 模型名 |
-| `LLM_SERVICE_EMBEDDING_DIMENSIONS` | `2048` | Embedding 维度 |
-| `LLM_SERVICE_RERANK_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Rerank 模型接口地址 |
+| `LLM_SERVICE_EMBEDDING_DIMENSIONS` | `1024` | Embedding 维度 |
+| `LLM_SERVICE_RERANK_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4/rerank` | Rerank 完整 API 地址 |
 | `LLM_SERVICE_RERANK_API_KEY` | 空 | Rerank 模型密钥 |
-| `LLM_SERVICE_RERANK_MODEL` | `rerank` | Rerank 模型名 |
+| `LLM_SERVICE_RERANK_MODEL` | 空 | Rerank 模型名 |
+| `LLM_SERVICE_MODEL_TIMEOUT` | `60` | 模型请求超时（秒） |
+| `LLM_SERVICE_MODEL_BYPASS_PROXY` | false | 模型请求绕过系统代理 |
+| `LLM_SERVICE_MODEL_EXTRA_HEADERS` | `{}` | 内网网关认证 header（JSON dict，所有 provider 共用） |
 | `LLM_SERVICE_LEASE_DURATION` | 300 | Worker 租约（秒） |
 | `LLM_SERVICE_RETRY_BACKOFF_BASE` | 2.0 | 重试退避基数 |
 | `LLM_SERVICE_RETRY_BACKOFF_MAX` | 60.0 | 重试退避上限（秒） |
@@ -183,8 +186,7 @@ curl -X POST http://localhost:8900/api/v1/models/embeddings \
   -H "Content-Type: application/json" \
   -d '{
     "input": ["AMF是什么"],
-    "model": "embedding-3",
-    "dimensions": 2048
+    "model": "embedding-3"
   }'
 
 curl -X POST http://localhost:8900/api/v1/models/rerank \

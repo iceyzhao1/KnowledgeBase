@@ -1,16 +1,13 @@
-"""Demo runner: clear PG tables + run mining pipeline with demo config.
+"""Demo runner: drop & recreate PG tables + run mining pipeline with demo config.
 
 Usage:
     python knowledge_mining/demo_run.py
 
-All PG connection params come from .env (PG_HOST, PG_PORT, PG_DBNAME, etc.).
-LLM service URL is read from LLM_BASE_URL env var (default: http://localhost:8900).
-Embedding API key is read from EMBEDDING_API_KEY env var.
+All config comes from .env via MiningConfig / MiningDbConfig.
 """
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -22,9 +19,9 @@ logging.basicConfig(
 logger = logging.getLogger("demo_run")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = REPO_ROOT / "data" / "knowledge_base"
+DATA_DIR = REPO_ROOT / "data" / "knowledge_base" / "5G核心网基础"
 
-# Tables to truncate (order matters for FK constraints)
+# Tables to drop (reverse order — children first for FK constraints)
 _ASSET_TABLES = [
     "asset_retrieval_embeddings",
     "asset_retrieval_units",
@@ -44,52 +41,71 @@ _RUNTIME_TABLES = [
     "mining_runs",
 ]
 
+# Functions & triggers that must be dropped before their tables
+_ASSET_FUNCTIONS = [
+    ("trg_populate_embedding_vector", "populate_embedding_vector_vec"),
+    ("trg_asset_retrieval_units_search_vector", "asset_retrieval_units_search_vector_update"),
+]
 
-def _clear_tables(conn, tables: list[str], schema_label: str) -> None:
-    """TRUNCATE all listed tables."""
-    for table in tables:
-        conn.execute(f"TRUNCATE TABLE {table} CASCADE")
-        logger.info("  TRUNCATED %s.%s", schema_label, table)
+_SCHEMA_DIR = REPO_ROOT / "databases"
+_ASSET_PG_SCHEMA = _SCHEMA_DIR / "asset_core" / "schemas" / "002_asset_core_postgresql.sql"
+_RUNTIME_PG_SCHEMA = _SCHEMA_DIR / "mining_runtime" / "schemas" / "002_mining_runtime_postgresql.sql"
 
 
-def clear_all_data(cfg) -> None:
-    """Clear all mining data from PG."""
+def _drop_all(conn) -> None:
+    """Drop all mining-related tables, triggers, and functions."""
+    for trig_name, func_name in _ASSET_FUNCTIONS:
+        conn.execute(f"DROP TRIGGER IF EXISTS {trig_name} ON asset_retrieval_embeddings")
+        conn.execute(f"DROP TRIGGER IF EXISTS {trig_name} ON asset_retrieval_units")
+        conn.execute(f"DROP FUNCTION IF EXISTS {func_name} CASCADE")
+    for table in _ASSET_TABLES + _RUNTIME_TABLES:
+        conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+    logger.info("  Dropped all existing tables, triggers, functions.")
+
+
+def _apply_schema(conn, sql_path: Path, label: str) -> None:
+    """Execute a SQL schema file against the current connection."""
+    sql = sql_path.read_text(encoding="utf-8")
+    conn.execute(sql)
+    logger.info("  Applied schema: %s (%s)", label, sql_path.name)
+
+
+def recreate_all_tables(cfg) -> None:
+    """Drop and recreate all PG tables from schema files."""
     import psycopg
 
     conninfo = cfg.conninfo
-    logger.info("Clearing all mining data from PG...")
+    logger.info("Recreating all PG tables from schema files...")
 
     with psycopg.connect(conninfo, autocommit=True) as conn:
-        _clear_tables(conn, _ASSET_TABLES, "asset_core")
-        _clear_tables(conn, _RUNTIME_TABLES, "mining_runtime")
+        _drop_all(conn)
+        _apply_schema(conn, _ASSET_PG_SCHEMA, "asset_core")
+        _apply_schema(conn, _RUNTIME_PG_SCHEMA, "mining_runtime")
 
-    logger.info("All tables cleared.")
+    logger.info("All tables recreated.")
 
 
 def main() -> None:
     from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+    from knowledge_mining.mining.infra.mining_config import MiningConfig
     from knowledge_mining.mining.jobs.run import run
 
-    cfg = MiningDbConfig()
+    db_cfg = MiningDbConfig()
+    mining_cfg = MiningConfig()
 
-    # Step 1: Clear all data
-    clear_all_data(cfg)
+    # Step 1: Drop & recreate all tables from schema files
+    recreate_all_tables(db_cfg)
 
     # Step 2: Run mining pipeline
-    llm_base_url = os.environ.get("LLM_BASE_URL", "http://localhost:8900")
-    embedding_api_key = os.environ.get("EMBEDDING_API_KEY", "")
-
     logger.info("Starting demo mining run...")
-    logger.info("  input_path:  %s", DATA_DIR)
-    logger.info("  llm_base_url: %s", llm_base_url)
-    logger.info("  embedding_api_key: %s", "***provided***" if embedding_api_key else "(none)")
+    logger.info("  input_path:       %s", DATA_DIR)
+    logger.info("  llm_base_url:     %s", mining_cfg.llm_service_url)
+    logger.info("  embedding_model:  %s", mining_cfg.embedding_model)
+    logger.info("  embedding_dims:   %d", mining_cfg.embedding_dimensions)
 
     t0 = time.perf_counter()
     result = run(
         input_path=DATA_DIR,
-        llm_base_url=llm_base_url,
-        embedding_api_key=embedding_api_key or None,
-        domain_pack="cloud_core_network",
         publish_on_partial_failure=True,
     )
     elapsed = time.perf_counter() - t0

@@ -254,7 +254,7 @@ class LLMService:
         max_attempts: int = 2,
         priority: int = 100,
     ) -> str:
-        actual_model = model or getattr(self._model_provider, "embedding_model", None) or "embedding-3"
+        actual_model = model or getattr(self._model_provider, "embedding_model", None) or self._config.embedding_model
 
         task_id = None
         async with self._submit_lock:
@@ -320,7 +320,7 @@ class LLMService:
         max_attempts: int = 2,
         priority: int = 100,
     ) -> str:
-        actual_model = model or getattr(self._model_provider, "rerank_model", None) or "rerank"
+        actual_model = model or getattr(self._model_provider, "_rerank_model", None) or self._config.rerank_model
 
         task_id = None
         async with self._submit_lock:
@@ -435,12 +435,13 @@ class LLMService:
             # Worker already claimed this task — poll until it finishes
             logger.info("Task %s already claimed by worker, polling for result", task_id[:8])
             effective_timeout = timeout or self._config.execute_timeout
-            deadline = asyncio.get_event_loop().time() + effective_timeout
-            while asyncio.get_event_loop().time() < deadline:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + effective_timeout
+            while loop.time() < deadline:
                 await asyncio.sleep(0.5)
                 cur = await self._db.execute("SELECT status FROM agent_llm_tasks WHERE id = ?", (task_id,))
                 t = await cur.fetchone()
-                if t and t["status"] in ("succeeded", "dead_letter", "cancelled"):
+                if t and t["status"] in ("succeeded", "failed", "dead_letter", "cancelled"):
                     return await self._build_execute_response(task_id)
             return await self._build_execute_response(task_id)
 
@@ -460,7 +461,8 @@ class LLMService:
             return await self._build_execute_response(task_id)
         except Exception as e:
             # Catch unexpected errors (DB failures, parse crashes, etc.)
-            await self._bus.emit(task_id, "failed", f"unexpected error: {e}")
+            error_type = getattr(e, "error_type", "unexpected_error")
+            await self._mgr.fail(task_id, error_type, str(e)[:500])
             return await self._build_execute_response(task_id)
 
         return await self._build_execute_response(task_id)

@@ -52,6 +52,7 @@
   - `docs/plans/2026-04-21-v11-knowledge-mining-impl-plan.md`
   - `docs/plans/2026-05-06-mining-ui-pg-migration-impl-plan.md`（mining_ui.py 跟进 PG 迁移）
   - `docs/plans/2026-05-07-llm-first-segmenter-impl-plan.md`（segment 阶段 LLM 优先 + 规则兜底）
+  - `docs/plans/2026-05-07-mining-stage-events-realtime-impl-plan.md`（StreamingPipeline 内存阶段事件实时化 + 持久化事件改名）
 - 交接文档：
   - `docs/handoffs/2026-04-21-v11-knowledge-mining-claude-mining-handoff.md`
   - `docs/handoffs/2026-05-06-mining-ui-pg-migration-claude-handoff.md`

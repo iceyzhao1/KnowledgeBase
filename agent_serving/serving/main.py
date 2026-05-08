@@ -5,9 +5,15 @@ Uses psycopg async pool for all database operations.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
+
+# Windows: psycopg async requires SelectorEventLoop, not ProactorEventLoop
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI, Request
 from psycopg_pool import AsyncConnectionPool
@@ -83,6 +89,23 @@ app = FastAPI(
     description="Agent Knowledge Backend for cloud core network — Retrieval Orchestrator (PostgreSQL).",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def reencode_body_to_utf8(request: Request, call_next):
+    """Auto-detect GBK body and re-encode to UTF-8 for Windows curl clients."""
+    if request.method == "POST" and request.headers.get("content-type", "").startswith("application/json"):
+        body = await request.body()
+        try:
+            body.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                body = body.decode("gbk").encode("utf-8")
+                request._body = body
+            except (UnicodeDecodeError, LookupError):
+                pass
+    return await call_next(request)
+
 
 app.include_router(health_router)
 app.include_router(search_router)

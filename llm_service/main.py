@@ -48,7 +48,7 @@ def create_app(
             base_url=cfg.provider_base_url,
             api_key=cfg.provider_api_key,
             model=cfg.provider_model,
-            headers=cfg.provider_headers,
+            headers={**cfg.provider_headers, **cfg.model_extra_headers},
             timeout=cfg.provider_timeout,
             bypass_proxy=cfg.provider_bypass_proxy,
         )
@@ -57,17 +57,22 @@ def create_app(
             if model_provider_factory
             else BigModelProvider(
                 embedding_api_key=cfg.embedding_api_key,
-                embedding_base_url=cfg.embedding_base_url,
+                embedding_url=cfg.embedding_base_url,
                 embedding_model=cfg.embedding_model,
                 rerank_api_key=cfg.rerank_api_key,
-                rerank_base_url=cfg.rerank_base_url,
+                rerank_url=cfg.rerank_base_url,
                 rerank_model=cfg.rerank_model,
                 timeout=cfg.model_timeout,
                 bypass_proxy=cfg.model_bypass_proxy,
+                extra_headers=cfg.model_extra_headers,
             )
         )
         svc = LLMService(db=db, provider=provider, config=cfg, model_provider=model_provider)
-        model_svc = ModelService(model_provider, db=db)
+        model_svc = ModelService(
+            model_provider, db=db,
+            default_embedding_model=cfg.embedding_model,
+            default_rerank_model=cfg.rerank_model,
+        )
         app.state.llm_service = svc
         app.state.model_service = model_svc
         app.state.db = db
@@ -140,10 +145,26 @@ def create_app(
             await recovery.stop()
         if worker:
             await worker.stop()
+            # Re-queue in-flight tasks so they're recoverable on next startup
+            try:
+                cur = await worker_db.execute(
+                    "UPDATE agent_llm_tasks SET status = 'queued', lease_expires_at = NULL "
+                    "WHERE status = 'running'"
+                )
+                await worker_db.commit()
+                n = cur.rowcount
+                if n:
+                    logger.info("Re-queued %d in-flight tasks on shutdown", n)
+            except Exception:
+                logger.exception("Failed to re-queue in-flight tasks")
         if recovery_db:
             await recovery_db.close()
         if worker_db:
             await worker_db.close()
+        if hasattr(provider, 'close'):
+            await provider.close()
+        if hasattr(model_provider, 'close'):
+            await model_provider.close()
         await db.close()
 
     app = FastAPI(title="LLM Service", version="0.1.0", lifespan=lifespan)

@@ -13,6 +13,7 @@ import aiosqlite
 
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
+from llm_service.providers.utils import extract_doc_text
 from llm_service.runtime.event_bus import EventBus
 from llm_service.runtime.parser import parse_output
 from llm_service.runtime.task_manager import TaskManager
@@ -353,7 +354,7 @@ class Worker:
             lines = [f"Query: {query}"]
             for r in result.get("results", []):
                 score = r.get("relevance_score", 0)
-                doc = r.get("document", "")[:100]
+                doc = extract_doc_text(r.get("document"))[:100]
                 lines.append(f"  [{r.get('index', '?')}] score={score:.4f}: {doc}")
             text_output = "\n".join(lines)
 

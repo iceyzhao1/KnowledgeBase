@@ -79,6 +79,6 @@ async def test_client_rerank(api_client):
         documents=["doc-1", "doc-2"],
         top_n=1,
     )
-    assert result["model"] == "rerank"
+    assert result["model"] == "rerank-pro"
     assert len(result["results"]) == 1
     assert result["results"][0]["index"] == 0

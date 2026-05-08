@@ -147,7 +147,7 @@ async def test_rerank_endpoint(api_client):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["model"] == "rerank"
+    assert body["model"] == "rerank-pro"
     assert len(body["results"]) == 2
     assert body["results"][0]["index"] == 0
     assert body["results"][0]["document"] == "doc-a"
