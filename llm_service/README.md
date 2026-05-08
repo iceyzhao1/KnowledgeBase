@@ -1,7 +1,7 @@
 # LLM Service
 
 > 统一 LLM 调用与审计服务，为 Mining / Serving 提供集中式的聊天、Embedding、Rerank 模型能力。
-> 版本：v1.1 | 数据库：agent_llm_runtime（6 张表）| 端口：8900 | 测试：84 passed
+> 版本：v1.2 | 数据库：agent_llm_runtime（6 张表）| 端口：8900 | 测试：96 passed
 
 ## 1. 系统定位
 
@@ -72,7 +72,7 @@ llm_service/
 │
 ├── dashboard/              # Web 监控看板
 ├── templates/              # Jinja2 HTML 模板（看板用）
-└── tests/                  # 84 个测试用例
+└── tests/                  # 96 个测试用例
 ```
 
 ## 3. 数据流
@@ -88,7 +88,7 @@ Mining / Serving
                       └─ BigModelProvider
 ```
 
-这条链路是同步直通接口，不走任务队列，也不写 `agent_llm_tasks` 审计表。
+这条链路是同步直通接口，不走任务队列，但会通过 `_record_sync_task` 写入 `agent_llm_tasks` 等审计表，供 Dashboard 展示。
 
 ### 3.1 同步执行（`execute()`）— Serving 场景
 
@@ -574,7 +574,7 @@ if result["result"]["parse_status"] == "schema_invalid":
 | `LLM_SERVICE_HOST` | `0.0.0.0` | 绑定地址 |
 | `LLM_SERVICE_PORT` | `8900` | 端口 |
 | `LLM_SERVICE_DB_PATH` | `data/llm_service.sqlite` | 数据库路径（自动创建） |
-| `LLM_SERVICE_PROVIDER_BASE_URL` | `https://api.deepseek.com` | LLM API 地址 |
+| `LLM_SERVICE_PROVIDER_BASE_URL` | `https://api.deepseek.com/chat/completions` | Chat LLM 完整 API 地址 |
 | `LLM_SERVICE_PROVIDER_API_KEY` | — | API Key（**必填**） |
 | `LLM_SERVICE_PROVIDER_MODEL` | `deepseek-chat` | 模型名 |
 | `LLM_SERVICE_PROVIDER_TIMEOUT` | `30` | Provider 请求超时（秒） |
@@ -585,16 +585,16 @@ if result["result"]["parse_status"] == "schema_invalid":
 | `LLM_SERVICE_RETRY_BACKOFF_MAX` | `60.0` | 退避上限（秒） |
 | `LLM_SERVICE_LEASE_DURATION` | `300` | Worker 租约（秒） |
 | `LLM_SERVICE_EXECUTE_TIMEOUT` | `60` | 同步执行超时（秒） |
-| `LLM_SERVICE_EMBEDDING_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Embedding API 地址 |
+| `LLM_SERVICE_EMBEDDING_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4/embeddings` | Embedding 完整 API 地址 |
 | `LLM_SERVICE_EMBEDDING_API_KEY` | — | Embedding API Key |
 | `LLM_SERVICE_EMBEDDING_MODEL` | `embedding-3` | Embedding 模型名 |
 | `LLM_SERVICE_EMBEDDING_DIMENSIONS` | `1024` | Embedding 向量维度 |
-| `LLM_SERVICE_RERANK_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | Rerank API 地址 |
+| `LLM_SERVICE_RERANK_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4/rerank` | Rerank 完整 API 地址 |
 | `LLM_SERVICE_RERANK_API_KEY` | — | Rerank API Key |
 | `LLM_SERVICE_RERANK_MODEL` | — | Rerank 模型名 |
 | `LLM_SERVICE_MODEL_TIMEOUT` | `60` | 模型请求超时（秒） |
 | `LLM_SERVICE_MODEL_BYPASS_PROXY` | `false` | 模型请求绕过系统代理 |
-| `LLM_SERVICE_MODEL_EXTRA_HEADERS` | `{}` | 内网网关认证 header（JSON dict，仅 embedding/rerank） |
+| `LLM_SERVICE_MODEL_EXTRA_HEADERS` | `{}` | 内网网关认证 header（JSON dict，所有 provider 共用） |
 
 ## 9. 快速启动
 
@@ -680,10 +680,12 @@ Content-Type: application/json
 **内网部署验证步骤：**
 
 1. 外网模式：`.env` 不配 `MODEL_EXTRA_HEADERS`，确认 Embedding/Rerank 接口正常
-2. 切内网：修改 `EMBEDDING_BASE_URL` / `RERANK_BASE_URL` 为内网地址，配置认证 header：
+2. 切内网：修改 URL 为内网完整地址，配置认证 header：
    ```
-   LLM_SERVICE_EMBEDDING_BASE_URL=https://internal-gateway/api/paas/v4
-   LLM_SERVICE_RERANK_BASE_URL=https://internal-gateway/api/paas/v4
+   LLM_SERVICE_PROVIDER_BASE_URL=https://internal-gateway/your/chat/path
+   LLM_SERVICE_EMBEDDING_BASE_URL=https://internal-gateway/your/embedding/path
+   LLM_SERVICE_RERANK_BASE_URL=https://internal-gateway/your/rerank/path
+   LLM_SERVICE_MODEL_BYPASS_PROXY=true
    LLM_SERVICE_MODEL_EXTRA_HEADERS={"X-HW-ID": "your-hw-id", "X-HW-APPKEY": "your-hw-appkey"}
    ```
 3. 重启服务，发送相同请求验证
@@ -700,7 +702,7 @@ Content-Type: application/json
 - 自动重试 + 指数退避
 - 6 张表完整审计链
 - Web 监控看板
-- 84 个测试用例全绿
+- 96 个测试用例全绿
 - OpenAI 兼容 Provider（DeepSeek / Qwen / Ollama 等）
 - Python SDK（`LLMClient`）
 
