@@ -232,7 +232,7 @@ class LLMService:
         max_attempts: int = 2,
         priority: int = 100,
     ) -> str:
-        actual_model = model or getattr(self._model_provider, "embedding_model", None) or "embedding-3"
+        actual_model = model or getattr(self._model_provider, "embedding_model", None) or self._config.embedding_model
 
         task_id = None
         async with self._submit_lock:
@@ -298,7 +298,7 @@ class LLMService:
         max_attempts: int = 2,
         priority: int = 100,
     ) -> str:
-        actual_model = model or getattr(self._model_provider, "_rerank_model", None) or "rerank-pro"
+        actual_model = model or getattr(self._model_provider, "_rerank_model", None) or self._config.rerank_model
 
         task_id = None
         async with self._submit_lock:
