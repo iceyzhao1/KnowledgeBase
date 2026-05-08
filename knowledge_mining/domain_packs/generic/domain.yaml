@@ -79,6 +79,9 @@ llm_templates:
 
       Output a JSON array. Each element contains a "question" field.
       Output empty array [] if no good questions can be generated.
+
+      Output example (format reference only, generate based on actual content):
+      [{"question": "How does the caching mechanism work?"}]
     expected_output_type: json_array
     output_schema_json: '{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}'
 
@@ -111,6 +114,9 @@ llm_templates:
       - If the segment is just an anchor list, TOC index, or pure links: is_substantive=false, is_navigation=true
       - If the segment contains concrete technical descriptions, parameter explanations, or procedure steps: is_substantive=true
       - Sparse tables with mostly empty or placeholder values are not substantive
+
+      Output example (format reference only, generate based on actual content):
+      {"entities": [{"type": "concept", "name": "caching"}], "semantic_role": "concept", "document_type": "feature", "content_assessment": {"is_substantive": true, "is_navigation": false, "assessment_reason": "Contains concrete feature description"}}
     expected_output_type: json_object
     output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"},"content_assessment":{"type":"object","properties":{"is_substantive":{"type":"boolean"},"is_navigation":{"type":"boolean"},"assessment_reason":{"type":"string"}},"required":["is_substantive","is_navigation"],"additionalProperties":false}},"required":["entities","semantic_role","document_type","content_assessment"],"additionalProperties":false}'
 
@@ -145,6 +151,9 @@ llm_templates:
       - confidence: confidence (0.0-1.0)
 
       Only output segment pairs with clear relations, skip UNRELATED.
+
+      Output example (format reference only, generate based on actual content):
+      [{"source": 1, "target": 2, "relation": "ELABORATES", "confidence": 0.9}]
     expected_output_type: json_array
     output_schema_json: '{"type":"array","items":{"type":"object","properties":{"source":{"type":"integer"},"target":{"type":"integer"},"relation":{"type":"string"},"confidence":{"type":"number","minimum":0.0,"maximum":1.0}},"required":["source","target","relation","confidence"],"additionalProperties":false}}'
 
@@ -162,6 +171,9 @@ llm_templates:
       Generate a brief 10-30 word context label describing the segment's position and topic within the document.
       Do not restate the segment content; only provide context not directly visible from the segment text (e.g., section, topic).
       Output a JSON object with a "context" field.
+
+      Output example (format reference only, generate based on actual content):
+      {"context": "This segment is in the configuration section discussing parameter defaults"}
     expected_output_type: json_object
     output_schema_json: '{"type":"object","properties":{"context":{"type":"string"}},"required":["context"],"additionalProperties":false}'
 

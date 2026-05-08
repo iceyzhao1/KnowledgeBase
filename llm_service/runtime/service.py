@@ -119,8 +119,11 @@ class LLMService:
             return
 
         schema_instruction = (
-            "\n\n请严格按照以下 JSON Schema 格式返回结果，不要输出任何其他内容：\n"
+            "\n\n【输出格式定义（JSON Schema，这是格式规范，不要原样输出这段定义）】\n"
+            "你的输出必须符合以下 JSON Schema 结构定义：\n"
             + json.dumps(schema, indent=2, ensure_ascii=False)
+            + "\n\n注意：上面的 JSON Schema 是格式规范说明，不是你要输出的内容。"
+            "请直接输出符合该格式的 JSON 数据，不要输出 Schema 定义本身。"
         )
         # Create new list to avoid mutating caller-provided messages
         new_msgs = []
