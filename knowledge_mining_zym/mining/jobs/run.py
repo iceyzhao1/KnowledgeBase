@@ -207,6 +207,31 @@ def publish(
 # Internal pipeline implementation
 # ===================================================================
 
+_OPERATOR_FIELDS = (
+    "segmenter", "enricher", "relation_builder", "question_generator",
+    "embedding_generator", "discourse_relation_builder", "contextualizer",
+)
+
+
+def _operator_info_map(cfg: "PipelineConfig") -> dict[str, dict[str, Any] | None]:
+    """Snapshot the resolved operator classes so the UI can show LLM vs rule.
+
+    Each entry is `{"class": <class name>, "stage_version": <str|None>}` or None
+    when the slot is unconfigured. UI maps known LLM class names to a badge.
+    """
+    out: dict[str, dict[str, Any] | None] = {}
+    for field in _OPERATOR_FIELDS:
+        op = getattr(cfg, field, None)
+        if op is None:
+            out[field] = None
+        else:
+            out[field] = {
+                "class": type(op).__name__,
+                "stage_version": getattr(op, "stage_version", None),
+            }
+    return out
+
+
 def _init_llm(
     llm_base_url: str | None,
     bypass_proxy: bool = False,
@@ -343,25 +368,9 @@ def _run_pipeline(
     # Create batch in asset_core (before create_run so batch_id is available)
     batch_id = uuid.uuid4().hex
 
-    tracker.create_run(MiningRunData(
-        id=run_id,
-        source_batch_id=batch_id,
-        input_path=str(input_path),
-        status="running",
-        total_documents=len(docs),
-        started_at=now,
-        metadata_json={"ingest_summary": ingest_summary},
-    ))
-    runtime_db.commit()
-    asset_db.upsert_source_batch(
-        batch_id=batch_id,
-        batch_code=f"batch-{run_id[:8]}",
-        source_type=params.default_source_type,
-        description=f"Mining run {run_id}",
-    )
-    asset_db.commit()
-
-    # Build pipeline config with pluggable operators (profile-driven)
+    # Build pipeline config with pluggable operators (profile-driven).
+    # Built before create_run so the resolved operators (LLM vs rule) can be
+    # stored in mining_runs.metadata_json for the UI to display.
     entity_extractor = RuleBasedEntityExtractor(profile=profile)
     role_classifier = DefaultRoleClassifier(profile=profile)
     enricher = RuleBasedEnricher(
@@ -381,6 +390,28 @@ def _run_pipeline(
         contextualizer=llm.get("contextualizer"),
         domain_profile=profile,
     )
+
+    tracker.create_run(MiningRunData(
+        id=run_id,
+        source_batch_id=batch_id,
+        input_path=str(input_path),
+        status="running",
+        total_documents=len(docs),
+        started_at=now,
+        metadata_json={
+            "ingest_summary": ingest_summary,
+            "operators": _operator_info_map(pipeline_config),
+            "domain_pack": getattr(profile, "domain_id", None),
+        },
+    ))
+    runtime_db.commit()
+    asset_db.upsert_source_batch(
+        batch_id=batch_id,
+        batch_code=f"batch-{run_id[:8]}",
+        source_type=params.default_source_type,
+        description=f"Mining run {run_id}",
+    )
+    asset_db.commit()
 
     committed_count = 0
     new_count = 0
@@ -451,7 +482,7 @@ def _run_pipeline(
             tags_json=doc.tags_json,
             title=doc.title,
         )
-        ctx = DocumentContext(raw_file=doc, profile=profile)
+        ctx = DocumentContext(raw_file=doc, profile=profile, run_document_id=rd_id)
         work_items.append({
             "doc": doc,
             "rd_id": rd_id,
@@ -475,7 +506,7 @@ def _run_pipeline(
             ("retrieval_units", lambda ctx: retrieval_units_stage(ctx, config), max_workers),
         ]
 
-        pipeline = StreamingPipeline(stages)
+        pipeline = StreamingPipeline(stages, run_id=run_id, tracker=tracker)
         ctxs = pipeline.process_all([item["ctx"] for item in work_items])
 
     # -- Phase 1c: Write results to DB (main thread, serial, no concurrency issues) --
@@ -531,8 +562,10 @@ def _run_pipeline(
                     asset_db.delete_segments_by_snapshot(old_snap_id)
                 asset_db.commit()
 
-            # Write segments to DB (track at commit time since pipeline ran in streaming)
-            evt_seg = tracker.start_stage(run_id, "segment", rd_id)
+            # Persist segments to DB. Note: in-memory `segment` stage already
+            # emitted its own events from StreamingPipeline workers; this
+            # event tracks DB-write time only and uses a distinct name.
+            evt_seg = tracker.start_stage(run_id, "segment_persist", rd_id)
             for seg in segments:
                 seg_key = f"{seg.document_key}#{seg.segment_index}"
                 seg_id = seg_id_map.get(seg_key, uuid.uuid4().hex)
@@ -556,8 +589,8 @@ def _run_pipeline(
                     metadata_json=seg.metadata_json,
                 )
 
-            # Write relations to DB
-            evt_rel = tracker.start_stage(run_id, "build_relations", rd_id)
+            # Persist relations to DB. Same convention as segment_persist.
+            evt_rel = tracker.start_stage(run_id, "relations_persist", rd_id)
             for rel in relations:
                 src_id = seg_id_map.get(rel.source_segment_key, "")
                 tgt_id = seg_id_map.get(rel.target_segment_key, "")
@@ -573,13 +606,13 @@ def _run_pipeline(
                         distance=rel.distance,
                         metadata_json=rel.metadata_json,
                     )
-            tracker.end_stage(evt_rel, run_id, "build_relations",
+            tracker.end_stage(evt_rel, run_id, "relations_persist",
                               output_summary=f"{len(relations)} relations")
-            tracker.end_stage(evt_seg, run_id, "segment",
+            tracker.end_stage(evt_seg, run_id, "segment_persist",
                               output_summary=f"{len(segments)} segments")
 
-            # Write retrieval units to DB
-            evt_ru = tracker.start_stage(run_id, "build_retrieval_units", rd_id)
+            # Persist retrieval units to DB. Same convention as segment_persist.
+            evt_ru = tracker.start_stage(run_id, "retrieval_units_persist", rd_id)
             ru_id_map: dict[str, str] = {}
             for ru in retrieval_units:
                 unit_id = uuid.uuid4().hex
@@ -606,7 +639,7 @@ def _run_pipeline(
                 )
 
             asset_db.commit()
-            tracker.end_stage(evt_ru, run_id, "build_retrieval_units",
+            tracker.end_stage(evt_ru, run_id, "retrieval_units_persist",
                               output_summary=f"{len(retrieval_units)} units")
 
             # Generate embeddings for retrieval units (if embedding_generator configured)

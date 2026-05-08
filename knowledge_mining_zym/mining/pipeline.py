@@ -45,6 +45,7 @@ class DocumentContext:
     retrieval_units: tuple[RetrievalUnitData, ...] = ()
     error: str | None = None
     sequence_id: int = 0
+    run_document_id: str | None = None
 
     def with_updates(self, **kwargs: Any) -> DocumentContext:
         """Return a new DocumentContext with specified fields replaced."""
@@ -58,6 +59,7 @@ class DocumentContext:
             "retrieval_units": self.retrieval_units,
             "error": self.error,
             "sequence_id": self.sequence_id,
+            "run_document_id": self.run_document_id,
         }
         current.update(kwargs)
         return DocumentContext(**current)
@@ -201,19 +203,57 @@ class MiningPipeline:
 _SENTINEL = object()
 
 
-def _worker(fn: Callable[[DocumentContext], DocumentContext],
-            in_q: Queue, out_q: Queue) -> None:
-    """Worker thread: pull from in_q, call fn, push to out_q."""
+def _worker(
+    stage_name: str,
+    fn: Callable[[DocumentContext], DocumentContext],
+    in_q: Queue,
+    out_q: Queue,
+    run_id: str | None,
+    tracker: Any | None,
+) -> None:
+    """Worker thread: pull from in_q, run fn, emit start/end stage events, push to out_q.
+
+    Stage events are emitted only when both run_id and tracker are provided AND
+    the ctx carries a run_document_id. This keeps StreamingPipeline usable in
+    test contexts where no tracker is wired.
+    """
     while True:
         item = in_q.get()
         if item is _SENTINEL:
             break
+        rd_id = getattr(item, "run_document_id", None)
+        emit = tracker is not None and run_id is not None and rd_id is not None
+        # Skip event emission if the document already errored upstream — it
+        # carries through the queue but we shouldn't re-track it as 'started'.
+        if emit and item.error:
+            out_q.put(item)
+            continue
+        evt_id = None
+        if emit:
+            try:
+                evt_id = tracker.start_stage(run_id, stage_name, rd_id)
+            except Exception:
+                logger.exception("tracker.start_stage failed for stage=%s", stage_name)
+                evt_id = None
         try:
             result = fn(item)
-            out_q.put(result)
         except Exception as e:
             logger.exception("Stage worker failed for %s", getattr(item, "raw_file", None))
-            out_q.put(item.with_updates(error=str(e)[:500]))
+            err_msg = str(e)[:500]
+            if evt_id is not None:
+                try:
+                    tracker.end_stage(evt_id, run_id, stage_name,
+                                      status="failed", error_message=err_msg)
+                except Exception:
+                    logger.exception("tracker.end_stage(failed) failed for stage=%s", stage_name)
+            out_q.put(item.with_updates(error=err_msg))
+            continue
+        if evt_id is not None:
+            try:
+                tracker.end_stage(evt_id, run_id, stage_name)
+            except Exception:
+                logger.exception("tracker.end_stage failed for stage=%s", stage_name)
+        out_q.put(result)
 
 
 class StreamingPipeline:
@@ -226,11 +266,17 @@ class StreamingPipeline:
             ("enrich",  enrich_fn,  4),  # 4 concurrent workers
             ("publish", publish_fn, 1),
         ]
-        pipeline = StreamingPipeline(stages)
+        pipeline = StreamingPipeline(stages, run_id=run_id, tracker=tracker)
         results = pipeline.process_all(items)
     """
 
-    def __init__(self, stages: list[tuple[str, Callable[[DocumentContext], DocumentContext], int]]) -> None:
+    def __init__(
+        self,
+        stages: list[tuple[str, Callable[[DocumentContext], DocumentContext], int]],
+        *,
+        run_id: str | None = None,
+        tracker: Any | None = None,
+    ) -> None:
         self._stages = stages
         self._queues: list[Queue] = [Queue() for _ in range(len(stages) + 1)]
         self._threads: list[list[Thread]] = []
@@ -240,7 +286,7 @@ class StreamingPipeline:
             for w in range(n):
                 t = Thread(
                     target=_worker,
-                    args=(fn, self._queues[i], self._queues[i + 1]),
+                    args=(name, fn, self._queues[i], self._queues[i + 1], run_id, tracker),
                     name=f"mining-{name}-{w}",
                     daemon=True,
                 )

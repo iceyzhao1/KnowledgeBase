@@ -272,6 +272,76 @@ EMPTY_RUN_TEXT = "_（尚未运行）_"
 RUNNING_TEXT = "_（运行中…完成后展示）_"
 
 
+# Each panel id maps to the operator slots in mining_runs.metadata_json.operators
+# that drive it. Order matters for display.
+_STAGE_OPERATOR_KEYS: dict[str, list[str]] = {
+    "segment": ["segmenter"],
+    "enrich": ["enricher"],
+    "relations": ["relation_builder", "discourse_relation_builder"],
+    "units": ["question_generator", "contextualizer", "embedding_generator"],
+}
+
+_OPERATOR_LABEL: dict[str, str] = {
+    "segmenter": "Segmenter",
+    "enricher": "Enricher",
+    "relation_builder": "RelationBuilder",
+    "discourse_relation_builder": "DiscourseRB",
+    "question_generator": "QuestionGen",
+    "contextualizer": "Contextualizer",
+    "embedding_generator": "Embedding",
+}
+
+
+def _operator_kind(class_name: str | None) -> str:
+    """Classify an operator class name as 'LLM' / '规则' / '—'."""
+    if not class_name:
+        return "—"
+    lower = class_name.lower()
+    if lower.startswith("llm") or lower.startswith("discourse"):
+        return "LLM"
+    return "规则"
+
+
+def _extract_operators(run_row: dict | None) -> dict[str, Any] | None:
+    """Pull operators map out of mining_runs.metadata_json. Tolerates str/dict shapes."""
+    if not run_row:
+        return None
+    md = run_row.get("metadata_json")
+    if isinstance(md, str):
+        try:
+            md = json.loads(md)
+        except Exception:
+            return None
+    if not isinstance(md, dict):
+        return None
+    ops = md.get("operators")
+    return ops if isinstance(ops, dict) else None
+
+
+def _operator_badge_md(stage_id: str, operators: dict[str, Any] | None) -> str:
+    """Build a markdown badge line for a stage panel showing LLM vs rule.
+
+    `operators` is `mining_runs.metadata_json["operators"]` (or None for older runs).
+    Returns "" when the stage has no operators worth showing.
+    """
+    keys = _STAGE_OPERATOR_KEYS.get(stage_id)
+    if not keys:
+        return ""
+    if not operators:
+        return f"> ⚙️ 算子：_未记录（旧 run）_\n\n"
+    parts: list[str] = []
+    for k in keys:
+        info = operators.get(k)
+        cls = info.get("class") if isinstance(info, dict) else None
+        kind = _operator_kind(cls)
+        label = _OPERATOR_LABEL.get(k, k)
+        if cls:
+            parts.append(f"**{label}**: `{cls}` → {kind}")
+        else:
+            parts.append(f"**{label}**: _未配置_")
+    return "> ⚙️ " + " · ".join(parts) + "\n\n"
+
+
 def _snapshot_ids(rt: _PGConn, run_id: str) -> tuple[str, ...]:
     rows = rt.execute(
         "SELECT document_snapshot_id FROM mining_run_documents "
@@ -1063,10 +1133,18 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         rt.close()
         asset.close()
 
-    seg_evt = events_by_stage.get("segment")
-    rel_evt = events_by_stage.get("build_relations")
+    # In-memory stage events (emitted by StreamingPipeline workers, post 2026-05-07).
+    # Fall back to legacy persist-time names for runs created before that change.
+    parse_evt = events_by_stage.get("parse")
+    seg_evt = events_by_stage.get("segment") or events_by_stage.get("segment_persist")
+    enrich_evt = events_by_stage.get("enrich")
+    rel_evt = (events_by_stage.get("relations")
+               or events_by_stage.get("relations_persist")
+               or events_by_stage.get("build_relations"))
     snap_evt = events_by_stage.get("select_snapshot")
-    ru_evt = events_by_stage.get("build_retrieval_units")
+    ru_evt = (events_by_stage.get("retrieval_units")
+              or events_by_stage.get("retrieval_units_persist")
+              or events_by_stage.get("build_retrieval_units"))
     ab_evt = events_by_stage.get("assemble_build")
     pr_evt = events_by_stage.get("publish_release")
 
@@ -1096,23 +1174,30 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         kpi = "—"
     stages["ingest"] = {"status": st, "kpi": kpi, "duration_ms": None}
 
-    parse_status, _ = derive(n_segments > 0, seg_evt)
-    stages["parse"] = {"status": parse_status, "kpi": f"≈{n_segments} 段" if n_segments else "—", "duration_ms": None}
+    parse_st, parse_dur = derive(n_segments > 0, parse_evt or seg_evt)
+    stages["parse"] = {"status": parse_st, "kpi": f"≈{n_segments} 段" if n_segments else "—", "duration_ms": parse_dur}
 
     seg_st, seg_dur = derive(n_segments > 0, seg_evt)
     stages["segment"] = {"status": seg_st, "kpi": f"{n_segments} 段" if n_segments else "—", "duration_ms": seg_dur}
 
-    if n_enriched_segs > 0:
-        en_st, en_kpi = "done", f"{n_enriched_segs} 段含实体"
+    if enrich_evt and enrich_evt.get("status") == "completed":
+        en_st, en_dur = "done", enrich_evt.get("duration_ms")
+        en_kpi = f"{n_enriched_segs} 段含实体" if n_enriched_segs > 0 else "0 实体（rule-based 无命中）"
+    elif enrich_evt and enrich_evt.get("status") == "failed":
+        en_st, en_dur, en_kpi = "failed", enrich_evt.get("duration_ms"), "—"
+    elif n_enriched_segs > 0:
+        en_st, en_dur, en_kpi = "done", None, f"{n_enriched_segs} 段含实体"
     elif rel_evt and rel_evt.get("status") == "completed":
-        en_st, en_kpi = "done", "0 实体（rule-based 无命中）"
+        en_st, en_dur, en_kpi = "done", None, "0 实体（rule-based 无命中）"
+    elif enrich_evt and enrich_evt.get("status") == "started":
+        en_st, en_dur, en_kpi = "running", None, "—"
     elif n_segments > 0:
         en_st = "running" if overall_status == "running" else "pending"
-        en_kpi = "—"
+        en_dur, en_kpi = None, "—"
     else:
         en_st = "running" if overall_status == "running" else "pending"
-        en_kpi = "—"
-    stages["enrich"] = {"status": en_st, "kpi": en_kpi, "duration_ms": None}
+        en_dur, en_kpi = None, "—"
+    stages["enrich"] = {"status": en_st, "kpi": en_kpi, "duration_ms": en_dur}
 
     rel_st, rel_dur = derive(n_relations > 0, rel_evt)
     stages["relations"] = {"status": rel_st, "kpi": f"{n_relations} 条" if n_relations else "—", "duration_ms": rel_dur}
@@ -1480,13 +1565,20 @@ class StagePanel:
             with ui.expansion("展开明细表格", icon="table_view").classes("w-full"):
                 self.grid = ui.aggrid(_grid_options(None)).classes("w-full")
 
-    def render(self, data: list[Any], stages_state: dict[str, dict]):
+    def render(
+        self,
+        data: list[Any],
+        stages_state: dict[str, dict],
+        operators: dict[str, Any] | None = None,
+    ):
         """Update components with new data. data shape: [summary, *small_dfs, full_df]."""
         if self.kpi_html is not None:
             self.kpi_html.set_content(_kpi_html(self.id, stages_state))
-        # data[0] is the summary string
+        # data[0] is the summary string; prepend operator badge for stages that have one.
         summary_text = data[0] if data else EMPTY_RUN_TEXT
-        self.summary_md.set_content(summary_text or EMPTY_RUN_TEXT)
+        body = summary_text or EMPTY_RUN_TEXT
+        badge = _operator_badge_md(self.id, operators)
+        self.summary_md.set_content(badge + body if badge else body)
         # data[1..n_plots] are small DFs; data[-1] is the full DF (if there is a table slot)
         n_plots = len(self.spec["plots"])
         for i, (title, x, y) in enumerate(self.spec["plots"]):
@@ -1494,7 +1586,9 @@ class StagePanel:
                 df = data[1 + i]
             else:
                 df = None
-            self.charts[i].options = _bar_option(df, x, y, title)
+            new_opts = _bar_option(df, x, y, title)
+            self.charts[i].options.clear()
+            self.charts[i].options.update(new_opts)
             self.charts[i].update()
         # full grid (last element in data, if more than n_plots+1)
         if len(data) >= n_plots + 2:
@@ -1504,7 +1598,9 @@ class StagePanel:
             full_df = None
         else:
             full_df = None
-        self.grid.options = _grid_options(full_df)
+        new_grid_opts = _grid_options(full_df)
+        self.grid.options.clear()
+        self.grid.options.update(new_grid_opts)
         self.grid.update()
 
     def show(self):
@@ -1562,15 +1658,6 @@ def main_page():
                     label="domain_pack",
                 ).props("dense outlined").classes("w-full")
 
-                _llm_cfg_url, _, _llm_cfg_emb = _resolve_mining_llm_settings()
-                ui.html(
-                    "<div style='font-size:12px;color:#666;line-height:1.6;'>"
-                    f"⚙️ LLM: <code>{_llm_cfg_url or '未配置（走规则）'}</code>"
-                    f" · Embedding: <code>{'已配置' if _llm_cfg_emb else '未配置（跳过）'}</code>"
-                    "<br/>修改 <code>.env</code> 后重启本服务生效。"
-                    "</div>"
-                ).classes("w-full")
-
             # Right: prompt + start button
             with ui.column().classes("flex-1 min-w-[300px] gap-3 justify-between"):
                 with ui.column().classes("gap-2"):
@@ -1623,16 +1710,17 @@ def main_page():
     # Handlers (closures over UI element refs)
     # =====================================================================
 
-    def _on_file_upload(e):
-        """ui.upload callback — save uploaded file to a temp staging area and remember its path."""
-        # NiceGUI uploads come as in-memory bytes via e.content (SpooledTemporaryFile).
+    async def _on_file_upload(e):
+        """ui.upload callback — save uploaded file to a temp staging area and remember its path.
+
+        NiceGUI 3.x exposes the upload as e.file (FileUpload), with async .save()/.read().
+        """
         target_dir = UPLOADS_ROOT / "_staging"
         target_dir.mkdir(parents=True, exist_ok=True)
-        dst = target_dir / e.name
-        with dst.open("wb") as f:
-            shutil.copyfileobj(e.content, f)
+        dst = target_dir / e.file.name
+        await e.file.save(dst)
         STATE.files.append(dst)
-        ui.notify(f"已上传 {e.name}", type="positive", position="bottom-right")
+        ui.notify(f"已上传 {e.file.name}", type="positive", position="bottom-right")
 
     def refresh_ui():
         """Synchronize UI components with STATE."""
@@ -1649,6 +1737,9 @@ def main_page():
             snap = _query_latest_run(STATE.input_path)
             run_row = snap["run"] if snap else None
         status_bar.set_content(_status_bar_html(run_row, STATE.stages, STATE.phase))
+
+        # Pull operator info once per refresh (used by segment / enrich / etc panels).
+        operators = _extract_operators(run_row)
 
         # Stepper buttons
         for sid, btn in stepper_btns.items():
@@ -1672,7 +1763,7 @@ def main_page():
             if sid == STATE.focus_stage:
                 panel.show()
                 data = _safe_render(panel.spec, STATE.run_id)
-                panel.render(data, STATE.stages)
+                panel.render(data, STATE.stages, operators)
             else:
                 panel.hide()
 
