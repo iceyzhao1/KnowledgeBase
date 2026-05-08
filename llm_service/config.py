@@ -8,7 +8,7 @@ class LLMServiceConfig(BaseSettings):
 
     db_path: str = "data/llm_service.sqlite"
 
-    provider_base_url: str = "https://api.deepseek.com"
+    provider_base_url: str = "https://api.deepseek.com/chat/completions"
     provider_api_key: str = ""
     provider_model: str = "deepseek-chat"
     provider_headers: dict = Field(default_factory=dict)

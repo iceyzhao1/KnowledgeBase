@@ -15,7 +15,7 @@ class OpenAICompatibleProvider:
         timeout: int = 30,
         bypass_proxy: bool = False,
     ):
-        self._base_url = base_url.rstrip("/")
+        self._url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._extra_headers = headers or {}
@@ -41,7 +41,6 @@ class OpenAICompatibleProvider:
         *,
         response_format: dict | None = None,
     ) -> ProviderResponse:
-        url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -55,7 +54,7 @@ class OpenAICompatibleProvider:
         if response_format is not None:
             body["response_format"] = response_format
         try:
-            resp = await self._client.post(url, json=body, headers=headers)
+            resp = await self._client.post(self._url, json=body, headers=headers)
         except httpx.TimeoutException as e:
             raise ProviderError("timeout", str(e)) from e
         except httpx.ConnectError as e:

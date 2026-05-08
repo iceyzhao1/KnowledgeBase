@@ -48,7 +48,7 @@ def create_app(
             base_url=cfg.provider_base_url,
             api_key=cfg.provider_api_key,
             model=cfg.provider_model,
-            headers=cfg.provider_headers,
+            headers={**cfg.provider_headers, **cfg.model_extra_headers},
             timeout=cfg.provider_timeout,
             bypass_proxy=cfg.provider_bypass_proxy,
         )
