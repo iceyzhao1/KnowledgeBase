@@ -24,6 +24,10 @@
 !agent_serving_fzl/**
 !agent_serving_zdy/
 !agent_serving_zdy/**
+!kb-ui/
+!kb-ui/**
+!docs/
+!docs/**
 
 # === Allowlisted root files ===
 !.env.example

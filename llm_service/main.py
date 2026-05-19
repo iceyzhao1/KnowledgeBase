@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from jinja2 import Environment, FileSystemLoader
 
 from llm_service.config import LLMServiceConfig
@@ -169,6 +170,14 @@ def create_app(
 
     app = FastAPI(title="LLM Service", version="0.1.0", lifespan=lifespan)
     app.state.config = cfg
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     from llm_service.api.health import router as health_router
     from llm_service.api.model_api import router as model_api_router
