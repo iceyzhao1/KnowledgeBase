@@ -8,16 +8,13 @@ import sys
 if sys.platform == "win32":
     import uvicorn.loops.asyncio as _uv_loop
 
-    _original_factory = _uv_loop.asyncio_loop_factory
+    _uv_loop.asyncio_loop_factory = lambda use_subprocess=False: asyncio.SelectorEventLoop
 
-    def _selector_loop_factory(use_subprocess: bool = False):
-        return asyncio.SelectorEventLoop
+import uvicorn
 
-    _uv_loop.asyncio_loop_factory = _selector_loop_factory
-
-from knowledge_mining.mining.api.app import app
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("MINING_API_PORT", "8901"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+port = int(os.environ.get("MINING_API_PORT", "8901"))
+uvicorn.run(
+    "knowledge_mining_fzl.mining.api.app:app",
+    host="0.0.0.0",
+    port=port,
+)

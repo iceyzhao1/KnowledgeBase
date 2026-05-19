@@ -1,5 +1,6 @@
 """Run LLM Service: python -m llm_service"""
 import asyncio
+import os
 import sys
 
 # Windows: psycopg async requires SelectorEventLoop, not ProactorEventLoop.
@@ -7,27 +8,16 @@ import sys
 if sys.platform == "win32":
     import uvicorn.loops.asyncio as _uv_loop
 
-    _original_factory = _uv_loop.asyncio_loop_factory
-
-    def _selector_loop_factory(use_subprocess: bool = False):
-        return asyncio.SelectorEventLoop
-
-    _uv_loop.asyncio_loop_factory = _selector_loop_factory
+    _uv_loop.asyncio_loop_factory = lambda use_subprocess=False: asyncio.SelectorEventLoop
 
 import uvicorn
 
 from llm_service.config import LLMServiceConfig
 
-
-def main():
-    cfg = LLMServiceConfig()
-    uvicorn.run(
-        "llm_service.main:create_app",
-        host=cfg.host,
-        port=cfg.port,
-        factory=True,
-    )
-
-
-if __name__ == "__main__":
-    main()
+cfg = LLMServiceConfig()
+uvicorn.run(
+    "llm_service.main:create_app",
+    host=cfg.host,
+    port=cfg.port,
+    factory=True,
+)

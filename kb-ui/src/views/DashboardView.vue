@@ -47,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
@@ -68,7 +68,7 @@ const miningHealth = ref<'healthy' | 'degraded' | 'unhealthy' | 'unknown'>('unkn
 const servingHealth = ref<'healthy' | 'degraded' | 'unhealthy' | 'unknown'>('unknown')
 const llmHealth = ref<'healthy' | 'degraded' | 'unhealthy' | 'unknown'>('unknown')
 const loading = ref(false)
-const recentRuns = ref(() => miningStore.runs.slice(0, 5))
+const recentRuns = computed(() => miningStore.runs.slice(0, 5))
 
 async function loadData() {
   loading.value = true
