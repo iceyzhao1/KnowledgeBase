@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger("demo_run")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = REPO_ROOT / "data" / "knowledge_base" / "网络切片"
+DATA_DIR = REPO_ROOT / "data" / "knowledge_base" / "SMF会话管理功能"  # iteration-1: multi-doc test
 
 # ── Full-reset helpers (commented out in main, kept for manual use) ──────
 #
