@@ -54,8 +54,11 @@ def _execute_ddl(conn, ddl: str) -> None:
 
     stmts = _split_ddl(ddl)
     for stmt in stmts:
-        stmt = stmt.strip()
-        if not stmt or stmt.startswith("--"):
+        # Strip leading/trailing comment lines — keep the actual SQL
+        lines = stmt.strip().split('\n')
+        sql_lines = [l for l in lines if not l.strip().startswith('--')]
+        stmt = '\n'.join(sql_lines).strip()
+        if not stmt:
             continue
         try:
             with conn.cursor() as cur:
