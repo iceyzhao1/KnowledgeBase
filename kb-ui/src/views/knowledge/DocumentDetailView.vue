@@ -23,19 +23,32 @@
         <template #label>
           段落 <span class="tab-count">{{ segments.length }}</span>
         </template>
-        <div class="card-list">
-          <div v-for="seg in segments" :key="seg.id" class="segment-card">
-            <div class="segment-card__header">
-              <span class="segment-card__idx">#{{ seg.segment_index }}</span>
-              <span class="segment-card__type">{{ seg.block_type }}</span>
-              <span class="segment-card__role" v-if="seg.semantic_role">{{ seg.semantic_role }}</span>
-              <span class="segment-card__tokens">{{ seg.token_count }} tokens</span>
-              <span class="segment-card__section" v-if="seg.section_title">{{ seg.section_title }}</span>
-            </div>
-            <p class="segment-card__text">{{ seg.raw_text }}</p>
-          </div>
-          <EmptyState v-if="!segments.length" text="无段落数据" />
-        </div>
+        <el-table
+          :data="segments"
+          class="kb-table"
+          :header-cell-style="{ background: 'transparent' }"
+        >
+          <el-table-column label="#" width="60" prop="segment_index" />
+          <el-table-column label="类型" width="100" prop="block_type" />
+          <el-table-column label="角色" width="100">
+            <template #default="{ row }">
+              <span v-if="row.semantic_role" class="role-tag">{{ row.semantic_role }}</span>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="标题" min-width="150">
+            <template #default="{ row }">
+              {{ row.section_title || '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="内容预览" min-width="250">
+            <template #default="{ row }">
+              <span class="text-preview">{{ truncate(row.raw_text, 120) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="Token" width="80" prop="token_count" />
+        </el-table>
+        <EmptyState v-if="!segments.length" text="无段落数据" />
       </el-tab-pane>
 
       <!-- Units Tab -->
@@ -43,17 +56,25 @@
         <template #label>
           检索单元 <span class="tab-count">{{ units.length }}</span>
         </template>
-        <div class="card-list">
-          <div v-for="unit in units" :key="unit.id" class="unit-card">
-            <div class="unit-card__header">
-              <span class="unit-card__type">{{ unitTypeLabel(unit.unit_type) }}</span>
-              <span class="unit-card__weight" v-if="unit.weight !== 1">w={{ unit.weight }}</span>
-            </div>
-            <div class="unit-card__title" v-if="unit.title">{{ unit.title }}</div>
-            <p class="unit-card__text">{{ unit.text }}</p>
-          </div>
-          <EmptyState v-if="!units.length" text="无检索单元数据" />
-        </div>
+        <el-table
+          :data="units"
+          class="kb-table"
+          :header-cell-style="{ background: 'transparent' }"
+        >
+          <el-table-column label="类型" width="120">
+            <template #default="{ row }">
+              <span class="type-tag">{{ unitTypeLabel(row.unit_type) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="标题" min-width="200" prop="title" />
+          <el-table-column label="内容预览" min-width="250">
+            <template #default="{ row }">
+              <span class="text-preview">{{ truncate(row.text, 120) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="权重" width="80" prop="weight" />
+        </el-table>
+        <EmptyState v-if="!units.length" text="无检索单元数据" />
       </el-tab-pane>
 
       <!-- Relations Tab -->
@@ -61,15 +82,38 @@
         <template #label>
           关系 <span class="tab-count">{{ relations.length }}</span>
         </template>
-        <div class="relation-list">
-          <div v-for="rel in relations" :key="rel.id" class="relation-row">
-            <span class="relation-row__id">{{ rel.source_segment_id.slice(0, 6) }}</span>
-            <span class="relation-row__type">{{ relationTypeLabel(rel.relation_type) }}</span>
-            <span class="relation-row__id">{{ rel.target_segment_id.slice(0, 6) }}</span>
-            <span class="relation-row__conf">置信度={{ rel.confidence.toFixed(2) }}</span>
-          </div>
-          <EmptyState v-if="!relations.length" text="无关系数据" />
-        </div>
+        <el-table
+          :data="relations"
+          class="kb-table"
+          :header-cell-style="{ background: 'transparent' }"
+        >
+          <el-table-column label="源分段" min-width="160">
+            <template #default="{ row }">
+              <span class="text-preview">{{ relSourcePreview(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="关系类型" width="140">
+            <template #default="{ row }">
+              <span class="relation-type-tag">{{ relationTypeLabel(row.relation_type) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="目标分段" min-width="160">
+            <template #default="{ row }">
+              <span class="text-preview">{{ relTargetPreview(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="置信度" width="90">
+            <template #default="{ row }">
+              {{ row.confidence != null ? Number(row.confidence).toFixed(2) : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="距离" width="80">
+            <template #default="{ row }">
+              {{ row.distance != null ? row.distance : '-' }}
+            </template>
+          </el-table-column>
+        </el-table>
+        <EmptyState v-if="!relations.length" text="无关系数据" />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -114,6 +158,21 @@ function relationTypeLabel(type: string) {
 function formatTime(t: string) {
   if (!t) return '-'
   return new Date(t).toLocaleString('zh-CN')
+}
+
+function truncate(text: string | null | undefined, len: number) {
+  if (!text) return '-'
+  return text.length > len ? text.slice(0, len) + '...' : text
+}
+
+function relSourcePreview(rel: KnowledgeRelation) {
+  if (rel.source_text) return truncate(rel.source_text, 60)
+  return rel.source_segment_id.slice(0, 8) + '...'
+}
+
+function relTargetPreview(rel: KnowledgeRelation) {
+  if (rel.target_text) return truncate(rel.target_text, 60)
+  return rel.target_segment_id.slice(0, 8) + '...'
 }
 
 async function loadData() {

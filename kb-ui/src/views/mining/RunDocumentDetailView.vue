@@ -203,20 +203,19 @@ const artifactTabs = [
 
 // Merge adjacent started+completed events for the same stage into one row
 const mergedStages = computed(() => {
-  const stages = miningStore.documentStages
-  const result: typeof stages = []
-  for (let i = 0; i < stages.length; i++) {
-    const cur = stages[i]
-    const next = stages[i + 1]
+  const raw = miningStore.documentStages
+  const result: typeof raw = []
+  for (let i = 0; i < raw.length; i++) {
+    const cur = raw[i]
+    const next = i + 1 < raw.length ? raw[i + 1] : null
     if (
       cur.status === 'started' &&
       next &&
       next.stage === cur.stage &&
       next.status === 'completed'
     ) {
-      // Merge: show as completed with duration from the completed event
       result.push({ ...next })
-      i++ // skip the completed event
+      i++
     } else {
       result.push(cur)
     }
