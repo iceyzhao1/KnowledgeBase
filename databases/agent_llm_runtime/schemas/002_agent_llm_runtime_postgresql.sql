@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS agent_llm_prompt_templates (
 CREATE TABLE IF NOT EXISTS agent_llm_tasks (
     id                TEXT PRIMARY KEY,
     caller_domain     TEXT NOT NULL,
+    caller_service    TEXT NOT NULL,
+    knowledge_domain  TEXT,
     pipeline_stage    TEXT NOT NULL,
     task_type         TEXT NOT NULL DEFAULT 'chat' CHECK (
         task_type IN ('chat', 'embedding', 'rerank')
@@ -41,11 +43,30 @@ CREATE TABLE IF NOT EXISTS agent_llm_tasks (
     metadata_json     JSONB NOT NULL DEFAULT '{}'
 );
 
+ALTER TABLE agent_llm_tasks
+    ADD COLUMN IF NOT EXISTS caller_service TEXT;
+
+ALTER TABLE agent_llm_tasks
+    ADD COLUMN IF NOT EXISTS knowledge_domain TEXT;
+
+ALTER TABLE agent_llm_tasks
+    ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'chat';
+
+UPDATE agent_llm_tasks
+SET caller_service = caller_domain
+WHERE caller_service IS NULL;
+
+ALTER TABLE agent_llm_tasks
+    ALTER COLUMN caller_service SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_agent_llm_tasks_status_priority
     ON agent_llm_tasks(status, priority, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_agent_llm_tasks_type
     ON agent_llm_tasks(task_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_llm_tasks_service_domain
+    ON agent_llm_tasks(caller_service, knowledge_domain, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS agent_llm_requests (
     id                       TEXT PRIMARY KEY,
@@ -127,6 +148,9 @@ CREATE TABLE IF NOT EXISTS agent_llm_model_calls (
     id             TEXT PRIMARY KEY,
     call_type      TEXT NOT NULL CHECK (call_type IN ('embedding', 'rerank')),
     model          TEXT NOT NULL,
+    caller_service TEXT NOT NULL,
+    knowledge_domain TEXT,
+    pipeline_stage TEXT NOT NULL,
     input_count    INTEGER NOT NULL DEFAULT 0,
     status         TEXT NOT NULL CHECK (status IN ('succeeded', 'failed')),
     latency_ms     INTEGER,
@@ -135,5 +159,31 @@ CREATE TABLE IF NOT EXISTS agent_llm_model_calls (
     created_at     TIMESTAMPTZ NOT NULL
 );
 
+ALTER TABLE agent_llm_model_calls
+    ADD COLUMN IF NOT EXISTS caller_service TEXT;
+
+ALTER TABLE agent_llm_model_calls
+    ADD COLUMN IF NOT EXISTS knowledge_domain TEXT;
+
+ALTER TABLE agent_llm_model_calls
+    ADD COLUMN IF NOT EXISTS pipeline_stage TEXT;
+
+UPDATE agent_llm_model_calls
+SET caller_service = 'model'
+WHERE caller_service IS NULL;
+
+UPDATE agent_llm_model_calls
+SET pipeline_stage = call_type
+WHERE pipeline_stage IS NULL;
+
+ALTER TABLE agent_llm_model_calls
+    ALTER COLUMN caller_service SET NOT NULL;
+
+ALTER TABLE agent_llm_model_calls
+    ALTER COLUMN pipeline_stage SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_agent_llm_model_calls_type
     ON agent_llm_model_calls(call_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_llm_model_calls_service_domain
+    ON agent_llm_model_calls(caller_service, knowledge_domain, created_at DESC);

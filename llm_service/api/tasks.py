@@ -12,7 +12,8 @@ router = APIRouter(prefix="/api/v1")
 async def submit_task(body: TaskSubmitRequest, request: Request):
     svc = request.app.state.llm_service
     task_id = await svc.submit(
-        body.caller_domain,
+        body.caller_service,
+        body.knowledge_domain,
         body.pipeline_stage,
         template_key=body.template_key,
         input=body.input,
@@ -45,7 +46,8 @@ async def submit_embedding_task(body: EmbeddingTaskRequest, request: Request):
         texts,
         model=body.model,
         dimensions=body.dimensions,
-        caller_domain=body.caller_domain,
+        caller_service=body.caller_service,
+        knowledge_domain=body.knowledge_domain,
         pipeline_stage=body.pipeline_stage,
         idempotency_key=body.idempotency_key,
         max_attempts=body.max_attempts,
@@ -70,7 +72,8 @@ async def submit_rerank_task(body: RerankTaskRequest, request: Request):
         body.documents,
         model=body.model,
         top_n=body.top_n,
-        caller_domain=body.caller_domain,
+        caller_service=body.caller_service,
+        knowledge_domain=body.knowledge_domain,
         pipeline_stage=body.pipeline_stage,
         idempotency_key=body.idempotency_key,
         max_attempts=body.max_attempts,
@@ -91,7 +94,8 @@ async def submit_rerank_task(body: RerankTaskRequest, request: Request):
 async def execute_task(body: TaskSubmitRequest, request: Request):
     svc = request.app.state.llm_service
     result = await svc.execute(
-        body.caller_domain,
+        body.caller_service,
+        body.knowledge_domain,
         body.pipeline_stage,
         template_key=body.template_key,
         input=body.input,

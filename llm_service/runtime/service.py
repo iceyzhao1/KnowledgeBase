@@ -264,7 +264,8 @@ class LLMService:
         self,
         idempotency_key: str | None,
         task_type: str,
-        caller_domain: str,
+        caller_service: str,
+        knowledge_domain: str | None,
         pipeline_stage: str,
         request_params: tuple,
         event_message: str,
@@ -296,12 +297,12 @@ class LLMService:
 
                     await conn.execute(
                         """INSERT INTO agent_llm_tasks
-                           (id, caller_domain, pipeline_stage, task_type,
+                           (id, caller_domain, caller_service, knowledge_domain, pipeline_stage, task_type,
                             idempotency_key, status, priority, available_at, attempt_count, max_attempts,
                             created_at, updated_at, metadata_json)
-                           VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
                         (
-                            task_id, caller_domain, pipeline_stage, task_type,
+                            task_id, caller_service, caller_service, knowledge_domain, pipeline_stage, task_type,
                             idempotency_key, priority, now, ma,
                             now, now, json.dumps(metadata or {}),
                         ),
@@ -325,7 +326,8 @@ class LLMService:
 
     async def submit(
         self,
-        caller_domain: str,
+        caller_service: str,
+        knowledge_domain: str | None,
         pipeline_stage: str,
         *,
         template_key: str | None = None,
@@ -350,7 +352,8 @@ class LLMService:
         return await self._submit_with_idempotency(
             idempotency_key=idempotency_key,
             task_type="chat",
-            caller_domain=caller_domain,
+            caller_service=caller_service,
+            knowledge_domain=knowledge_domain,
             pipeline_stage=pipeline_stage,
             request_params=(
                 self._provider_name, self._default_model, template_key,
@@ -376,7 +379,8 @@ class LLMService:
         *,
         model: str | None = None,
         dimensions: int | None = None,
-        caller_domain: str = "model",
+        caller_service: str = "model",
+        knowledge_domain: str | None = None,
         pipeline_stage: str = "embedding",
         idempotency_key: str | None = None,
         metadata: dict | None = None,
@@ -388,7 +392,8 @@ class LLMService:
         return await self._submit_with_idempotency(
             idempotency_key=idempotency_key,
             task_type="embedding",
-            caller_domain=caller_domain,
+            caller_service=caller_service,
+            knowledge_domain=knowledge_domain,
             pipeline_stage=pipeline_stage,
             request_params=(
                 "embedding", actual_model, None,
@@ -409,7 +414,8 @@ class LLMService:
         *,
         model: str | None = None,
         top_n: int | None = None,
-        caller_domain: str = "model",
+        caller_service: str = "model",
+        knowledge_domain: str | None = None,
         pipeline_stage: str = "rerank",
         idempotency_key: str | None = None,
         metadata: dict | None = None,
@@ -421,7 +427,8 @@ class LLMService:
         return await self._submit_with_idempotency(
             idempotency_key=idempotency_key,
             task_type="rerank",
-            caller_domain=caller_domain,
+            caller_service=caller_service,
+            knowledge_domain=knowledge_domain,
             pipeline_stage=pipeline_stage,
             request_params=(
                 "rerank", actual_model, None,
@@ -441,7 +448,8 @@ class LLMService:
 
     async def execute(
         self,
-        caller_domain: str,
+        caller_service: str,
+        knowledge_domain: str | None,
         pipeline_stage: str,
         *,
         template_key: str | None = None,
@@ -460,7 +468,7 @@ class LLMService:
         # Boost priority so Worker's claim (ORDER BY priority DESC) prefers sync tasks
         effective_priority = max(priority, 999)
         task_id = await self.submit(
-            caller_domain, pipeline_stage,
+            caller_service, knowledge_domain, pipeline_stage,
             template_key=template_key, input=input, messages=messages,
             params=params, expected_output_type=expected_output_type,
             output_schema=output_schema,
@@ -635,6 +643,8 @@ def _map_task_row(row) -> dict:
     """Map agent_llm_tasks row to stable response dict."""
     return {
         "id": row["id"],
+        "caller_service": row["caller_service"],
+        "knowledge_domain": row["knowledge_domain"],
         "caller_domain": row["caller_domain"],
         "pipeline_stage": row["pipeline_stage"],
         "task_type": row["task_type"],

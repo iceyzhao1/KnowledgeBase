@@ -11,7 +11,8 @@ async def test_full_sync_execute_flow(api_client):
     exec_resp = await api_client.post(
         "/api/v1/execute",
         json={
-            "caller_domain": "mining",
+            "caller_service": "mining",
+            "knowledge_domain": "cloud_core_network",
             "pipeline_stage": "extract",
             "messages": [{"role": "user", "content": "extract entities"}],
             "expected_output_type": "json_object",
@@ -45,7 +46,8 @@ async def test_async_submit_then_get(api_client):
     submit = await api_client.post(
         "/api/v1/tasks",
         json={
-            "caller_domain": "serving",
+            "caller_service": "serving",
+            "knowledge_domain": "generic",
             "pipeline_stage": "search",
             "messages": [{"role": "user", "content": "search query"}],
             "priority": 50,
@@ -56,14 +58,16 @@ async def test_async_submit_then_get(api_client):
 
     task = (await api_client.get(f"/api/v1/tasks/{task_id}")).json()
     assert task["status"] == "queued"
-    assert task["caller_domain"] == "serving"
+    assert task["caller_service"] == "serving"
+    assert task["knowledge_domain"] == "generic"
     assert task["pipeline_stage"] == "search"
 
 
 async def test_idempotency_key_dedup(api_client):
     """Same idempotency_key returns same task_id."""
     payload = {
-        "caller_domain": "mining",
+        "caller_service": "mining",
+        "knowledge_domain": "cloud_core_network",
         "pipeline_stage": "normalize",
         "messages": [{"role": "user", "content": "normalize"}],
         "idempotency_key": "idem-integration-001",
@@ -82,7 +86,7 @@ async def test_cancel_prevents_execution(api_client):
     """Submit → cancel → verify status."""
     submit = await api_client.post(
         "/api/v1/tasks",
-        json={"caller_domain": "mining", "pipeline_stage": "test"},
+        json={"caller_service": "mining", "knowledge_domain": "cloud_core_network", "pipeline_stage": "test"},
     )
     task_id = submit.json()["task_id"]
 
@@ -106,7 +110,7 @@ async def test_execute_with_text_output_type(api_client):
     resp = await api_client.post(
         "/api/v1/execute",
         json={
-            "caller_domain": "evaluation",
+            "caller_service": "evaluation",
             "pipeline_stage": "grade",
             "messages": [{"role": "user", "content": "grade this"}],
             "expected_output_type": "text",
@@ -123,7 +127,8 @@ async def test_schema_validation(api_client):
     resp = await api_client.post(
         "/api/v1/execute",
         json={
-            "caller_domain": "mining",
+            "caller_service": "mining",
+            "knowledge_domain": "cloud_core_network",
             "pipeline_stage": "validate",
             "messages": [{"role": "user", "content": "test"}],
             "expected_output_type": "json_object",
@@ -141,7 +146,8 @@ async def test_metadata_persisted(api_client):
     resp = await api_client.post(
         "/api/v1/execute",
         json={
-            "caller_domain": "mining",
+            "caller_service": "mining",
+            "knowledge_domain": "cloud_core_network",
             "pipeline_stage": "extract",
             "messages": [{"role": "user", "content": "test"}],
             "metadata": {"source": "unit-test", "batch_no": 42},
@@ -171,7 +177,8 @@ async def test_template_key_expands_messages(api_client):
     resp = await api_client.post(
         "/api/v1/execute",
         json={
-            "caller_domain": "mining",
+            "caller_service": "mining",
+            "knowledge_domain": "cloud_core_network",
             "pipeline_stage": "test",
             "template_key": "nonexistent-template",
             "input": {"query": "test"},
@@ -187,7 +194,8 @@ async def test_task_detail_api(api_client):
     exec_resp = await api_client.post(
         "/api/v1/execute",
         json={
-            "caller_domain": "serving",
+            "caller_service": "serving",
+            "knowledge_domain": "generic",
             "pipeline_stage": "query_rewrite",
             "messages": [{"role": "user", "content": "rewrite"}],
         },
@@ -198,4 +206,5 @@ async def test_task_detail_api(api_client):
     assert detail.status_code == 200
     data = detail.json()["data"]
     assert data["task"]["id"] == task_id
-    assert data["task"]["caller_domain"] == "serving"
+    assert data["task"]["caller_service"] == "serving"
+    assert data["task"]["knowledge_domain"] == "generic"

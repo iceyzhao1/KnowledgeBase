@@ -20,7 +20,12 @@ CREATE TABLE IF NOT EXISTS agent_llm_prompt_templates (
 CREATE TABLE IF NOT EXISTS agent_llm_tasks (
     id                TEXT PRIMARY KEY,
     caller_domain     TEXT NOT NULL,
+    caller_service    TEXT NOT NULL,
+    knowledge_domain  TEXT,
     pipeline_stage    TEXT NOT NULL,
+    task_type         TEXT NOT NULL DEFAULT 'chat' CHECK (
+        task_type IN ('chat', 'embedding', 'rerank')
+    ),
     idempotency_key   TEXT,
     status            TEXT NOT NULL CHECK (
         status IN ('queued', 'running', 'succeeded', 'failed', 'dead_letter', 'cancelled')
@@ -39,6 +44,9 @@ CREATE TABLE IF NOT EXISTS agent_llm_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_agent_llm_tasks_status_priority
     ON agent_llm_tasks(status, priority, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_llm_tasks_service_domain
+    ON agent_llm_tasks(caller_service, knowledge_domain, created_at);
 
 CREATE TABLE IF NOT EXISTS agent_llm_requests (
     id                       TEXT PRIMARY KEY,
@@ -120,6 +128,9 @@ CREATE TABLE IF NOT EXISTS agent_llm_model_calls (
     id             TEXT PRIMARY KEY,
     call_type      TEXT NOT NULL CHECK (call_type IN ('embedding', 'rerank')),
     model          TEXT NOT NULL,
+    caller_service TEXT NOT NULL,
+    knowledge_domain TEXT,
+    pipeline_stage TEXT NOT NULL,
     input_count    INTEGER NOT NULL DEFAULT 0,
     status         TEXT NOT NULL CHECK (status IN ('succeeded', 'failed')),
     latency_ms     INTEGER,
@@ -130,3 +141,6 @@ CREATE TABLE IF NOT EXISTS agent_llm_model_calls (
 
 CREATE INDEX IF NOT EXISTS idx_agent_llm_model_calls_type
     ON agent_llm_model_calls(call_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_llm_model_calls_service_domain
+    ON agent_llm_model_calls(caller_service, knowledge_domain, created_at DESC);

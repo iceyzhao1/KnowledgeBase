@@ -27,9 +27,10 @@ class TaskManager:
 
     async def submit(
         self,
-        caller_domain: str,
+        caller_service: str,
         pipeline_stage: str,
         *,
+        knowledge_domain: str | None = None,
         task_type: str = "chat",
         idempotency_key: str | None = None,
         max_attempts: int | None = None,
@@ -44,8 +45,9 @@ class TaskManager:
                 return existing
 
         task_id = await self.insert_task_row(
-            caller_domain,
+            caller_service,
             pipeline_stage,
+            knowledge_domain=knowledge_domain,
             task_type=task_type,
             idempotency_key=idempotency_key,
             max_attempts=max_attempts,
@@ -57,9 +59,10 @@ class TaskManager:
 
     async def insert_task_row(
         self,
-        caller_domain: str,
+        caller_service: str,
         pipeline_stage: str,
         *,
+        knowledge_domain: str | None = None,
         task_type: str = "chat",
         idempotency_key: str | None = None,
         max_attempts: int | None = None,
@@ -76,12 +79,12 @@ class TaskManager:
         ma = max_attempts or self._default_max_attempts
         await self._db.execute(
             """INSERT INTO agent_llm_tasks
-               (id, caller_domain, pipeline_stage, task_type,
+               (id, caller_domain, caller_service, knowledge_domain, pipeline_stage, task_type,
                 idempotency_key, status, priority, available_at, attempt_count, max_attempts,
                 created_at, updated_at, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
             (
-                task_id, caller_domain, pipeline_stage, task_type,
+                task_id, caller_service, caller_service, knowledge_domain, pipeline_stage, task_type,
                 idempotency_key, priority, now, ma,
                 now, now, json.dumps(metadata or {}),
             ),

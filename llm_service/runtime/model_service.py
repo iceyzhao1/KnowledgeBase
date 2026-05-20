@@ -39,6 +39,9 @@ class ModelService:
         self,
         task_type: str,
         model: str,
+        caller_service: str,
+        knowledge_domain: str | None,
+        pipeline_stage: str,
         status: str,
         latency_ms: int | None,
         total_tokens: int | None,
@@ -60,11 +63,11 @@ class ModelService:
                 async with conn.transaction():
                     await conn.execute(
                         """INSERT INTO agent_llm_tasks
-                           (id, caller_domain, pipeline_stage, task_type, status,
+                           (id, caller_domain, caller_service, knowledge_domain, pipeline_stage, task_type, status,
                             priority, attempt_count, max_attempts,
                             created_at, updated_at, started_at, finished_at, metadata_json)
-                           VALUES (%s, 'sync', %s, %s, %s, 100, 1, 1, %s, %s, %s, %s, '{}')""",
-                        (task_id, task_type, task_type, status,
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, 100, 1, 1, %s, %s, %s, %s, '{}')""",
+                        (task_id, caller_service, caller_service, knowledge_domain, pipeline_stage, task_type, status,
                          now, now, now, now),
                     )
 
@@ -100,6 +103,27 @@ class ModelService:
                              json.dumps(raw_response or {}, ensure_ascii=False),
                              text_output, now),
                         )
+
+                    await conn.execute(
+                        """INSERT INTO agent_llm_model_calls
+                           (id, call_type, model, caller_service, knowledge_domain, pipeline_stage,
+                            input_count, status, latency_ms, token_usage, error_message, created_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (
+                            uuid.uuid4().hex,
+                            task_type,
+                            model,
+                            caller_service,
+                            knowledge_domain,
+                            pipeline_stage,
+                            len(input_json.get("texts") or input_json.get("documents") or []),
+                            status,
+                            latency_ms,
+                            total_tokens,
+                            error_message,
+                            now,
+                        ),
+                    )
         except Exception:
             logger.exception("Failed to record sync %s task", task_type)
 
@@ -120,7 +144,11 @@ class ModelService:
 
             text_output = "\n".join(texts)
             await self._record_sync_task(
-                task_type="embedding", model=model, status="succeeded",
+                task_type="embedding", model=model,
+                caller_service=body.caller_service or "model",
+                knowledge_domain=body.knowledge_domain,
+                pipeline_stage=body.pipeline_stage,
+                status="succeeded",
                 latency_ms=latency, total_tokens=token_usage,
                 input_json=input_json, raw_response=raw, text_output=text_output,
             )
@@ -141,7 +169,11 @@ class ModelService:
             latency = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
             error_type = getattr(e, "error_type", "unexpected_error")
             await self._record_sync_task(
-                task_type="embedding", model=model, status="failed",
+                task_type="embedding", model=model,
+                caller_service=body.caller_service or "model",
+                knowledge_domain=body.knowledge_domain,
+                pipeline_stage=body.pipeline_stage,
+                status="failed",
                 latency_ms=latency, total_tokens=None,
                 input_json=input_json,
                 error_type=error_type, error_message=str(e)[:500],
@@ -176,7 +208,11 @@ class ModelService:
             text_output = "\n".join(lines)
 
             await self._record_sync_task(
-                task_type="rerank", model=model, status="succeeded",
+                task_type="rerank", model=model,
+                caller_service=body.caller_service or "model",
+                knowledge_domain=body.knowledge_domain,
+                pipeline_stage=body.pipeline_stage,
+                status="succeeded",
                 latency_ms=latency, total_tokens=token_usage,
                 input_json=input_json, raw_response=raw, text_output=text_output,
             )
@@ -196,7 +232,11 @@ class ModelService:
             latency = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
             error_type = getattr(e, "error_type", "unexpected_error")
             await self._record_sync_task(
-                task_type="rerank", model=model, status="failed",
+                task_type="rerank", model=model,
+                caller_service=body.caller_service or "model",
+                knowledge_domain=body.knowledge_domain,
+                pipeline_stage=body.pipeline_stage,
+                status="failed",
                 latency_ms=latency, total_tokens=None,
                 input_json=input_json,
                 error_type=error_type, error_message=str(e)[:500],
