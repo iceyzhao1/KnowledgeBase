@@ -2,7 +2,10 @@
   <div class="llm-view">
     <!-- Header -->
     <div class="llm-view__header">
-      <h2 class="llm-view__title">LLM 服务</h2>
+      <div class="llm-view__title-wrap">
+        <h2 class="llm-view__title">LLM 服务</h2>
+        <span class="llm-view__scope">当前知识域：{{ domainStore.currentDomain }}</span>
+      </div>
       <el-button @click="loadAll" :loading="loading">
         <el-icon><Refresh /></el-icon>
       </el-button>
@@ -92,9 +95,6 @@
             <el-option label="Embedding" value="embedding" />
             <el-option label="Rerank" value="rerank" />
           </el-select>
-          <el-select v-model="filterDomain" placeholder="域" size="default" clearable style="width: 130px">
-            <el-option v-for="d in filterDomains" :key="d" :label="d" :value="d" />
-          </el-select>
           <el-select v-model="filterStage" placeholder="阶段" size="default" clearable style="width: 140px">
             <el-option v-for="s in filterStages" :key="s" :label="s" :value="s" />
           </el-select>
@@ -124,9 +124,14 @@
                 <StatusBadge :status="row.status" />
               </template>
             </el-table-column>
-            <el-table-column label="域" width="100">
+            <el-table-column label="知识域" width="150">
               <template #default="{ row }">
-                <span class="domain-label">{{ row.caller_domain || '-' }}</span>
+                <span class="domain-label">{{ row.knowledge_domain || domainStore.currentDomain }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="调用方" width="110">
+              <template #default="{ row }">
+                <span class="service-label">{{ row.caller_service || '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column label="阶段" min-width="130">
@@ -186,6 +191,11 @@
                 <span class="text-id">{{ row.template_key }}</span>
               </template>
             </el-table-column>
+            <el-table-column label="知识域" width="150">
+              <template #default="{ row }">
+                <span class="domain-label">{{ row.knowledge_domain || 'global' }}</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="output_type" label="输出类型" width="120">
               <template #default="{ row }">
                 {{ row.expected_output_type || row.output_type || '-' }}
@@ -221,6 +231,7 @@
                 <div class="tpl-drawer__meta">
                   <table class="kv-table">
                     <tr><td>Key</td><td class="text-id">{{ selectedTemplate.template_key }}</td></tr>
+                    <tr><td>知识域</td><td>{{ selectedTemplate.knowledge_domain || 'global' }}</td></tr>
                     <tr><td>输出类型</td><td>{{ selectedTemplate.expected_output_type || selectedTemplate.output_type || '-' }}</td></tr>
                     <tr><td>状态</td><td><span class="type-badge">{{ selectedTemplate.status || 'active' }}</span></td></tr>
                     <tr v-if="selectedTemplate.purpose"><td>用途</td><td>{{ selectedTemplate.purpose }}</td></tr>
@@ -310,9 +321,7 @@ function formatTplJson(obj: unknown): string {
 // Filters
 const filterStatus = ref('')
 const filterType = ref('')
-const filterDomain = ref('')
 const filterStage = ref('')
-const filterDomains = computed(() => stats.value?.domains ?? [])
 const filterStages = computed(() => stats.value?.stages ?? [])
 
 const allStatuses = [
@@ -392,17 +401,20 @@ function formatTime(t?: string | null) {
 
 async function loadStats() {
   loading.value = true
-  try { stats.value = await llmApi.getStats() } catch { stats.value = null }
+  try { stats.value = await llmApi.getStats({ domain: domainStore.currentDomain }) } catch { stats.value = null }
   finally { loading.value = false }
 }
 
 async function loadTasks() {
   loadingTasks.value = true
   try {
-    const params: Record<string, unknown> = { page: currentPage.value, page_size: pageSize }
+    const params: Record<string, unknown> = {
+      domain: domainStore.currentDomain,
+      page: currentPage.value,
+      page_size: pageSize,
+    }
     if (filterStatus.value) params.status = filterStatus.value
     if (filterType.value) params.task_type = filterType.value
-    if (filterDomain.value) params.domain = filterDomain.value
     if (filterStage.value) params.stage = filterStage.value
     const res = await llmApi.getTasks(params)
     tasks.value = res.items
@@ -414,7 +426,7 @@ async function loadTasks() {
 async function loadTemplates() {
   loadingTemplates.value = true
   try {
-    const list = await llmApi.getTemplates()
+    const list = await llmApi.getTemplates({ domain: domainStore.currentDomain })
     templates.value = Array.isArray(list) ? list : []
   } catch { templates.value = [] }
   finally { loadingTemplates.value = false }
@@ -428,7 +440,7 @@ function goToTask(row: LlmTask) {
   router.push(`/llm/${row.id}`)
 }
 
-watch([filterStatus, filterType, filterDomain, filterStage], () => { currentPage.value = 1; loadTasks() })
+watch([filterStatus, filterType, filterStage], () => { currentPage.value = 1; loadTasks() })
 watch(currentPage, loadTasks)
 watch(activeTab, (tab) => {
   // Sync tab to URL query param
@@ -452,13 +464,18 @@ onMounted(async () => {
     }
   }
 })
-watch(() => domainStore.currentDomain, loadAll)
+watch(() => domainStore.currentDomain, () => {
+  currentPage.value = 1
+  loadAll()
+})
 </script>
 
 <style scoped>
 .llm-view { display: flex; flex-direction: column; gap: 16px; }
 .llm-view__header { display: flex; align-items: center; justify-content: space-between; }
+.llm-view__title-wrap { display: flex; flex-direction: column; gap: 4px; }
 .llm-view__title { font-size: 16px; font-weight: 650; color: var(--kb-text-primary); margin: 0; letter-spacing: -0.2px; }
+.llm-view__scope { font-size: 12px; color: var(--kb-text-tertiary); }
 
 .llm-view__tabs :deep(.el-tabs__header) { margin-bottom: 14px; }
 .tab-count { font-size: 11px; color: var(--kb-text-tertiary); margin-left: 4px; }
@@ -495,6 +512,7 @@ watch(() => domainStore.currentDomain, loadAll)
 .type-badge--embedding { background: rgba(16, 185, 129, 0.1); color: #10b981; }
 .type-badge--rerank { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
 .domain-label { font-size: 12px; color: var(--kb-text-secondary); }
+.service-label { font-size: 12px; color: var(--kb-text-secondary); font-weight: 600; }
 .num-mono { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--kb-text-secondary); }
 .text-truncate { font-size: 12px; color: var(--kb-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 

@@ -56,6 +56,7 @@ class LLMService:
     async def _resolve_template(
         self,
         template_key: str | None,
+        knowledge_domain: str | None,
         input: dict | None,
         messages: list[dict] | None,
         expected_output_type: str | None,
@@ -73,7 +74,7 @@ class LLMService:
         if not template_key:
             return result
 
-        tpl = await self._templates.get_by_key(template_key)
+        tpl = await self._templates.get_by_key(template_key, knowledge_domain)
         if not tpl:
             return result
 
@@ -297,12 +298,12 @@ class LLMService:
 
                     await conn.execute(
                         """INSERT INTO agent_llm_tasks
-                           (id, caller_domain, caller_service, knowledge_domain, pipeline_stage, task_type,
+                           (id, caller_service, knowledge_domain, pipeline_stage, task_type,
                             idempotency_key, status, priority, available_at, attempt_count, max_attempts,
                             created_at, updated_at, metadata_json)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
+                           VALUES (%s, %s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
                         (
-                            task_id, caller_service, caller_service, knowledge_domain, pipeline_stage, task_type,
+                            task_id, caller_service, knowledge_domain, pipeline_stage, task_type,
                             idempotency_key, priority, now, ma,
                             now, now, json.dumps(metadata or {}),
                         ),
@@ -343,7 +344,7 @@ class LLMService:
     ) -> str:
         # Template expansion
         resolved = await self._resolve_template(
-            template_key, input, messages, expected_output_type, output_schema,
+            template_key, knowledge_domain, input, messages, expected_output_type, output_schema,
         )
         actual_messages = resolved["messages"] or [{"role": "user", "content": json.dumps(input or {})}]
         actual_expected_type = resolved["expected_output_type"] or "json_object"
@@ -484,7 +485,7 @@ class LLMService:
 
         # Resolve messages for execution (template may have expanded them)
         resolved = await self._resolve_template(
-            template_key, input, messages, expected_output_type, output_schema,
+            template_key, knowledge_domain, input, messages, expected_output_type, output_schema,
         )
         actual_messages = resolved["messages"] or [{"role": "user", "content": json.dumps(input or {})}]
         actual_expected_type = resolved["expected_output_type"] or "json_object"
@@ -645,7 +646,6 @@ def _map_task_row(row) -> dict:
         "id": row["id"],
         "caller_service": row["caller_service"],
         "knowledge_domain": row["knowledge_domain"],
-        "caller_domain": row["caller_domain"],
         "pipeline_stage": row["pipeline_stage"],
         "task_type": row["task_type"],
         "status": row["status"],

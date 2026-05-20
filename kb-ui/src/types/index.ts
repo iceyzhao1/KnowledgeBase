@@ -216,6 +216,7 @@ export interface LlmTaskStats {
   succeeded_attempts: number
   total_tokens: number
   avg_latency_ms: number
+  services?: string[]
   domains?: string[]
   stages?: string[]
 }
@@ -223,7 +224,8 @@ export interface LlmTaskStats {
 export interface LlmTask {
   id: string
   task_type: 'chat' | 'embedding' | 'rerank'
-  caller_domain?: string
+  caller_service?: string
+  knowledge_domain?: string
   pipeline_stage?: string
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'dead_letter' | 'cancelled'
   priority: number
@@ -234,6 +236,8 @@ export interface LlmTask {
   finished_at?: string
   idempotency_key?: string
   error_message?: string
+  total_tokens?: number
+  latency_ms?: number
   metadata?: Record<string, unknown>
 }
 

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS agent_llm_prompt_templates (
     id                   TEXT PRIMARY KEY,
     template_key         TEXT NOT NULL,
     template_version     TEXT NOT NULL,
+    knowledge_domain     TEXT,
     purpose              TEXT NOT NULL,
     system_prompt        TEXT,
     user_prompt_template TEXT NOT NULL,
@@ -14,13 +15,23 @@ CREATE TABLE IF NOT EXISTS agent_llm_prompt_templates (
     output_schema_json   JSONB NOT NULL DEFAULT '{}',
     status               TEXT NOT NULL CHECK (status IN ('draft', 'active', 'archived')),
     created_at           TIMESTAMPTZ NOT NULL,
-    metadata_json        JSONB NOT NULL DEFAULT '{}',
-    UNIQUE (template_key, template_version)
+    metadata_json        JSONB NOT NULL DEFAULT '{}'
 );
+
+ALTER TABLE agent_llm_prompt_templates
+    ADD COLUMN IF NOT EXISTS knowledge_domain TEXT;
+
+ALTER TABLE agent_llm_prompt_templates
+    DROP CONSTRAINT IF EXISTS agent_llm_prompt_templates_template_key_template_version_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_llm_prompt_templates_key_version_domain
+    ON agent_llm_prompt_templates(template_key, template_version, COALESCE(knowledge_domain, ''));
+
+CREATE INDEX IF NOT EXISTS idx_agent_llm_prompt_templates_domain_status
+    ON agent_llm_prompt_templates(knowledge_domain, status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS agent_llm_tasks (
     id                TEXT PRIMARY KEY,
-    caller_domain     TEXT NOT NULL,
     caller_service    TEXT NOT NULL,
     knowledge_domain  TEXT,
     pipeline_stage    TEXT NOT NULL,
@@ -52,12 +63,11 @@ ALTER TABLE agent_llm_tasks
 ALTER TABLE agent_llm_tasks
     ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'chat';
 
-UPDATE agent_llm_tasks
-SET caller_service = caller_domain
-WHERE caller_service IS NULL;
-
 ALTER TABLE agent_llm_tasks
     ALTER COLUMN caller_service SET NOT NULL;
+
+ALTER TABLE agent_llm_tasks
+    DROP COLUMN IF EXISTS caller_domain;
 
 CREATE INDEX IF NOT EXISTS idx_agent_llm_tasks_status_priority
     ON agent_llm_tasks(status, priority, created_at);

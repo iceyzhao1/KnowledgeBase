@@ -20,8 +20,8 @@ export function useLlmApi() {
       return data
     },
 
-    async getStats(): Promise<LlmTaskStats> {
-      const { data } = await client.get('/api/v1/stats')
+    async getStats(params?: { domain?: string; service?: string }): Promise<LlmTaskStats> {
+      const { data } = await client.get('/api/v1/stats', { params })
       // API returns { success: true, data: { ... } }
       const resp = data as Record<string, unknown>
       return (resp.data ?? resp) as LlmTaskStats
@@ -34,6 +34,7 @@ export function useLlmApi() {
       status?: string
       task_type?: string
       domain?: string
+      service?: string
       stage?: string
       page?: number
       page_size?: number
@@ -89,9 +90,9 @@ export function useLlmApi() {
       await client.post(`/api/v1/tasks/${taskId}/cancel`)
     },
 
-    async getTemplates(): Promise<Record<string, unknown>[]> {
+    async getTemplates(params?: { domain?: string }): Promise<Record<string, unknown>[]> {
       try {
-        const { data } = await client.get('/api/v1/templates')
+        const { data } = await client.get('/api/v1/templates', { params })
         return Array.isArray(data) ? data : []
       } catch { return [] }
     },

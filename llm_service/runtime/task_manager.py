@@ -79,12 +79,12 @@ class TaskManager:
         ma = max_attempts or self._default_max_attempts
         await self._db.execute(
             """INSERT INTO agent_llm_tasks
-               (id, caller_domain, caller_service, knowledge_domain, pipeline_stage, task_type,
+               (id, caller_service, knowledge_domain, pipeline_stage, task_type,
                 idempotency_key, status, priority, available_at, attempt_count, max_attempts,
                 created_at, updated_at, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
             (
-                task_id, caller_service, caller_service, knowledge_domain, pipeline_stage, task_type,
+                task_id, caller_service, knowledge_domain, pipeline_stage, task_type,
                 idempotency_key, priority, now, ma,
                 now, now, json.dumps(metadata or {}),
             ),

@@ -63,11 +63,11 @@ class ModelService:
                 async with conn.transaction():
                     await conn.execute(
                         """INSERT INTO agent_llm_tasks
-                           (id, caller_domain, caller_service, knowledge_domain, pipeline_stage, task_type, status,
+                           (id, caller_service, knowledge_domain, pipeline_stage, task_type, status,
                             priority, attempt_count, max_attempts,
                             created_at, updated_at, started_at, finished_at, metadata_json)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, 100, 1, 1, %s, %s, %s, %s, '{}')""",
-                        (task_id, caller_service, caller_service, knowledge_domain, pipeline_stage, task_type, status,
+                           VALUES (%s, %s, %s, %s, %s, %s, 100, 1, 1, %s, %s, %s, %s, '{}')""",
+                        (task_id, caller_service, knowledge_domain, pipeline_stage, task_type, status,
                          now, now, now, now),
                     )
 

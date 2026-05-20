@@ -29,7 +29,8 @@
         <div class="info-card">
           <h4 class="info-card__title">任务信息</h4>
           <table class="kv-table">
-            <tr><td>域</td><td>{{ task.caller_domain || '-' }}</td></tr>
+            <tr><td>知识域</td><td>{{ task.knowledge_domain || '-' }}</td></tr>
+            <tr><td>调用方</td><td>{{ task.caller_service || '-' }}</td></tr>
             <tr><td>阶段</td><td>{{ task.pipeline_stage || '-' }}</td></tr>
             <tr><td>优先级</td><td>{{ task.priority }}</td></tr>
             <tr><td>重试</td><td>{{ task.attempt_count }} / {{ task.max_attempts }}</td></tr>
