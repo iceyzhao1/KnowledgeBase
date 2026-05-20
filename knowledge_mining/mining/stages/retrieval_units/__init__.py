@@ -28,10 +28,9 @@ logger = logging.getLogger(__name__)
 # Default values — overridden by DomainProfile.retrieval_policy
 _DEFAULT_MAX_QUESTIONS_PER_SEGMENT = 2
 
-# Semantic roles eligible for question generation (demo gate)
-_QUESTIONWORTHY_ROLES = frozenset({
-    "concept", "parameter", "procedure_step", "troubleshooting_step",
-    "example", "note",
+# Semantic roles explicitly NOT eligible for question generation
+_NOT_QUESTIONWORTHY_ROLES = frozenset({
+    "navigation", "toc", "metadata",
 })
 
 
@@ -566,8 +565,8 @@ def _is_questionworthy(seg: RawSegmentData) -> bool:
     assessment = seg.metadata_json.get("content_assessment", {})
     if assessment and not assessment.get("is_substantive", True):
         return False
-    # Demo gate: only generate questions for certain semantic roles
-    if seg.semantic_role and seg.semantic_role not in _QUESTIONWORTHY_ROLES:
+    # Only exclude explicitly non-questionworthy roles; "unknown" passes through
+    if seg.semantic_role in _NOT_QUESTIONWORTHY_ROLES:
         return False
     return True
 

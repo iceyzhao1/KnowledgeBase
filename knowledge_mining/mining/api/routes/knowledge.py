@@ -89,7 +89,7 @@ async def get_document(document_id: str, request: Request) -> dict:
     async with pool.connection() as conn:
         cur = await conn.execute(
             "SELECT id, document_key, document_name, document_type, "
-            "source_uri, created_at "
+            "created_at "
             "FROM asset_documents WHERE id = %s", [document_id]
         )
         doc = await cur.fetchone()

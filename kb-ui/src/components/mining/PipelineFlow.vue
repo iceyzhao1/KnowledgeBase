@@ -38,35 +38,52 @@ const props = defineProps<{
   stageEvents: MiningRunStage[]
 }>()
 
-const stages = [
-  { key: 'ingest', label: 'Ingest' },
-  { key: 'parse', label: 'Parse' },
-  { key: 'segment', label: 'Segment' },
-  { key: 'enrich', label: 'Enrich' },
-  { key: 'relations', label: 'Relations' },
-  { key: 'discourse', label: 'Discourse' },
-  { key: 'units', label: 'Retrieval Units' },
-  { key: 'snapshot', label: 'Snapshot' },
-  { key: 'build', label: 'Build' },
+interface PipelineStage {
+  key: string
+  label: string
+  backendKeys: string[]
+}
+
+const stages: PipelineStage[] = [
+  { key: 'parse', label: 'Parse', backendKeys: ['parse'] },
+  { key: 'segment', label: 'Segment', backendKeys: ['segment'] },
+  { key: 'enrich', label: 'Enrich', backendKeys: ['enrich'] },
+  { key: 'build_relations', label: 'Relations', backendKeys: ['build_relations'] },
+  { key: 'discourse', label: 'Discourse', backendKeys: ['discourse'] },
+  { key: 'retrieval_units', label: 'Retrieval Units', backendKeys: ['retrieval_units', 'build_retrieval_units'] },
+  { key: 'select_snapshot', label: 'Snapshot', backendKeys: ['select_snapshot'] },
+  { key: 'build', label: 'Build & Release', backendKeys: ['assemble_build', 'validate_build', 'publish_release'] },
 ]
 
 const stageIcons: Record<string, string> = {
-  ingest: '📂', parse: '🔍', segment: '✂️', enrich: '🧠',
-  relations: '🔗', discourse: '💬', units: '🔎', snapshot: '📸', build: '📦',
+  parse: '🔍', segment: '✂️', enrich: '🧠', build_relations: '🔗',
+  discourse: '💬', retrieval_units: '🔎', select_snapshot: '📸', build: '📦',
 }
 
-function findStage(key: string): MiningRunStage | undefined {
-  return props.stageEvents.find(s => s.stage === key)
+function findStageEvents(stage: PipelineStage): MiningRunStage[] {
+  return props.stageEvents.filter(s => stage.backendKeys.includes(s.stage))
 }
 
 function getStageStatus(key: string): string {
-  const s = findStage(key)
-  return s?.status || 'pending'
+  const stage = stages.find(s => s.key === key)
+  if (!stage) return 'pending'
+  const events = findStageEvents(stage)
+  if (events.length === 0) return 'pending'
+  if (events.some(e => e.status === 'failed')) return 'failed'
+  const started = events.filter(e => e.status === 'started')
+  const completed = events.filter(e => e.status === 'completed')
+  if (started.length > completed.length) return 'running'
+  if (stage.backendKeys.every(bk => events.some(e => e.stage === bk && e.status === 'completed'))) return 'completed'
+  if (completed.length > 0) return 'running'
+  return 'pending'
 }
 
 function getStageDuration(key: string): number {
-  const s = findStage(key)
-  return s?.duration_ms || 0
+  const stage = stages.find(s => s.key === key)
+  if (!stage) return 0
+  return findStageEvents(stage)
+    .filter(e => e.status === 'completed' && e.duration_ms != null)
+    .reduce((sum, e) => sum + (e.duration_ms ?? 0), 0)
 }
 
 function formatMs(ms: number): string {

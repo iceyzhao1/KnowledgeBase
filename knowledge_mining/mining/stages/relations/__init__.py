@@ -37,16 +37,19 @@ class DiscourseRelationBuilder:
     stage_version = "1"
 
     _LLM_TO_DB_RELATION = {
-        "ELABORATION": "elaborates",
-        "SEQUENCE": "sequences",
-        "CAUSATION": "causes",
-        "EVIDENCE": "evidences",
-        "BACKGROUND": "backgrounds",
-        "EXEMPLIFICATION": "exemplifies",
-        "CONTRAST": "contrasts_with",
-        "CONCESSION": "concedes",
-        "CONDITION": "conditions",
-        "PURPOSE": "purposes",
+        # Map template prompt relation names → DB relation_type
+        "ELABORATES": "elaborates",
+        "EVIDENCES": "evidences",
+        "CAUSES": "causes",
+        "RESULTS_IN": "results_in",
+        "BACKGROUNDS": "backgrounds",
+        "CONDITIONS": "conditions",
+        "SUMMARIZES": "summarizes",
+        "JUSTIFIES": "justifies",
+        "ENABLES": "enables",
+        "CONTRASTS_WITH": "contrasts_with",
+        "PARALLELS": "parallels",
+        "SEQUENCES": "sequences",
     }
     _RST_WHITELIST = frozenset(_LLM_TO_DB_RELATION.values())
     _MIN_CONFIDENCE = 0.5

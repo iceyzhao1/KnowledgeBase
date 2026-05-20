@@ -85,7 +85,9 @@ class LlmClient:
             client = self._get_client()
             resp = client.post(f"{self._base_url}/api/v1/tasks", json=payload)
             resp.raise_for_status()
-            return resp.json().get("task_id")
+            body = resp.json()
+            # API wraps in {"success": true, "data": {"task_id": ...}}
+            return body.get("data", body).get("task_id")
         except Exception as e:
             logger.warning("submit_task failed: %s", e)
             self.close()
@@ -105,14 +107,16 @@ class LlmClient:
                 # Check task status
                 resp = client.get(f"{self._base_url}/api/v1/tasks/{task_id}")
                 resp.raise_for_status()
-                task_data = resp.json()
-                status = task_data.get("status", "")
+                body = resp.json()
+                task_data = body.get("data", {}).get("task", {})
+                status = task_data.get("status") if task_data else body.get("status", "")
 
                 if status == "succeeded":
                     # Fetch result
                     r_resp = client.get(f"{self._base_url}/api/v1/tasks/{task_id}/result")
                     r_resp.raise_for_status()
-                    result = r_resp.json()
+                    r_body = r_resp.json()
+                    result = r_body.get("data", r_body)
                     parsed = result.get("parsed_output")
                     # parsed_output might already be a list/dict
                     if isinstance(parsed, list):
@@ -148,7 +152,10 @@ class LlmClient:
             client = self._get_client()
             resp = client.get(f"{self._base_url}/api/v1/tasks/{task_id}")
             resp.raise_for_status()
-            return resp.json().get("status")
+            body = resp.json()
+            # API wraps in {"success": true, "data": {"task": {"status": ...}}}
+            task = body.get("data", {}).get("task", {})
+            return task.get("status") if task else body.get("status")
         except Exception as e:
             logger.warning("check_status error for %s: %s", task_id, e)
             self.close()
@@ -160,7 +167,8 @@ class LlmClient:
             client = self._get_client()
             resp = client.get(f"{self._base_url}/api/v1/tasks/{task_id}/result")
             resp.raise_for_status()
-            result = resp.json()
+            body = resp.json()
+            result = body.get("data", body)
             parsed = result.get("parsed_output")
             if isinstance(parsed, list):
                 return parsed
