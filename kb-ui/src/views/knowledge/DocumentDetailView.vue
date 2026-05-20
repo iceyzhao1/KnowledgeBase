@@ -252,152 +252,40 @@ watch(() => domainStore.currentDomain, loadData)
   margin-left: 4px;
 }
 
-/* Card list */
-.card-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* Segment card */
-.segment-card {
-  background: var(--kb-bg-card);
-  border: 1px solid var(--kb-border-light);
-  border-radius: var(--kb-radius-sm);
-  padding: 12px 16px;
-}
-
-.segment-card__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.segment-card__idx {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--kb-text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-.segment-card__type {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--kb-accent-soft);
-  color: var(--kb-accent);
-  font-weight: 600;
-}
-
-.segment-card__role {
-  font-size: 11px;
+/* Inline tags — consistent with RunDocumentDetailView */
+.role-tag {
+  display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
   background: var(--kb-warning-soft);
   color: var(--kb-warning);
+  font-size: 11px;
   font-weight: 600;
 }
 
-.segment-card__tokens {
-  font-size: 11px;
-  color: var(--kb-text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-.segment-card__section {
-  font-size: 11px;
-  color: var(--kb-text-secondary);
-}
-
-.segment-card__text {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--kb-text-primary);
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-/* Unit card */
-.unit-card {
-  background: var(--kb-bg-card);
-  border: 1px solid var(--kb-border-light);
-  border-radius: var(--kb-radius-sm);
-  padding: 12px 16px;
-}
-
-.unit-card__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.unit-card__type {
-  font-size: 11px;
+.type-tag {
+  display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
   background: var(--kb-success-soft);
   color: var(--kb-success);
-  font-weight: 600;
-}
-
-.unit-card__weight {
   font-size: 11px;
-  color: var(--kb-text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-.unit-card__title {
-  font-size: 13px;
   font-weight: 600;
-  color: var(--kb-text-primary);
-  margin-bottom: 4px;
 }
 
-.unit-card__text {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--kb-text-secondary);
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-/* Relation list */
-.relation-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.relation-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  background: var(--kb-bg-card);
-  border: 1px solid var(--kb-border-light);
-  border-radius: var(--kb-radius-sm);
-  font-size: 12px;
-}
-
-.relation-row__id {
-  font-family: 'SF Mono', 'Cascadia Code', monospace;
-  color: var(--kb-accent);
-  font-weight: 500;
-}
-
-.relation-row__type {
-  color: var(--kb-text-primary);
-  font-weight: 600;
-  background: var(--kb-border-light);
+.relation-type-tag {
+  display: inline-block;
   padding: 1px 8px;
   border-radius: 3px;
+  background: var(--kb-accent-soft);
+  color: var(--kb-accent);
+  font-size: 11px;
+  font-weight: 600;
 }
 
-.relation-row__conf {
-  color: var(--kb-text-tertiary);
-  font-variant-numeric: tabular-nums;
+.text-preview {
+  font-size: 12px;
+  color: var(--kb-text-secondary);
+  line-height: 1.4;
 }
 </style>
