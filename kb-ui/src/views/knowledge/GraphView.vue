@@ -5,7 +5,7 @@
       <h2 class="graph-view__title">知识图谱</h2>
       <div class="graph-view__actions">
         <el-select v-model="filterType" placeholder="关系类型" size="default" clearable style="width: 160px">
-          <el-option v-for="rt in relationTypes" :key="rt" :label="rt" :value="rt" />
+          <el-option v-for="rt in relationTypes" :key="rt" :label="relationTypeLabel(rt)" :value="rt" />
         </el-select>
         <el-button @click="loadData" :loading="loading">
           <el-icon><Refresh /></el-icon>
@@ -44,19 +44,19 @@
           :header-cell-style="{ background: 'transparent' }"
           size="default"
         >
-          <el-table-column label="Source" min-width="120">
+          <el-table-column label="源分段" min-width="160">
             <template #default="{ row }">
-              <span class="text-id">{{ row.source_segment_id.slice(0, 8) }}</span>
+              <span class="text-preview">{{ truncate(row.source_text, 60) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="关系" width="160">
+          <el-table-column label="关系" width="140">
             <template #default="{ row }">
-              <span class="relation-badge">{{ row.relation_type }}</span>
+              <span class="relation-badge">{{ relationTypeLabel(row.relation_type) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="Target" min-width="120">
+          <el-table-column label="目标分段" min-width="160">
             <template #default="{ row }">
-              <span class="text-id">{{ row.target_segment_id.slice(0, 8) }}</span>
+              <span class="text-preview">{{ truncate(row.target_text, 60) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="置信度" width="100" align="center">
@@ -120,7 +120,7 @@ const pagedRelations = computed(() => {
 })
 
 const categories = computed(() =>
-  relationTypes.value.map(t => ({ name: t }))
+  relationTypes.value.map(t => ({ name: relationTypeLabel(t) }))
 )
 
 // Build graph nodes/edges from flat relation data
@@ -131,7 +131,7 @@ const graphNodes = computed<GraphNode[]>(() => {
       const catIdx = relationTypes.value.indexOf(r.relation_type)
       nodeMap.set(r.source_segment_id, {
         id: r.source_segment_id,
-        name: r.source_segment_id.slice(0, 8),
+        name: truncate(r.source_text, 20) || r.source_segment_id.slice(0, 8),
         category: catIdx >= 0 ? catIdx : 0,
         value: 1,
       })
@@ -142,7 +142,7 @@ const graphNodes = computed<GraphNode[]>(() => {
     if (!nodeMap.has(r.target_segment_id)) {
       nodeMap.set(r.target_segment_id, {
         id: r.target_segment_id,
-        name: r.target_segment_id.slice(0, 8),
+        name: truncate(r.target_text, 20) || r.target_segment_id.slice(0, 8),
         category: 0,
         value: 1,
       })
@@ -162,6 +162,20 @@ const graphEdges = computed<GraphEdge[]>(() =>
     weight: r.weight ?? r.confidence,
   }))
 )
+
+function truncate(text: string | null | undefined, len: number) {
+  if (!text) return ''
+  return text.length > len ? text.slice(0, len) + '...' : text
+}
+
+function relationTypeLabel(type: string) {
+  const map: Record<string, string> = {
+    elaboration: '详述', contrast: '对比', sequence: '顺序',
+    cause_effect: '因果', problem_solution: '问题-方案',
+    similarity: '相似', dependency: '依赖', reference: '引用',
+  }
+  return map[type] || type
+}
 
 async function loadData() {
   loading.value = true
@@ -255,17 +269,17 @@ watch(() => domainStore.currentDomain, loadData)
   margin-top: 12px;
 }
 
-.text-id {
-  font-family: 'SF Mono', 'Cascadia Code', monospace;
+.text-preview {
   font-size: 12px;
-  color: var(--kb-accent);
-  font-weight: 500;
+  color: var(--kb-text-secondary);
+  line-height: 1.4;
 }
 
 .relation-badge {
+  display: inline-block;
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 1px 8px;
+  border-radius: 3px;
   background: var(--kb-accent-soft);
   color: var(--kb-accent);
   font-weight: 600;

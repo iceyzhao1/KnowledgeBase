@@ -200,8 +200,7 @@ async function handleCreate() {
     // Upload files first if selected
     if (uploadFiles.value.length > 0) {
       const files = uploadFiles.value
-        .map(f => f.raw)
-        .filter((f): f is File => f instanceof File)
+        .flatMap(f => f.raw ? [f.raw as File] : [])
       if (files.length === 0) {
         ElMessage.warning('请选择有效的文件')
         creating.value = false

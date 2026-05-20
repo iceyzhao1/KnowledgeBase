@@ -189,7 +189,7 @@ function stageLabel(stage: string) {
 function docDisplayName(row: Record<string, unknown>) {
   if (row.document_name) return row.document_name
   const dk = row.document_key as string | undefined
-  if (dk?.startsWith('doc:/')) return dk.replace('doc:/', '', 1)
+  if (dk?.startsWith('doc:/')) return dk.replace('doc:/', '')
   if (row.document_id) return (row.document_id as string).slice(0, 8)
   return '-'
 }

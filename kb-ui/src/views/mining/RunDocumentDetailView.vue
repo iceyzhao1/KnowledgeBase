@@ -189,9 +189,12 @@ const miningApi = useMiningApi()
 
 const activeArtifactTab = ref('segments')
 const artifactsLoading = ref(false)
-const segments = ref<Record<string, unknown>[]>([])
-const units = ref<Record<string, unknown>[]>([])
-const relations = ref<Record<string, unknown>[]>([])
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const segments = ref<any[]>([])
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const units = ref<any[]>([])
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const relations = ref<any[]>([])
 
 const artifactTabs = [
   { key: 'segments', label: '原始分段' },
@@ -228,7 +231,7 @@ const docDisplayName = computed(() => {
   if (!doc) return '-'
   if (doc.document_name) return doc.document_name
   const dk = doc.document_key as string | undefined
-  if (dk?.startsWith('doc:/')) return dk.replace('doc:/', '', 1)
+  if (dk?.startsWith('doc:/')) return dk.replace('doc:/', '')
   return dk || doc.id || '-'
 })
 
