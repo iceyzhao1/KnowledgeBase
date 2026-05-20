@@ -12,6 +12,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
@@ -70,6 +71,15 @@ def create_app() -> FastAPI:
     app.include_router(config_router)
     app.include_router(builds_router)
     app.include_router(uploads_router)
+
+    # Allow cross-origin requests from the dev server and any local UI.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     return app
 

@@ -255,10 +255,10 @@ async def get_run_documents(
             for sr in await stage_cur.fetchall():
                 stage_lookup[sr["run_document_id"]] = sr["stage"]
 
-            # Duration per document (single batch query)
+            # Duration per document (computed in SQL to avoid TEXT type issues)
             dur_cur = await conn.execute(
                 f"SELECT run_document_id, "
-                f"MIN(created_at) as started, MAX(created_at) as finished "
+                f"EXTRACT(EPOCH FROM (MAX(created_at::timestamp) - MIN(created_at::timestamp))) * 1000 as duration_ms "
                 f"FROM mining_run_stage_events "
                 f"WHERE run_id = %s AND run_document_id IN ({placeholders}) "
                 f"AND status IN ('started', 'completed', 'failed') "
@@ -266,10 +266,8 @@ async def get_run_documents(
                 [run_id, *doc_ids],
             )
             for dr in await dur_cur.fetchall():
-                started = dr["started"]
-                finished = dr["finished"]
-                if started and finished:
-                    duration_lookup[dr["run_document_id"]] = int((finished - started).total_seconds() * 1000)
+                if dr["duration_ms"] is not None:
+                    duration_lookup[dr["run_document_id"]] = int(dr["duration_ms"])
 
         # Enrich documents with computed fields
         documents = []
