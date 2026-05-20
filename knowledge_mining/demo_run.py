@@ -110,16 +110,21 @@ def main() -> None:
     # Full reset: uncomment the line below to drop & recreate all tables
     # recreate_all_tables(db_cfg)
 
+    domain = mining_cfg.domain  # e.g. "cloud_core_network"
+    llm_url = mining_cfg.llm_service_url
+
     # Run mining pipeline (incremental)
     logger.info("Starting mining run...")
+    logger.info("  domain:           %s", domain)
     logger.info("  input_path:       %s", DATA_DIR)
-    logger.info("  llm_base_url:     %s", mining_cfg.llm_service_url)
+    logger.info("  llm_base_url:     %s", llm_url)
     logger.info("  embedding_model:  %s", mining_cfg.embedding_model)
     logger.info("  embedding_dims:   %d", mining_cfg.embedding_dimensions)
 
     t0 = time.perf_counter()
     result = run(
         input_path=DATA_DIR,
+        domain=domain,
         publish_on_partial_failure=True,
         llm_bypass_proxy=True,
     )
