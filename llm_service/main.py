@@ -44,6 +44,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         # PostgreSQL initialization
         pg_cfg = LlmDbConfig()
+        logger.info("Ensuring database schema for %s @ %s:%s", pg_cfg.pg_dbname, pg_cfg.pg_host, pg_cfg.pg_port)
         ensure_schema(pg_cfg)
 
         db = LlmRuntimeDB.from_conninfo(
@@ -52,6 +53,18 @@ def create_app(
             pool_max=pg_cfg.pg_pool_max,
         )
         await db.open()
+
+        # Startup health check
+        health = await db.health_check()
+        if not health.get("connected"):
+            await db.close()
+            raise RuntimeError(f"Database health check failed: {health.get('error', 'cannot connect')}")
+        if not health.get("tables_ok"):
+            logger.warning("Database tables check: %s", health)
+        logger.info(
+            "Database health check passed (connected=%s, tables=%s, tasks=%s)",
+            health["connected"], health["tables_ok"], health.get("task_count", "?"),
+        )
 
         provider = _factory() if _factory else OpenAICompatibleProvider(
             base_url=cfg.provider_base_url,

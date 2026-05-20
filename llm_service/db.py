@@ -64,3 +64,50 @@ class LlmRuntimeDB:
         Kept for backward compatibility with code that calls commit().
         """
         pass
+
+    async def health_check(self) -> dict[str, Any]:
+        """Run a lightweight DB health check. Returns status dict.
+
+        Verifies: connectivity, schema tables exist, can read/write.
+        """
+        result: dict[str, Any] = {"connected": False, "tables_ok": False}
+
+        # 1. Can we connect and run a simple query?
+        try:
+            row = await self.fetchone("SELECT 1 AS ok")
+            if row and row.get("ok") == 1:
+                result["connected"] = True
+        except Exception as e:
+            result["error"] = str(e)
+            return result
+
+        # 2. Do the core tables exist?
+        expected_tables = {
+            "agent_llm_tasks",
+            "agent_llm_requests",
+            "agent_llm_attempts",
+            "agent_llm_results",
+            "agent_llm_events",
+            "agent_llm_prompt_templates",
+        }
+        try:
+            rows = await self.fetchall(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name LIKE 'agent_llm_%'"
+            )
+            found = {r["table_name"] for r in rows}
+            missing = expected_tables - found
+            result["tables_ok"] = len(missing) == 0
+            if missing:
+                result["missing_tables"] = sorted(missing)
+        except Exception as e:
+            result["tables_error"] = str(e)
+
+        # 3. Quick stats for visibility
+        try:
+            count_row = await self.fetchone("SELECT COUNT(*) AS cnt FROM agent_llm_tasks")
+            result["task_count"] = count_row["cnt"] if count_row else 0
+        except Exception:
+            result["task_count"] = "error"
+
+        return result
