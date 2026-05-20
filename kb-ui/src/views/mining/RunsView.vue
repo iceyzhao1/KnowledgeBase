@@ -1,74 +1,103 @@
 <template>
   <div class="runs-view">
+    <!-- Header -->
     <div class="runs-view__header">
+      <div class="runs-view__header-left">
+        <h2 class="runs-view__title">挖掘任务</h2>
+        <span class="runs-view__count">{{ miningStore.runs.length }} 个作业</span>
+      </div>
       <div class="runs-view__actions">
-        <el-button type="primary" @click="showCreateDialog = true">新建 Run</el-button>
-        <el-button @click="miningStore.fetchRuns()" :loading="miningStore.loading">刷新</el-button>
+        <el-button @click="miningStore.fetchRuns()" :loading="miningStore.loading">
+          <el-icon><Refresh /></el-icon>
+        </el-button>
+        <el-button type="primary" @click="showCreateDialog = true">
+          <el-icon class="el-icon--left"><Plus /></el-icon>
+          新建 Run
+        </el-button>
       </div>
     </div>
 
-    <div class="runs-view__table">
-      <el-table :data="miningStore.runs" stripe v-loading="miningStore.loading" size="default">
-        <el-table-column prop="id" label="Run ID" width="140">
+    <!-- Status Filters -->
+    <div class="runs-view__filters">
+      <button
+        v-for="f in filters"
+        :key="f.key"
+        class="filter-tag"
+        :class="{ 'filter-tag--active': activeFilter === f.key }"
+        @click="setFilter(f.key)"
+      >
+        {{ f.label }}
+        <span class="filter-tag__count" v-if="f.count > 0">{{ f.count }}</span>
+      </button>
+    </div>
+
+    <!-- Table -->
+    <div class="runs-view__table-wrap">
+      <el-table
+        :data="filteredRuns"
+        v-loading="miningStore.loading"
+        class="kb-table"
+        :header-cell-style="{ background: 'transparent' }"
+      >
+        <el-table-column label="Run ID" min-width="120">
           <template #default="{ row }">
-            <router-link :to="`/mining/${row.id}`" class="link">{{ row.id }}</router-link>
+            <router-link :to="`/mining/${row.id}`" class="table-link">{{ row.id.slice(0, 8) }}</router-link>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="120">
+        <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" size="small" effect="plain">
-              {{ statusLabel(row.status) }}
-            </el-tag>
+            <StatusBadge :status="row.status" size="small">{{ statusLabel(row.status) }}</StatusBadge>
           </template>
         </el-table-column>
-        <el-table-column prop="document_count" label="文档数" width="100" />
-        <el-table-column label="耗时" width="120">
+        <el-table-column label="Pipeline" min-width="160">
+          <template #default="{ row }">
+            <div class="doc-progress" v-if="row.total_documents > 0">
+              <div class="doc-progress__bar">
+                <div class="doc-progress__fill" :style="{ width: progressPercent(row) + '%' }" />
+              </div>
+              <span class="doc-progress__text">{{ row.committed_count || 0 }}/{{ row.total_documents }}</span>
+            </div>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="文档" width="160">
+          <template #default="{ row }">
+            <div class="doc-stats-row">
+              <span class="doc-stat doc-stat--new" v-if="row.new_count" title="新增">+{{ row.new_count }}</span>
+              <span class="doc-stat doc-stat--upd" v-if="row.updated_count" title="更新">~{{ row.updated_count }}</span>
+              <span class="doc-stat doc-stat--skip" v-if="row.skipped_count" title="跳过">⊘{{ row.skipped_count }}</span>
+              <span class="doc-stat doc-stat--fail" v-if="row.failed_count" title="失败">✕{{ row.failed_count }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="耗时" width="100">
           <template #default="{ row }">
             {{ formatDuration(row.started_at, row.finished_at) }}
           </template>
         </el-table-column>
-        <el-table-column prop="build_id" label="Build" width="120">
-          <template #default="{ row }">
-            {{ row.build_id || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column label="创建时间" min-width="160">
           <template #default="{ row }">
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button
-              v-if="row.status === 'running'"
-              type="warning"
-              size="small"
-              text
-              @click="miningStore.cancelRun(row.id)"
-            >取消</el-button>
-            <el-button
-              v-if="row.status === 'completed' && !row.build_id"
-              type="success"
-              size="small"
-              text
-              @click="miningStore.publishRun(row.id)"
-            >发布</el-button>
-            <el-button
-              v-if="row.status === 'failed'"
-              type="primary"
-              size="small"
-              text
-            >重试</el-button>
+            <el-button v-if="row.status === 'running'" type="warning" size="small" text @click="miningStore.cancelRun(row.id)">取消</el-button>
+            <el-button v-if="row.status === 'completed' && !row.build_id" type="success" size="small" text @click="miningStore.publishRun(row.id)">发布</el-button>
+            <el-button v-if="row.status === 'failed'" type="primary" size="small" text>重试</el-button>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
-    <!-- Create Run Dialog -->
-    <el-dialog v-model="showCreateDialog" title="新建 Mining Run" width="500px">
+    <!-- Create Dialog -->
+    <el-dialog v-model="showCreateDialog" title="新建挖掘任务" width="500px">
       <el-form :model="createForm" label-width="100px">
         <el-form-item label="Domain">
-          <el-input v-model="createForm.domain" :value="domainStore.currentDomain" disabled />
+          <el-input :model-value="domainStore.currentDomain" disabled />
+        </el-form-item>
+        <el-form-item label="输入路径">
+          <el-input v-model="createForm.inputPath" placeholder="D:\path\to\knowledge_base\domain" />
         </el-form-item>
         <el-form-item label="配置">
           <el-input
@@ -88,25 +117,45 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
+import StatusBadge from '@/components/common/StatusBadge.vue'
 
 const domainStore = useDomainStore()
 const miningStore = useMiningStore()
 
 const showCreateDialog = ref(false)
 const creating = ref(false)
+const activeFilter = ref('all')
 const createForm = ref({
-  domain: domainStore.currentDomain,
+  inputPath: '',
   configJson: '{}',
 })
 
-function statusTagType(status: string) {
-  const map: Record<string, string> = {
-    running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', pending: 'info',
-  }
-  return map[status] || 'info'
+const filters = computed(() => {
+  const runs = miningStore.runs
+  return [
+    { key: 'all', label: '全部', count: runs.length },
+    { key: 'running', label: '运行中', count: runs.filter(r => r.status === 'running').length },
+    { key: 'completed', label: '已完成', count: runs.filter(r => r.status === 'completed').length },
+    { key: 'failed', label: '失败', count: runs.filter(r => r.status === 'failed').length },
+  ]
+})
+
+const filteredRuns = computed(() => {
+  if (activeFilter.value === 'all') return miningStore.runs
+  return miningStore.runs.filter(r => r.status === activeFilter.value)
+})
+
+function setFilter(key: string) {
+  activeFilter.value = key
+}
+
+function progressPercent(row: { committed_count: number; total_documents: number }) {
+  if (!row.total_documents) return 0
+  return Math.round((row.committed_count / row.total_documents) * 100)
 }
 
 function statusLabel(status: string) {
@@ -135,10 +184,15 @@ async function handleCreate() {
   creating.value = true
   try {
     let config = {}
-    try { config = JSON.parse(createForm.value.configJson) } catch { /* use empty */ }
-    await miningStore.createRun({ domain: domainStore.currentDomain, ...config })
+    try { config = JSON.parse(createForm.value.configJson) } catch { /* empty */ }
+    await miningStore.createRun({
+      domain: domainStore.currentDomain,
+      input_path: createForm.value.inputPath,
+      ...config,
+    })
     showCreateDialog.value = false
     createForm.value.configJson = '{}'
+    createForm.value.inputPath = ''
   } finally {
     creating.value = false
   }
@@ -149,15 +203,148 @@ watch(() => domainStore.currentDomain, () => miningStore.fetchRuns())
 </script>
 
 <style scoped>
-.runs-view__header {
+.runs-view {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.link {
-  color: var(--kb-primary);
-  text-decoration: none;
+.runs-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
-.link:hover { text-decoration: underline; }
+
+.runs-view__header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.runs-view__title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--kb-text-primary);
+  margin: 0;
+  letter-spacing: -0.2px;
+}
+
+.runs-view__count {
+  font-size: 12px;
+  color: var(--kb-text-tertiary);
+}
+
+.runs-view__actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Filters */
+.runs-view__filters {
+  display: flex;
+  gap: 6px;
+}
+
+.filter-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--kb-border);
+  background: var(--kb-bg-card);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--kb-text-secondary);
+  cursor: pointer;
+  transition: all var(--kb-duration) var(--kb-ease);
+}
+
+.filter-tag:hover {
+  border-color: var(--kb-accent-medium);
+  color: var(--kb-accent);
+}
+
+.filter-tag--active {
+  background: var(--kb-accent-soft);
+  border-color: var(--kb-accent);
+  color: var(--kb-accent);
+}
+
+.filter-tag__count {
+  font-size: 11px;
+  background: var(--kb-border-light);
+  padding: 0 6px;
+  border-radius: 8px;
+}
+
+.filter-tag--active .filter-tag__count {
+  background: var(--kb-accent-medium);
+}
+
+/* Table */
+.runs-view__table-wrap {
+  background: var(--kb-bg-card);
+  border-radius: var(--kb-radius);
+  box-shadow: var(--kb-shadow-card);
+  border: 1px solid var(--kb-border-light);
+  overflow: hidden;
+}
+
+.table-link {
+  color: var(--kb-accent);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+.table-link:hover { text-decoration: underline; }
+
+.text-muted { color: var(--kb-text-tertiary); }
+
+/* Progress bar */
+.doc-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.doc-progress__bar {
+  flex: 1;
+  height: 4px;
+  background: var(--kb-border-light);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.doc-progress__fill {
+  height: 100%;
+  background: var(--kb-accent);
+  border-radius: 2px;
+  transition: width 0.3s var(--kb-ease);
+}
+
+.doc-progress__text {
+  font-size: 11px;
+  color: var(--kb-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Doc stats */
+.doc-stats-row {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.doc-stat {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.doc-stat--new { color: var(--kb-success); }
+.doc-stat--upd { color: var(--kb-accent); }
+.doc-stat--skip { color: var(--kb-text-tertiary); }
+.doc-stat--fail { color: var(--kb-danger); }
 </style>

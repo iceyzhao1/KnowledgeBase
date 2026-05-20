@@ -2,6 +2,8 @@
   <header class="header">
     <div class="header__left">
       <h2 class="header__title">{{ pageTitle }}</h2>
+      <span class="header__divider" />
+      <span class="header__breadcrumb">{{ route.meta?.description || '' }}</span>
     </div>
 
     <div class="header__right">
@@ -19,7 +21,7 @@
         />
       </el-select>
 
-      <div class="header__health">
+      <div class="header__health" :title="allHealthy ? '全部正常' : '存在异常'">
         <span
           class="header__health-dot"
           :class="{
@@ -28,13 +30,14 @@
             'header__health-dot--unhealthy': !someHealthy,
           }"
         />
+        <span class="header__health-label">{{ allHealthy ? '正常' : '异常' }}</span>
       </div>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDomainStore } from '@/stores/domain'
 
@@ -64,10 +67,6 @@ function onDomainChange() {
 }
 </script>
 
-<script lang="ts">
-import { ref } from 'vue'
-</script>
-
 <style scoped>
 .header {
   height: var(--kb-header-height);
@@ -76,14 +75,34 @@ import { ref } from 'vue'
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
+  padding: 0 28px;
+}
+
+.header__left {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
 }
 
 .header__title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 650;
   color: var(--kb-text-primary);
   margin: 0;
+  letter-spacing: -0.2px;
+}
+
+.header__divider {
+  width: 1px;
+  height: 16px;
+  background: var(--kb-border);
+  margin: 0 14px;
+  align-self: center;
+}
+
+.header__breadcrumb {
+  font-size: 13px;
+  color: var(--kb-text-tertiary);
 }
 
 .header__right {
@@ -99,24 +118,38 @@ import { ref } from 'vue'
 .header__health {
   display: flex;
   align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: var(--kb-accent-soft);
 }
 
 .header__health-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--kb-text-secondary);
+  background: var(--kb-text-tertiary);
+  transition: background var(--kb-duration) var(--kb-ease);
 }
 
 .header__health-dot--healthy {
   background: var(--kb-success);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
 }
 
 .header__health-dot--degraded {
   background: var(--kb-warning);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
 }
 
 .header__health-dot--unhealthy {
   background: var(--kb-danger);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+}
+
+.header__health-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--kb-text-secondary);
 }
 </style>

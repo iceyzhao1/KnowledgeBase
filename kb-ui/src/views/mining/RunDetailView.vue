@@ -7,55 +7,79 @@
     </div>
 
     <template v-if="miningStore.currentRun">
-      <!-- Run Info -->
-      <div class="run-detail__info">
-        <div class="run-detail__info-header">
-          <h3>{{ miningStore.currentRun.id }}</h3>
-          <el-tag :type="statusTagType(miningStore.currentRun.status)" effect="plain">
-            {{ statusLabel(miningStore.currentRun.status) }}
-          </el-tag>
+      <!-- Run Meta Card -->
+      <div class="run-detail__meta-card">
+        <div class="run-detail__meta-left">
+          <h3 class="run-detail__id">{{ miningStore.currentRun.id.slice(0, 8) }}</h3>
+          <StatusBadge :status="miningStore.currentRun.status">{{ statusLabel(miningStore.currentRun.status) }}</StatusBadge>
         </div>
-        <div class="run-detail__meta">
-          <span>文档数: {{ miningStore.currentRun.document_count }}</span>
-          <span>创建: {{ formatTime(miningStore.currentRun.created_at) }}</span>
-          <span v-if="miningStore.currentRun.error_message" class="run-detail__error">
-            错误: {{ miningStore.currentRun.error_message }}
-          </span>
+        <div class="run-detail__metrics">
+          <div class="metric">
+            <span class="metric__value">{{ miningStore.currentRun.total_documents }}</span>
+            <span class="metric__label">文档</span>
+          </div>
+          <div class="metric" v-if="miningStore.currentRun.new_count">
+            <span class="metric__value metric__value--success">{{ miningStore.currentRun.new_count }}</span>
+            <span class="metric__label">新增</span>
+          </div>
+          <div class="metric" v-if="miningStore.currentRun.updated_count">
+            <span class="metric__value metric__value--accent">{{ miningStore.currentRun.updated_count }}</span>
+            <span class="metric__label">更新</span>
+          </div>
+          <div class="metric" v-if="miningStore.currentRun.failed_count">
+            <span class="metric__value metric__value--danger">{{ miningStore.currentRun.failed_count }}</span>
+            <span class="metric__label">失败</span>
+          </div>
+          <div class="metric">
+            <span class="metric__value">{{ formatDuration(miningStore.currentRun.started_at, miningStore.currentRun.finished_at) }}</span>
+            <span class="metric__label">耗时</span>
+          </div>
+          <div class="metric">
+            <span class="metric__value">{{ formatTime(miningStore.currentRun.created_at) }}</span>
+            <span class="metric__label">创建时间</span>
+          </div>
         </div>
       </div>
 
-      <!-- Pipeline Timeline -->
+      <!-- Error Banner -->
+      <div v-if="miningStore.currentRun.error_message" class="run-detail__error-banner">
+        {{ miningStore.currentRun.error_message }}
+      </div>
+
+      <!-- Pipeline Flow -->
       <div class="run-detail__section">
-        <h4>Pipeline 阶段</h4>
-        <el-steps :active="activeStep" align-center>
-          <el-step
-            v-for="stage in miningStore.stages"
-            :key="stage.name"
-            :title="stage.name"
-            :description="stageDescription(stage)"
-            :status="stepStatus(stage.status)"
-          />
-        </el-steps>
+        <h4 class="section-label">Pipeline 阶段</h4>
+        <PipelineFlow :stage-events="miningStore.stages" />
       </div>
 
       <!-- Documents Table -->
       <div class="run-detail__section">
-        <h4>文档处理结果</h4>
-        <el-table :data="miningStore.documents" stripe size="small">
-          <el-table-column prop="filename" label="文件名" />
-          <el-table-column prop="status" label="状态" width="100">
+        <h4 class="section-label">文档处理结果 ({{ miningStore.documents.length }})</h4>
+        <el-table
+          :data="miningStore.documents"
+          class="kb-table"
+          :header-cell-style="{ background: 'transparent' }"
+        >
+          <el-table-column label="文件名" min-width="200">
             <template #default="{ row }">
-              <el-tag :type="docStatusType(row.status)" size="small" effect="plain">
-                {{ row.status }}
-              </el-tag>
+              <span class="doc-name">{{ row.document_name || row.document_id.slice(0, 8) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="action" label="操作" width="100">
+          <el-table-column label="处理状态" width="120">
             <template #default="{ row }">
-              <el-tag size="small" effect="plain">{{ row.action }}</el-tag>
+              <StatusBadge :status="row.status" size="small">{{ docStatusLabel(row.status) }}</StatusBadge>
             </template>
           </el-table-column>
-          <el-table-column prop="error_message" label="错误" />
+          <el-table-column label="操作" width="100">
+            <template #default="{ row }">
+              <span class="action-badge" :class="`action-badge--${row.action}`">{{ actionLabel(row.action) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="错误信息" min-width="200">
+            <template #default="{ row }">
+              <span class="text-error">{{ row.error_message || '-' }}</span>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </template>
@@ -63,50 +87,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
-import type { MiningRunStage } from '@/types'
+import StatusBadge from '@/components/common/StatusBadge.vue'
+import PipelineFlow from '@/components/mining/PipelineFlow.vue'
 
 const props = defineProps<{ runId: string }>()
 const domainStore = useDomainStore()
 const miningStore = useMiningStore()
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
-
-const activeStep = computed(() => {
-  const stages = miningStore.stages
-  for (let i = stages.length - 1; i >= 0; i--) {
-    if (stages[i].status === 'completed') return i + 1
-    if (stages[i].status === 'running') return i
-  }
-  return 0
-})
-
-function stageDescription(stage: MiningRunStage) {
-  if (stage.status === 'running' && stage.progress !== undefined) {
-    return `${Math.round(stage.progress * 100)}%`
-  }
-  if (stage.duration_seconds !== undefined) {
-    return `${stage.duration_seconds.toFixed(1)}s`
-  }
-  return stage.status
-}
-
-function stepStatus(status: string) {
-  const map: Record<string, string> = {
-    completed: 'success', running: 'process', failed: 'error', pending: 'wait', skipped: 'wait',
-  }
-  return map[status] || 'wait'
-}
-
-function statusTagType(status: string) {
-  const map: Record<string, string> = {
-    running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', pending: 'info',
-  }
-  return map[status] || 'info'
-}
 
 function statusLabel(status: string) {
   const map: Record<string, string> = {
@@ -115,11 +107,16 @@ function statusLabel(status: string) {
   return map[status] || status
 }
 
-function docStatusType(status: string) {
+function docStatusLabel(status: string) {
   const map: Record<string, string> = {
-    completed: 'success', processing: 'warning', failed: 'danger', pending: 'info', skipped: 'info',
+    completed: '完成', processing: '处理中', failed: '失败', pending: '等待', skipped: '跳过',
   }
-  return map[status] || 'info'
+  return map[status] || status
+}
+
+function actionLabel(action: string) {
+  const map: Record<string, string> = { new: '新增', updated: '更新', unchanged: '无变化' }
+  return map[action] || action
 }
 
 function formatTime(t: string | undefined) {
@@ -127,13 +124,23 @@ function formatTime(t: string | undefined) {
   return new Date(t).toLocaleString('zh-CN')
 }
 
+function formatDuration(start?: string, end?: string) {
+  if (!start) return '-'
+  const s = new Date(start).getTime()
+  const e = end ? new Date(end).getTime() : Date.now()
+  const diff = Math.round((e - s) / 1000)
+  if (diff < 60) return `${diff}s`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`
+  return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`
+}
+
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer)
-  miningStore.fetchRunDetail(props.runId)
-  const run = miningStore.currentRun
-  if (run?.status === 'running') {
-    pollTimer = setInterval(() => miningStore.fetchRunDetail(props.runId), 3000)
-  }
+  miningStore.fetchRunDetail(props.runId).then(() => {
+    if (miningStore.currentRun?.status === 'running') {
+      pollTimer = setInterval(() => miningStore.fetchRunDetail(props.runId), 3000)
+    }
+  })
 }
 
 onMounted(startPolling)
@@ -145,52 +152,132 @@ watch(() => domainStore.currentDomain, () => {
 </script>
 
 <style scoped>
-.run-detail__back { margin-bottom: 16px; }
-
-.run-detail__info {
-  background: var(--kb-bg-card);
-  border-radius: var(--kb-radius);
-  padding: 20px;
-  box-shadow: var(--kb-shadow-card);
-  margin-bottom: 20px;
+.run-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.run-detail__info-header {
+.run-detail__back { margin-bottom: 0; }
+
+/* Meta card */
+.run-detail__meta-card {
+  background: var(--kb-bg-card);
+  border-radius: var(--kb-radius);
+  padding: 20px 22px;
+  border: 1px solid var(--kb-border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.run-detail__meta-left {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
 }
 
-.run-detail__info-header h3 {
-  margin: 0;
+.run-detail__id {
   font-size: 18px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
   color: var(--kb-text-primary);
+  margin: 0;
+  letter-spacing: -0.5px;
 }
 
-.run-detail__meta {
+.run-detail__metrics {
   display: flex;
-  gap: 20px;
-  font-size: 13px;
-  color: var(--kb-text-secondary);
+  gap: 24px;
+  flex-wrap: wrap;
 }
 
-.run-detail__error {
+.metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.metric__value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--kb-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric__value--success { color: var(--kb-success); }
+.metric__value--accent { color: var(--kb-accent); }
+.metric__value--danger { color: var(--kb-danger); }
+
+.metric__label {
+  font-size: 11px;
+  color: var(--kb-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Error banner */
+.run-detail__error-banner {
+  background: var(--kb-danger-soft);
   color: var(--kb-danger);
+  padding: 12px 18px;
+  border-radius: var(--kb-radius-sm);
+  font-size: 13px;
+  border-left: 3px solid var(--kb-danger);
 }
 
+/* Section */
 .run-detail__section {
   background: var(--kb-bg-card);
   border-radius: var(--kb-radius);
-  padding: 20px;
-  box-shadow: var(--kb-shadow-card);
-  margin-bottom: 20px;
+  padding: 20px 22px;
+  border: 1px solid var(--kb-border-light);
 }
 
-.run-detail__section h4 {
-  margin: 0 0 16px;
-  font-size: 15px;
+.section-label {
+  font-size: 13px;
   font-weight: 600;
+  color: var(--kb-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 16px;
+}
+
+/* Doc name */
+.doc-name {
+  font-size: 13px;
   color: var(--kb-text-primary);
+}
+
+/* Action badges */
+.action-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.action-badge--new {
+  background: var(--kb-success-soft);
+  color: var(--kb-success);
+}
+
+.action-badge--updated {
+  background: var(--kb-accent-soft);
+  color: var(--kb-accent);
+}
+
+.action-badge--unchanged {
+  background: var(--kb-border-light);
+  color: var(--kb-text-tertiary);
+}
+
+.text-error {
+  font-size: 12px;
+  color: var(--kb-danger);
 }
 </style>

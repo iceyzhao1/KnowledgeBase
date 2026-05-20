@@ -32,7 +32,7 @@ import Header from './Header.vue'
 
 .app-layout__content {
   flex: 1;
-  padding: 20px 24px;
+  padding: 24px 28px;
   overflow-y: auto;
 }
 </style>

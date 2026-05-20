@@ -50,6 +50,12 @@ const router = createRouter({
           component: () => import('@/views/LlmView.vue'),
         },
         {
+          path: 'llm/:taskId',
+          name: 'llm-task-detail',
+          component: () => import('@/views/llm/LlmTaskDetailView.vue'),
+          props: true,
+        },
+        {
           path: 'settings',
           name: 'settings',
           component: () => import('@/views/SettingsView.vue'),

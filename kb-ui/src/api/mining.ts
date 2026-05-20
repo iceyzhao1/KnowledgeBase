@@ -1,55 +1,109 @@
 import axios from 'axios'
-import type { MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus } from '@/types'
+import type {
+  MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
+  KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation,
+} from '@/types'
+import type { PaginatedResponse } from '@/types'
 import { useDomainStore } from '@/stores/domain'
 
+function extractItems<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data
+  const obj = data as Record<string, unknown>
+  const items = obj.items ?? obj.data
+  if (Array.isArray(items)) return items
+  return []
+}
+
+function extractOne<T>(data: unknown): T {
+  const obj = data as Record<string, unknown>
+  return (obj.data ?? obj) as T
+}
+
 export function useMiningApi() {
-  function getClient() {
-    const domain = useDomainStore()
-    return axios.create({ baseURL: domain.currentConfig.miningApi })
-  }
+  const domain = useDomainStore()
+  const client = axios.create({ baseURL: domain.currentConfig.miningApi })
 
   return {
+    // Health
     async getHealth(): Promise<HealthStatus> {
-      const { data } = await getClient().get('/health')
+      const { data } = await client.get('/health')
       return data
     },
 
+    // Stats
     async getStats(): Promise<KnowledgeStats> {
-      const { data } = await getClient().get('/api/knowledge/stats')
+      const { data } = await client.get('/api/knowledge/stats')
       return data
     },
 
-    async getRuns(): Promise<MiningRun[]> {
-      const { data } = await getClient().get('/api/runs')
-      return data.data ?? data
+    // Runs
+    async getRuns(params?: { status?: string; limit?: number }): Promise<MiningRun[]> {
+      const { data } = await client.get('/api/runs', { params })
+      return extractItems<MiningRun>(data)
     },
 
     async getRun(runId: string): Promise<MiningRun> {
-      const { data } = await getClient().get(`/api/runs/${runId}`)
-      return data.data ?? data
+      const { data } = await client.get(`/api/runs/${runId}`)
+      return extractOne<MiningRun>(data)
     },
 
     async getRunStages(runId: string): Promise<MiningRunStage[]> {
-      const { data } = await getClient().get(`/api/runs/${runId}/stages`)
-      return data.data ?? data
+      const { data } = await client.get(`/api/runs/${runId}/stages`)
+      return extractItems<MiningRunStage>(data)
     },
 
     async getRunDocuments(runId: string): Promise<MiningRunDocument[]> {
-      const { data } = await getClient().get(`/api/runs/${runId}/documents`)
-      return data.data ?? data
+      const { data } = await client.get(`/api/runs/${runId}/documents`)
+      return extractItems<MiningRunDocument>(data)
     },
 
     async createRun(config: Record<string, unknown>): Promise<MiningRun> {
-      const { data } = await getClient().post('/api/runs', config)
-      return data.data ?? data
+      const { data } = await client.post('/api/runs', config)
+      return extractOne<MiningRun>(data)
     },
 
     async cancelRun(runId: string): Promise<void> {
-      await getClient().post(`/api/runs/${runId}/cancel`)
+      await client.post(`/api/runs/${runId}/cancel`)
     },
 
     async publishRun(runId: string): Promise<void> {
-      await getClient().post(`/api/runs/${runId}/publish`)
+      await client.post(`/api/runs/${runId}/publish`)
+    },
+
+    // Knowledge assets
+    async getDocuments(params?: { limit?: number; offset?: number }): Promise<PaginatedResponse<KnowledgeDocument>> {
+      const { data } = await client.get('/api/knowledge/documents', { params })
+      return data
+    },
+
+    async getDocument(docId: string): Promise<KnowledgeDocument> {
+      const { data } = await client.get(`/api/knowledge/documents/${docId}`)
+      return extractOne<KnowledgeDocument>(data)
+    },
+
+    async getDocumentSegments(docId: string): Promise<KnowledgeSegment[]> {
+      const { data } = await client.get(`/api/knowledge/documents/${docId}/segments`)
+      return extractItems<KnowledgeSegment>(data)
+    },
+
+    async getDocumentUnits(docId: string): Promise<KnowledgeUnit[]> {
+      const { data } = await client.get(`/api/knowledge/documents/${docId}/units`)
+      return extractItems<KnowledgeUnit>(data)
+    },
+
+    async getSegments(params?: { limit?: number }): Promise<PaginatedResponse<KnowledgeSegment>> {
+      const { data } = await client.get('/api/knowledge/segments', { params })
+      return data
+    },
+
+    async getUnits(params?: { limit?: number }): Promise<PaginatedResponse<KnowledgeUnit>> {
+      const { data } = await client.get('/api/knowledge/units', { params })
+      return data
+    },
+
+    async getRelations(params?: { limit?: number }): Promise<PaginatedResponse<KnowledgeRelation>> {
+      const { data } = await client.get('/api/knowledge/relations', { params })
+      return data
     },
   }
 }

@@ -56,7 +56,8 @@ export function useLlmApi() {
     async getTaskRequest(taskId: string): Promise<Record<string, unknown> | null> {
       try {
         const { data } = await client.get(`/api/v1/tasks/${taskId}/request`)
-        return data as Record<string, unknown>
+        const resp = data as Record<string, unknown>
+        return (resp.data ?? resp) as Record<string, unknown>
       } catch { return null }
     },
 

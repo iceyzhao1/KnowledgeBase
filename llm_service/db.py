@@ -58,6 +58,19 @@ class LlmRuntimeDB:
             cur = await conn.execute(sql, params)
             return await cur.fetchall()
 
+    async def run(self, fn):
+        """Run an async function with a single pooled connection.
+
+        Usage:
+            async def my_queries(conn):
+                r1 = await (await conn.execute("SELECT ...")).fetchall()
+                r2 = await (await conn.execute("SELECT ...")).fetchone()
+                return r1, r2
+            result = await db.run(my_queries)
+        """
+        async with self._pool.connection() as conn:
+            return await fn(conn)
+
     async def commit(self) -> None:
         """No-op: each operation auto-commits via context manager.
 
