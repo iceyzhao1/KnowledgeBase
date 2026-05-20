@@ -5,24 +5,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "serving")
 public record ServingProperties(
     String scenarioPacksDir,
+    String domainRegistryPath,
     String defaultDomain,
     LlmConfig llm,
-    ZhipuConfig zhipu,
     EmbeddingConfig embedding,
     RerankConfig rerank
 ) {
-    public record LlmConfig(String baseUrl, String apiKey) {
+    public record LlmConfig(String baseUrl) {
         public LlmConfig {
             if (baseUrl == null) baseUrl = "";
-            if (apiKey == null) apiKey = "";
-        }
-    }
-
-    public record ZhipuConfig(String apiKey, String baseUrl, String rerankModel) {
-        public ZhipuConfig {
-            if (baseUrl == null) baseUrl = "";
-            if (rerankModel == null) rerankModel = "";
-            if (apiKey == null) apiKey = "";
         }
     }
 
@@ -40,9 +31,9 @@ public record ServingProperties(
 
     public ServingProperties {
         if (scenarioPacksDir == null) scenarioPacksDir = "../scenario_packs";
+        if (domainRegistryPath == null) domainRegistryPath = "../domain_registry.yaml";
         if (defaultDomain == null) defaultDomain = "cloud_core_network";
-        if (llm == null) llm = new LlmConfig("", "");
-        if (zhipu == null) zhipu = new ZhipuConfig("", "", "");
+        if (llm == null) llm = new LlmConfig("");
         if (embedding == null) embedding = new EmbeddingConfig("", 1024);
         if (rerank == null) rerank = new RerankConfig("rerank-pro");
     }
