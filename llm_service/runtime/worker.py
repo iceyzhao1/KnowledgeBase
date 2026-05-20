@@ -20,6 +20,34 @@ from llm_service.runtime.template_registry import TemplateRegistry
 logger = logging.getLogger(__name__)
 
 
+def _ensure_dict(value):
+    """Ensure value is a dict — psycopg JSONB columns are already parsed."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _ensure_list(value):
+    """Ensure value is a list — psycopg JSONB columns are already parsed."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
 class Worker:
     """Background worker loop: continuously claim -> execute -> complete/fail."""
 
@@ -102,90 +130,86 @@ class Worker:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
             return
 
-        messages = json.loads(req["messages_json"] or "[]")
-        params = json.loads(req["params_json"] or "{}")
+        messages = _ensure_list(req["messages_json"])
+        params = _ensure_dict(req["params_json"])
         expected_type = req["expected_output_type"]
-        schema = json.loads(req["output_schema_json"] or "{}") or None
+        schema = _ensure_dict(req["output_schema_json"]) or None
         request_id = req["id"]
 
-        attempt_no = 0
-        while True:
-            task_row = await self._db.fetchone("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = %s", (task_id,))
-            if not task_row:
-                return
-            attempt_no = task_row["attempt_count"] + 1
+        task_row = await self._db.fetchone("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = %s", (task_id,))
+        if not task_row:
+            return
+        attempt_no = task_row["attempt_count"] + 1
 
-            attempt_id = str(uuid.uuid4())
-            now = datetime.now(timezone.utc).isoformat()
+        attempt_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """INSERT INTO agent_llm_attempts
+               (id, task_id, request_id, attempt_no, status, started_at)
+               VALUES (%s, %s, %s, %s, 'running', %s)""",
+            (attempt_id, task_id, request_id, attempt_no, now),
+        )
+
+        start = time.monotonic()
+        try:
+            response_format = (
+                {"type": "json_object"}
+                if expected_type in ("json_object", "json_array")
+                else None
+            )
+            resp = await self._provider.complete(
+                messages=messages, params=params,
+                response_format=response_format,
+            )
+            latency = int((time.monotonic() - start) * 1000)
+            finished = datetime.now(timezone.utc).isoformat()
+
             await self._db.execute(
-                """INSERT INTO agent_llm_attempts
-                   (id, task_id, request_id, attempt_no, status, started_at)
-                   VALUES (%s, %s, %s, %s, 'running', %s)""",
-                (attempt_id, task_id, request_id, attempt_no, now),
+                """UPDATE agent_llm_attempts
+                   SET status = 'succeeded', raw_output_text = %s, prompt_tokens = %s,
+                       completion_tokens = %s, total_tokens = %s, latency_ms = %s, finished_at = %s,
+                       raw_response_json = %s
+                   WHERE id = %s""",
+                (
+                    resp.output_text, resp.prompt_tokens, resp.completion_tokens,
+                    resp.total_tokens, latency, finished,
+                    json.dumps(resp.raw_response or {}), attempt_id,
+                ),
             )
 
-            start = time.monotonic()
-            try:
-                response_format = (
-                    {"type": "json_object"}
-                    if expected_type in ("json_object", "json_array")
-                    else None
-                )
-                resp = await self._provider.complete(
-                    messages=messages, params=params,
-                    response_format=response_format,
-                )
-                latency = int((time.monotonic() - start) * 1000)
-                finished = datetime.now(timezone.utc).isoformat()
+            parse_result = parse_output(resp.output_text, expected_type, schema)
 
-                await self._db.execute(
-                    """UPDATE agent_llm_attempts
-                       SET status = 'succeeded', raw_output_text = %s, prompt_tokens = %s,
-                           completion_tokens = %s, total_tokens = %s, latency_ms = %s, finished_at = %s,
-                           raw_response_json = %s
-                       WHERE id = %s""",
-                    (
-                        resp.output_text, resp.prompt_tokens, resp.completion_tokens,
-                        resp.total_tokens, latency, finished,
-                        json.dumps(resp.raw_response or {}), attempt_id,
-                    ),
-                )
+            result_id = str(uuid.uuid4())
+            await self._db.execute(
+                """INSERT INTO agent_llm_results
+                   (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
+                    parse_error, validation_errors_json, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    result_id, task_id, attempt_id, parse_result.parse_status,
+                    json.dumps(parse_result.parsed_output if parse_result.parsed_output is not None else {}),
+                    parse_result.text_output, parse_result.parse_error,
+                    json.dumps(parse_result.validation_errors),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
 
-                parse_result = parse_output(resp.output_text, expected_type, schema)
+            await self._mgr.complete(task_id)
 
-                result_id = str(uuid.uuid4())
-                await self._db.execute(
-                    """INSERT INTO agent_llm_results
-                       (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
-                        parse_error, validation_errors_json, created_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (
-                        result_id, task_id, attempt_id, parse_result.parse_status,
-                        json.dumps(parse_result.parsed_output if parse_result.parsed_output is not None else {}),
-                        parse_result.text_output, parse_result.parse_error,
-                        json.dumps(parse_result.validation_errors),
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                )
+        except Exception as e:
+            latency = int((time.monotonic() - start) * 1000)
+            finished = datetime.now(timezone.utc).isoformat()
+            error_type = getattr(e, "error_type", "unexpected_error")
+            error_msg = str(e)
 
-                await self._mgr.complete(task_id)
-                return
+            await self._db.execute(
+                """UPDATE agent_llm_attempts
+                   SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
+                   WHERE id = %s""",
+                (error_type, error_msg, latency, finished, attempt_id),
+            )
 
-            except Exception as e:
-                latency = int((time.monotonic() - start) * 1000)
-                finished = datetime.now(timezone.utc).isoformat()
-                error_type = getattr(e, "error_type", "unexpected_error")
-                error_msg = str(e)
-
-                await self._db.execute(
-                    """UPDATE agent_llm_attempts
-                       SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
-                       WHERE id = %s""",
-                    (error_type, error_msg, latency, finished, attempt_id),
-                )
-
-                await self._mgr.fail(task_id, error_type, error_msg)
-                return
+            await self._mgr.fail(task_id, error_type, error_msg)
 
     # ------------------------------------------------------------------
     # Embedding execution
@@ -202,7 +226,7 @@ class Worker:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
             return
 
-        input_data = json.loads(req["input_json"] or "{}")
+        input_data = _ensure_dict(req["input_json"])
         texts = input_data.get("texts", [])
         model = input_data.get("model")
         dimensions = input_data.get("dimensions")
@@ -287,7 +311,7 @@ class Worker:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
             return
 
-        input_data = json.loads(req["input_json"] or "{}")
+        input_data = _ensure_dict(req["input_json"])
         query = input_data.get("query", "")
         documents = input_data.get("documents", [])
         model = input_data.get("model")
