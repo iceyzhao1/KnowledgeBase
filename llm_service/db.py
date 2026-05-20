@@ -93,7 +93,7 @@ class LlmRuntimeDB:
         try:
             rows = await self.fetchall(
                 "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name LIKE 'agent_llm_%'"
+                "WHERE table_schema = 'public' AND table_name LIKE 'agent_llm_%%'"
             )
             found = {r["table_name"] for r in rows}
             missing = expected_tables - found
