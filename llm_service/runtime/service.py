@@ -153,27 +153,28 @@ class LLMService:
         """Execute a single chat attempt: call provider -> parse -> write result.
 
         On parse success: calls _mgr.complete() and returns ParseResult.
-        On parse failure: calls _mgr.fail() (triggers retry) and returns ParseResult.
+        On parse failure: calls _mgr.fail() (triggers retry) and raises RuntimeError.
         On provider error: writes failed attempt, calls _mgr.fail(), raises the exception.
+        On pre-attempt error: calls _mgr.fail(), raises RuntimeError.
         """
-        task_row = await self._db.fetchone(
-            "SELECT attempt_count FROM agent_llm_tasks WHERE id = %s", (task_id,)
-        )
-        if not task_row:
-            return ParseResult(parse_status="failed", parse_error="task not found")
-        attempt_no = task_row["attempt_count"] + 1
-
         attempt_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            """INSERT INTO agent_llm_attempts
-               (id, task_id, request_id, attempt_no, status, started_at)
-               VALUES (%s, %s, %s, %s, 'running', %s)""",
-            (attempt_id, task_id, request_id, attempt_no, now),
-        )
-
         start = time.monotonic()
+
         try:
+            task_row = await self._db.fetchone(
+                "SELECT attempt_count FROM agent_llm_tasks WHERE id = %s", (task_id,)
+            )
+            if not task_row:
+                raise RuntimeError("task not found")
+            attempt_no = task_row["attempt_count"] + 1
+
+            now = datetime.now(timezone.utc).isoformat()
+            await self._db.execute(
+                """INSERT INTO agent_llm_attempts
+                   (id, task_id, request_id, attempt_no, status, started_at)
+                   VALUES (%s, %s, %s, %s, 'running', %s)""",
+                (attempt_id, task_id, request_id, attempt_no, now),
+            )
             response_format = (
                 {"type": "json_object"}
                 if expected_type in ("json_object", "json_array")
@@ -220,9 +221,19 @@ class LLMService:
             if parse_result.parse_status == "succeeded":
                 await self._mgr.complete(task_id)
             else:
+                # Mark attempt as failed (parse error, not provider error)
+                await self._db.execute(
+                    """UPDATE agent_llm_attempts
+                       SET status = 'failed', error_type = 'parse_failed', error_message = %s
+                       WHERE id = %s""",
+                    (parse_result.parse_error or f"parse_status={parse_result.parse_status}", attempt_id),
+                )
                 await self._mgr.fail(
                     task_id, "parse_failed",
                     parse_result.parse_error or f"parse_status={parse_result.parse_status}",
+                )
+                raise RuntimeError(
+                    f"parse_failed: {parse_result.parse_error or parse_result.parse_status}"
                 )
             return parse_result
 
@@ -232,12 +243,16 @@ class LLMService:
             error_type = getattr(e, "error_type", "unexpected_error")
             error_msg = str(e)
 
-            await self._db.execute(
-                """UPDATE agent_llm_attempts
-                   SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
-                   WHERE id = %s""",
-                (error_type, error_msg, latency, finished, attempt_id),
-            )
+            # Only update attempt if it was inserted (may fail if pre-attempt errored)
+            try:
+                await self._db.execute(
+                    """UPDATE agent_llm_attempts
+                       SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
+                       WHERE id = %s""",
+                    (error_type, error_msg, latency, finished, attempt_id),
+                )
+            except Exception:
+                logger.exception("Failed to update attempt %s on error", attempt_id[:8])
             await self._mgr.fail(task_id, error_type, error_msg)
             raise
 
@@ -492,22 +507,46 @@ class LLMService:
             return await self._build_execute_response(task_id)
 
         effective_timeout = timeout or self._config.execute_timeout
-        try:
-            # Get request_id for the shared attempt method
-            req_row = await self._db.fetchone("SELECT id FROM agent_llm_requests WHERE task_id = %s", (task_id,))
-            request_id = req_row["id"] if req_row else ""
+        # Get request_id for the shared attempt method
+        req_row = await self._db.fetchone("SELECT id FROM agent_llm_requests WHERE task_id = %s", (task_id,))
+        request_id = req_row["id"] if req_row else ""
 
-            await asyncio.wait_for(
-                self.execute_chat_attempt(
-                    task_id, request_id, actual_messages, params or {},
-                    actual_expected_type, actual_schema,
-                ),
-                timeout=effective_timeout,
-            )
-        except asyncio.TimeoutError:
-            await self._bus.emit(task_id, "failed", f"execute timed out after {effective_timeout}s (lease recovery pending)")
-        except Exception:
-            pass  # execute_chat_attempt already called _mgr.fail()
+        # Retry loop: execute_chat_attempt may re-queue (queued) on parse failure,
+        # we re-claim and retry until terminal state or timeout
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + effective_timeout
+        while loop.time() < deadline:
+            try:
+                await asyncio.wait_for(
+                    self.execute_chat_attempt(
+                        task_id, request_id, actual_messages, params or {},
+                        actual_expected_type, actual_schema,
+                    ),
+                    timeout=max(1, deadline - loop.time()),
+                )
+                # execute_chat_attempt succeeded (parse_status=succeeded) → task is completed
+                break
+            except asyncio.TimeoutError:
+                await self._bus.emit(task_id, "failed", f"execute timed out after {effective_timeout}s")
+                break
+            except Exception:
+                # execute_chat_attempt already called _mgr.fail()
+                # Check if task was re-queued (retryable) or dead_lettered (exhausted)
+                t = await self._db.fetchone("SELECT status FROM agent_llm_tasks WHERE id = %s", (task_id,))
+                if not t or t["status"] in ("dead_letter", "failed", "cancelled"):
+                    break
+                # Task was re-queued → reclaim and retry
+                now_iso = datetime.now(timezone.utc).isoformat()
+                lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._config.lease_duration)
+                reclaimed = await self._db.fetchone(
+                    """UPDATE agent_llm_tasks
+                       SET status = 'running', lease_expires_at = %s, updated_at = %s
+                       WHERE id = %s AND status = 'queued'
+                       RETURNING id""",
+                    (lease_dt.isoformat(), now_iso, task_id),
+                )
+                if not reclaimed:
+                    break  # Worker claimed it, fall through to poll
 
         return await self._build_execute_response(task_id)
 

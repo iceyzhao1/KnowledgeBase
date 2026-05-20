@@ -146,9 +146,13 @@ class Worker:
                 task_id, request_id, messages, params,
                 expected_type, schema,
             )
-        except Exception:
-            # execute_chat_attempt already wrote failed attempt + called _mgr.fail()
-            pass
+        except Exception as e:
+            # execute_chat_attempt handles its own _mgr.fail() for provider/parse errors.
+            # Only handle early failures (missing svc, etc.) here.
+            if not self._svc:
+                await self._mgr.fail(task_id, "no_service", "LLMService not configured")
+            else:
+                logger.debug("Worker: execute_chat_attempt raised %s for task %s (already handled)", type(e).__name__, task_id[:8])
 
     # ------------------------------------------------------------------
     # Embedding execution
