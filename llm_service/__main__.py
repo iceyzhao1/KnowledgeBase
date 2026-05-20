@@ -1,18 +1,15 @@
 """Run LLM Service: python -m llm_service"""
 import asyncio
-import os
 import sys
 
 # Windows: psycopg async requires SelectorEventLoop, not ProactorEventLoop.
-# uvicorn hardcodes ProactorEventLoop on Windows, so we monkey-patch its factory.
+# Set event loop policy before importing uvicorn so it takes effect globally.
 if sys.platform == "win32":
-    import uvicorn.loops.asyncio as _uv_loop
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    _uv_loop.asyncio_loop_factory = lambda use_subprocess=False: asyncio.SelectorEventLoop
+import uvicorn  # noqa: E402
 
-import uvicorn
-
-from llm_service.config import LLMServiceConfig
+from llm_service.config import LLMServiceConfig  # noqa: E402
 
 cfg = LLMServiceConfig()
 uvicorn.run(

@@ -4,13 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 
-import aiosqlite
-
+from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.providers.utils import extract_doc_text
@@ -23,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 class Worker:
-    """Background worker loop: continuously claim → execute → complete/fail."""
+    """Background worker loop: continuously claim -> execute -> complete/fail."""
 
     def __init__(
         self,
-        db: aiosqlite.Connection,
+        db: LlmRuntimeDB,
         task_manager: TaskManager,
         event_bus: EventBus,
         provider: ProviderProtocol,
@@ -72,20 +70,13 @@ class Worker:
                     await asyncio.sleep(self._poll_interval)
             except asyncio.CancelledError:
                 return
-            except sqlite3.OperationalError as e:
-                if "database is locked" not in str(e).lower():
-                    logger.exception("%s database error: %s", name, e)
-                else:
-                    logger.warning("%s claim skipped because sqlite writer is busy", name)
-                await asyncio.sleep(self._poll_interval)
             except Exception as e:
                 logger.exception("%s error: %s", name, e)
                 await asyncio.sleep(self._poll_interval)
 
     async def _execute_task(self, task_id: str) -> None:
         """Dispatch to the correct executor based on task_type."""
-        cur = await self._db.execute("SELECT task_type FROM agent_llm_tasks WHERE id = ?", (task_id,))
-        row = await cur.fetchone()
+        row = await self._db.fetchone("SELECT task_type FROM agent_llm_tasks WHERE id = %s", (task_id,))
         if not row:
             await self._mgr.fail(task_id, "missing_task", "task row not found")
             return
@@ -101,13 +92,12 @@ class Worker:
             await self._mgr.fail(task_id, "unknown_task_type", f"unsupported task_type: {task_type}")
 
     # ------------------------------------------------------------------
-    # Chat execution (original logic)
+    # Chat execution
     # ------------------------------------------------------------------
 
     async def _execute_chat(self, task_id: str) -> None:
-        """Execute a chat task: read request → call provider → parse → complete/fail."""
-        cur = await self._db.execute("SELECT * FROM agent_llm_requests WHERE task_id = ?", (task_id,))
-        req = await cur.fetchone()
+        """Execute a chat task: read request -> call provider -> parse -> complete/fail."""
+        req = await self._db.fetchone("SELECT * FROM agent_llm_requests WHERE task_id = %s", (task_id,))
         if not req:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
             return
@@ -120,8 +110,7 @@ class Worker:
 
         attempt_no = 0
         while True:
-            cur = await self._db.execute("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = ?", (task_id,))
-            task_row = await cur.fetchone()
+            task_row = await self._db.fetchone("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = %s", (task_id,))
             if not task_row:
                 return
             attempt_no = task_row["attempt_count"] + 1
@@ -131,10 +120,9 @@ class Worker:
             await self._db.execute(
                 """INSERT INTO agent_llm_attempts
                    (id, task_id, request_id, attempt_no, status, started_at)
-                   VALUES (?, ?, ?, ?, 'running', ?)""",
+                   VALUES (%s, %s, %s, %s, 'running', %s)""",
                 (attempt_id, task_id, request_id, attempt_no, now),
             )
-            await self._db.commit()
 
             start = time.monotonic()
             try:
@@ -152,17 +140,16 @@ class Worker:
 
                 await self._db.execute(
                     """UPDATE agent_llm_attempts
-                       SET status = 'succeeded', raw_output_text = ?, prompt_tokens = ?,
-                           completion_tokens = ?, total_tokens = ?, latency_ms = ?, finished_at = ?,
-                           raw_response_json = ?
-                       WHERE id = ?""",
+                       SET status = 'succeeded', raw_output_text = %s, prompt_tokens = %s,
+                           completion_tokens = %s, total_tokens = %s, latency_ms = %s, finished_at = %s,
+                           raw_response_json = %s
+                       WHERE id = %s""",
                     (
                         resp.output_text, resp.prompt_tokens, resp.completion_tokens,
                         resp.total_tokens, latency, finished,
                         json.dumps(resp.raw_response or {}), attempt_id,
                     ),
                 )
-                await self._db.commit()
 
                 parse_result = parse_output(resp.output_text, expected_type, schema)
 
@@ -171,7 +158,7 @@ class Worker:
                     """INSERT INTO agent_llm_results
                        (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
                         parse_error, validation_errors_json, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (
                         result_id, task_id, attempt_id, parse_result.parse_status,
                         json.dumps(parse_result.parsed_output if parse_result.parsed_output is not None else {}),
@@ -180,7 +167,6 @@ class Worker:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
-                await self._db.commit()
 
                 await self._mgr.complete(task_id)
                 return
@@ -193,11 +179,10 @@ class Worker:
 
                 await self._db.execute(
                     """UPDATE agent_llm_attempts
-                       SET status = 'failed', error_type = ?, error_message = ?, latency_ms = ?, finished_at = ?
-                       WHERE id = ?""",
+                       SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
+                       WHERE id = %s""",
                     (error_type, error_msg, latency, finished, attempt_id),
                 )
-                await self._db.commit()
 
                 await self._mgr.fail(task_id, error_type, error_msg)
                 return
@@ -207,13 +192,12 @@ class Worker:
     # ------------------------------------------------------------------
 
     async def _execute_embedding(self, task_id: str) -> None:
-        """Execute an embedding task: read input → call model provider → store result."""
+        """Execute an embedding task: read input -> call model provider -> store result."""
         if not self._model_provider:
             await self._mgr.fail(task_id, "no_model_provider", "model_provider not configured")
             return
 
-        cur = await self._db.execute("SELECT * FROM agent_llm_requests WHERE task_id = ?", (task_id,))
-        req = await cur.fetchone()
+        req = await self._db.fetchone("SELECT * FROM agent_llm_requests WHERE task_id = %s", (task_id,))
         if not req:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
             return
@@ -224,8 +208,7 @@ class Worker:
         dimensions = input_data.get("dimensions")
         request_id = req["id"]
 
-        cur = await self._db.execute("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = ?", (task_id,))
-        task_row = await cur.fetchone()
+        task_row = await self._db.fetchone("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = %s", (task_id,))
         if not task_row:
             return
         attempt_no = task_row["attempt_count"] + 1
@@ -235,10 +218,9 @@ class Worker:
         await self._db.execute(
             """INSERT INTO agent_llm_attempts
                (id, task_id, request_id, attempt_no, status, started_at)
-               VALUES (?, ?, ?, ?, 'running', ?)""",
+               VALUES (%s, %s, %s, %s, 'running', %s)""",
             (attempt_id, task_id, request_id, attempt_no, now),
         )
-        await self._db.commit()
 
         start = time.monotonic()
         try:
@@ -252,14 +234,12 @@ class Worker:
 
             await self._db.execute(
                 """UPDATE agent_llm_attempts
-                   SET status = 'succeeded', total_tokens = ?, latency_ms = ?, finished_at = ?,
-                       raw_response_json = ?
-                   WHERE id = ?""",
+                   SET status = 'succeeded', total_tokens = %s, latency_ms = %s, finished_at = %s,
+                       raw_response_json = %s
+                   WHERE id = %s""",
                 (token_usage, latency, finished, json.dumps(result), attempt_id),
             )
-            await self._db.commit()
 
-            # text_output: source texts for dashboard visibility
             text_output = "\n".join(texts)
 
             result_id = str(uuid.uuid4())
@@ -267,14 +247,13 @@ class Worker:
                 """INSERT INTO agent_llm_results
                    (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
                     parse_error, validation_errors_json, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     result_id, task_id, attempt_id, "not_required",
                     json.dumps(result), text_output, None, "[]",
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
-            await self._db.commit()
 
             await self._mgr.complete(task_id)
 
@@ -286,11 +265,10 @@ class Worker:
 
             await self._db.execute(
                 """UPDATE agent_llm_attempts
-                   SET status = 'failed', error_type = ?, error_message = ?, latency_ms = ?, finished_at = ?
-                   WHERE id = ?""",
+                   SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
+                   WHERE id = %s""",
                 (error_type, error_msg, latency, finished, attempt_id),
             )
-            await self._db.commit()
 
             await self._mgr.fail(task_id, error_type, error_msg)
 
@@ -299,13 +277,12 @@ class Worker:
     # ------------------------------------------------------------------
 
     async def _execute_rerank(self, task_id: str) -> None:
-        """Execute a rerank task: read input → call model provider → store result."""
+        """Execute a rerank task: read input -> call model provider -> store result."""
         if not self._model_provider:
             await self._mgr.fail(task_id, "no_model_provider", "model_provider not configured")
             return
 
-        cur = await self._db.execute("SELECT * FROM agent_llm_requests WHERE task_id = ?", (task_id,))
-        req = await cur.fetchone()
+        req = await self._db.fetchone("SELECT * FROM agent_llm_requests WHERE task_id = %s", (task_id,))
         if not req:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
             return
@@ -317,8 +294,7 @@ class Worker:
         top_n = input_data.get("top_n")
         request_id = req["id"]
 
-        cur = await self._db.execute("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = ?", (task_id,))
-        task_row = await cur.fetchone()
+        task_row = await self._db.fetchone("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = %s", (task_id,))
         if not task_row:
             return
         attempt_no = task_row["attempt_count"] + 1
@@ -328,10 +304,9 @@ class Worker:
         await self._db.execute(
             """INSERT INTO agent_llm_attempts
                (id, task_id, request_id, attempt_no, status, started_at)
-               VALUES (?, ?, ?, ?, 'running', ?)""",
+               VALUES (%s, %s, %s, %s, 'running', %s)""",
             (attempt_id, task_id, request_id, attempt_no, now),
         )
-        await self._db.commit()
 
         start = time.monotonic()
         try:
@@ -343,14 +318,12 @@ class Worker:
 
             await self._db.execute(
                 """UPDATE agent_llm_attempts
-                   SET status = 'succeeded', total_tokens = ?, latency_ms = ?, finished_at = ?,
-                       raw_response_json = ?
-                   WHERE id = ?""",
+                   SET status = 'succeeded', total_tokens = %s, latency_ms = %s, finished_at = %s,
+                       raw_response_json = %s
+                   WHERE id = %s""",
                 (token_usage, latency, finished, json.dumps(result), attempt_id),
             )
-            await self._db.commit()
 
-            # text_output: query + reranked results summary for dashboard
             lines = [f"Query: {query}"]
             for r in result.get("results", []):
                 score = r.get("relevance_score", 0)
@@ -363,14 +336,13 @@ class Worker:
                 """INSERT INTO agent_llm_results
                    (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
                     parse_error, validation_errors_json, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     result_id, task_id, attempt_id, "not_required",
                     json.dumps(result), text_output, None, "[]",
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
-            await self._db.commit()
 
             await self._mgr.complete(task_id)
 
@@ -382,11 +354,10 @@ class Worker:
 
             await self._db.execute(
                 """UPDATE agent_llm_attempts
-                   SET status = 'failed', error_type = ?, error_message = ?, latency_ms = ?, finished_at = ?
-                   WHERE id = ?""",
+                   SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
+                   WHERE id = %s""",
                 (error_type, error_msg, latency, finished, attempt_id),
             )
-            await self._db.commit()
 
             await self._mgr.fail(task_id, error_type, error_msg)
 
@@ -396,7 +367,7 @@ class LeaseRecovery:
 
     def __init__(
         self,
-        db: aiosqlite.Connection,
+        db: LlmRuntimeDB,
         task_manager: TaskManager,
         event_bus: EventBus,
         interval: float = 30.0,
@@ -433,12 +404,11 @@ class LeaseRecovery:
 
     async def _recover(self) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        cur = await self._db.execute(
+        expired = await self._db.fetchall(
             """SELECT id, attempt_count, max_attempts FROM agent_llm_tasks
-               WHERE status = 'running' AND lease_expires_at < ?""",
+               WHERE status = 'running' AND lease_expires_at < %s""",
             (now,),
         )
-        expired = await cur.fetchall()
         if not expired:
             return
 
@@ -451,16 +421,13 @@ class LeaseRecovery:
             await self._db.execute(
                 """UPDATE agent_llm_attempts SET status = 'failed', error_type = 'lease_expired',
                    error_message = 'lease expired, recovered by lease recovery'
-                   WHERE task_id = ? AND status = 'running'""",
+                   WHERE task_id = %s AND status = 'running'""",
                 (task_id,),
             )
-            await self._db.commit()
 
             if attempt_count < max_attempts:
-                # Re-queue with backoff
                 await self._mgr.fail(task_id, "lease_expired", "lease expired, re-queued")
                 logger.info("LeaseRecovery: re-queued task %s", task_id[:8])
             else:
-                # Exhausted → dead_letter
                 await self._mgr.fail(task_id, "lease_expired", "lease expired, exhausted")
                 logger.info("LeaseRecovery: dead_lettered task %s", task_id[:8])

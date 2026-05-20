@@ -7,9 +7,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from string import Template
 
-import aiosqlite
-
 from llm_service.config import LLMServiceConfig
+from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.runtime.event_bus import EventBus
@@ -26,7 +25,7 @@ class LLMService:
 
     def __init__(
         self,
-        db: aiosqlite.Connection,
+        db: LlmRuntimeDB,
         provider: ProviderProtocol,
         config: LLMServiceConfig,
         model_provider: ModelProviderProtocol | None = None,
@@ -46,6 +45,9 @@ class LLMService:
         self._templates = TemplateRegistry(db)
         self._model_provider = model_provider
         self._provider = provider
+        # Store provider info directly instead of accessing _executor._provider
+        self._provider_name = getattr(provider, 'provider_name', 'unknown')
+        self._default_model = getattr(provider, 'default_model', config.provider_model)
 
     # ------------------------------------------------------------------
     # Template resolution
@@ -82,7 +84,6 @@ class LLMService:
                 msgs.append({"role": "system", "content": tpl["system_prompt"]})
             user_content = tpl.get("user_prompt_template", "")
             if input:
-                # Use safe_substitute to avoid injection via str.format
                 tmpl = Template(user_content)
                 user_content = tmpl.safe_substitute(input)
             msgs.append({"role": "user", "content": user_content})
@@ -94,10 +95,14 @@ class LLMService:
 
         # Template schema as fallback
         if not output_schema and tpl.get("output_schema_json"):
-            try:
-                result["output_schema"] = json.loads(tpl["output_schema_json"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+            schema_raw = tpl["output_schema_json"]
+            if isinstance(schema_raw, str):
+                try:
+                    result["output_schema"] = json.loads(schema_raw)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif isinstance(schema_raw, dict):
+                result["output_schema"] = schema_raw
 
         # Inject output schema into messages so LLM sees the constraint
         self._inject_schema_into_messages(result)
@@ -106,12 +111,7 @@ class LLMService:
 
     @staticmethod
     def _inject_schema_into_messages(result: dict) -> None:
-        """Append JSON Schema to system prompt so LLM generates conformant output.
-
-        Follows the DeepSeek / GLM recommended pattern:
-        inject schema into prompt content + response_format={"type":"json_object"}
-        + jsonschema post-validation.
-        """
+        """Append JSON Schema to system prompt so LLM generates conformant output."""
         schema = result.get("output_schema")
         expected_type = result.get("expected_output_type")
         msgs = result.get("messages")
@@ -125,7 +125,6 @@ class LLMService:
             + "\n\n注意：上面的 JSON Schema 是格式规范说明，不是你要输出的内容。"
             "请直接输出符合该格式的 JSON 数据，不要输出 Schema 定义本身。"
         )
-        # Create new list to avoid mutating caller-provided messages
         new_msgs = []
         injected = False
         for msg in msgs:
@@ -137,6 +136,69 @@ class LLMService:
         if not injected:
             new_msgs.insert(0, {"role": "system", "content": schema_instruction.strip()})
         result["messages"] = new_msgs
+
+    # ------------------------------------------------------------------
+    # Common submit with idempotency
+    # ------------------------------------------------------------------
+
+    async def _submit_with_idempotency(
+        self,
+        idempotency_key: str | None,
+        task_type: str,
+        caller_domain: str,
+        pipeline_stage: str,
+        request_params: tuple,
+        event_message: str,
+        *,
+        max_attempts: int = 3,
+        priority: int = 100,
+        metadata: dict | None = None,
+    ) -> str:
+        """Generic idempotent submit: check key -> insert task + request -> emit event."""
+        async with self._submit_lock:
+            if idempotency_key:
+                row = await self._db.fetchone(
+                    """SELECT id FROM agent_llm_tasks
+                       WHERE idempotency_key = %s
+                         AND status NOT IN ('failed', 'dead_letter', 'cancelled')
+                       ORDER BY created_at DESC
+                       LIMIT 1""",
+                    (idempotency_key,),
+                )
+                if row:
+                    return row["id"]
+
+            # Use a transaction for task + request insert
+            async with self._db.pool.connection() as conn:
+                async with conn.transaction():
+                    task_id = str(uuid.uuid4())
+                    now = datetime.now(timezone.utc).isoformat()
+                    ma = max_attempts
+
+                    await conn.execute(
+                        """INSERT INTO agent_llm_tasks
+                           (id, caller_domain, pipeline_stage, task_type,
+                            idempotency_key, status, priority, available_at, attempt_count, max_attempts,
+                            created_at, updated_at, metadata_json)
+                           VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
+                        (
+                            task_id, caller_domain, pipeline_stage, task_type,
+                            idempotency_key, priority, now, ma,
+                            now, now, json.dumps(metadata or {}),
+                        ),
+                    )
+
+                    request_id = str(uuid.uuid4())
+                    await conn.execute(
+                        """INSERT INTO agent_llm_requests
+                           (id, task_id, provider, model, prompt_template_key, messages_json, input_json,
+                            params_json, expected_output_type, output_schema_json, created_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (request_id, task_id, *request_params, now),
+                    )
+
+            await self._bus.emit(task_id, "submitted", event_message)
+            return task_id
 
     # ------------------------------------------------------------------
     # Submit (async)
@@ -166,57 +228,24 @@ class LLMService:
         actual_expected_type = resolved["expected_output_type"] or "json_object"
         actual_schema = resolved["output_schema"]
 
-        task_id = None
-        async with self._submit_lock:
-            if idempotency_key:
-                cur = await self._db.execute(
-                    """SELECT id FROM agent_llm_tasks
-                       WHERE idempotency_key = ?
-                         AND status NOT IN ('failed', 'dead_letter', 'cancelled')
-                       ORDER BY created_at DESC
-                       LIMIT 1""",
-                    (idempotency_key,),
-                )
-                existing = await cur.fetchone()
-                if existing:
-                    return existing["id"]
-
-            in_transaction = False
-            try:
-                await self._db.execute("BEGIN IMMEDIATE")
-                in_transaction = True
-                task_id = await self._mgr.insert_task_row(
-                    caller_domain, pipeline_stage,
-                    idempotency_key=idempotency_key,
-                    max_attempts=max_attempts, priority=priority,
-                    metadata=metadata,
-                )
-                now = datetime.now(timezone.utc).isoformat()
-                request_id = str(uuid.uuid4())
-                provider_instance = self._executor._provider
-                await self._db.execute(
-                    """INSERT INTO agent_llm_requests
-                       (id, task_id, provider, model, prompt_template_key, messages_json, input_json,
-                        params_json, expected_output_type, output_schema_json, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        request_id, task_id, provider_instance.provider_name,
-                        provider_instance.default_model, template_key,
-                        json.dumps(actual_messages or []), json.dumps(input or {}),
-                        json.dumps(params or {}), actual_expected_type,
-                        json.dumps(actual_schema or {}), now,
-                    ),
-                )
-                await self._db.execute("COMMIT")
-                in_transaction = False
-            except Exception:
-                if in_transaction:
-                    await self._db.execute("ROLLBACK")
-                raise
-
-            await self._bus.emit(task_id, "submitted", "task submitted")
-
-        return task_id
+        return await self._submit_with_idempotency(
+            idempotency_key=idempotency_key,
+            task_type="chat",
+            caller_domain=caller_domain,
+            pipeline_stage=pipeline_stage,
+            request_params=(
+                self._provider_name, self._default_model, template_key,
+                json.dumps(actual_messages or []),
+                json.dumps(input or {}),
+                json.dumps(params or {}),
+                actual_expected_type,
+                json.dumps(actual_schema or {}),
+            ),
+            event_message="task submitted",
+            max_attempts=max_attempts,
+            priority=priority,
+            metadata=metadata,
+        )
 
     # ------------------------------------------------------------------
     # Submit embedding / rerank (async)
@@ -237,55 +266,22 @@ class LLMService:
     ) -> str:
         actual_model = model or getattr(self._model_provider, "embedding_model", None) or self._config.embedding_model
 
-        task_id = None
-        async with self._submit_lock:
-            if idempotency_key:
-                cur = await self._db.execute(
-                    """SELECT id FROM agent_llm_tasks
-                       WHERE idempotency_key = ?
-                         AND status NOT IN ('failed', 'dead_letter', 'cancelled')
-                       ORDER BY created_at DESC
-                       LIMIT 1""",
-                    (idempotency_key,),
-                )
-                existing = await cur.fetchone()
-                if existing:
-                    return existing["id"]
-
-            in_transaction = False
-            try:
-                await self._db.execute("BEGIN IMMEDIATE")
-                in_transaction = True
-                task_id = await self._mgr.insert_task_row(
-                    caller_domain, pipeline_stage,
-                    task_type="embedding",
-                    idempotency_key=idempotency_key,
-                    max_attempts=max_attempts, priority=priority,
-                    metadata=metadata,
-                )
-                now = datetime.now(timezone.utc).isoformat()
-                request_id = str(uuid.uuid4())
-                await self._db.execute(
-                    """INSERT INTO agent_llm_requests
-                       (id, task_id, provider, model, prompt_template_key, messages_json, input_json,
-                        params_json, expected_output_type, output_schema_json, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        request_id, task_id, "embedding", actual_model, None,
-                        "[]", json.dumps({"texts": texts, "model": actual_model, "dimensions": dimensions}),
-                        "{}", "embedding", "{}", now,
-                    ),
-                )
-                await self._db.execute("COMMIT")
-                in_transaction = False
-            except Exception:
-                if in_transaction:
-                    await self._db.execute("ROLLBACK")
-                raise
-
-            await self._bus.emit(task_id, "submitted", "embedding task submitted")
-
-        return task_id
+        return await self._submit_with_idempotency(
+            idempotency_key=idempotency_key,
+            task_type="embedding",
+            caller_domain=caller_domain,
+            pipeline_stage=pipeline_stage,
+            request_params=(
+                "embedding", actual_model, None,
+                "[]",
+                json.dumps({"texts": texts, "model": actual_model, "dimensions": dimensions}),
+                "{}", "embedding", "{}",
+            ),
+            event_message="embedding task submitted",
+            max_attempts=max_attempts,
+            priority=priority,
+            metadata=metadata,
+        )
 
     async def submit_rerank(
         self,
@@ -303,55 +299,22 @@ class LLMService:
     ) -> str:
         actual_model = model or getattr(self._model_provider, "_rerank_model", None) or self._config.rerank_model
 
-        task_id = None
-        async with self._submit_lock:
-            if idempotency_key:
-                cur = await self._db.execute(
-                    """SELECT id FROM agent_llm_tasks
-                       WHERE idempotency_key = ?
-                         AND status NOT IN ('failed', 'dead_letter', 'cancelled')
-                       ORDER BY created_at DESC
-                       LIMIT 1""",
-                    (idempotency_key,),
-                )
-                existing = await cur.fetchone()
-                if existing:
-                    return existing["id"]
-
-            in_transaction = False
-            try:
-                await self._db.execute("BEGIN IMMEDIATE")
-                in_transaction = True
-                task_id = await self._mgr.insert_task_row(
-                    caller_domain, pipeline_stage,
-                    task_type="rerank",
-                    idempotency_key=idempotency_key,
-                    max_attempts=max_attempts, priority=priority,
-                    metadata=metadata,
-                )
-                now = datetime.now(timezone.utc).isoformat()
-                request_id = str(uuid.uuid4())
-                await self._db.execute(
-                    """INSERT INTO agent_llm_requests
-                       (id, task_id, provider, model, prompt_template_key, messages_json, input_json,
-                        params_json, expected_output_type, output_schema_json, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        request_id, task_id, "rerank", actual_model, None,
-                        "[]", json.dumps({"query": query, "documents": documents, "model": actual_model, "top_n": top_n}),
-                        "{}", "rerank", "{}", now,
-                    ),
-                )
-                await self._db.execute("COMMIT")
-                in_transaction = False
-            except Exception:
-                if in_transaction:
-                    await self._db.execute("ROLLBACK")
-                raise
-
-            await self._bus.emit(task_id, "submitted", "rerank task submitted")
-
-        return task_id
+        return await self._submit_with_idempotency(
+            idempotency_key=idempotency_key,
+            task_type="rerank",
+            caller_domain=caller_domain,
+            pipeline_stage=pipeline_stage,
+            request_params=(
+                "rerank", actual_model, None,
+                "[]",
+                json.dumps({"query": query, "documents": documents, "model": actual_model, "top_n": top_n}),
+                "{}", "rerank", "{}",
+            ),
+            event_message="rerank task submitted",
+            max_attempts=max_attempts,
+            priority=priority,
+            metadata=metadata,
+        )
 
     # ------------------------------------------------------------------
     # Execute (sync)
@@ -385,9 +348,8 @@ class LLMService:
             max_attempts=max_attempts, priority=priority,
         )
 
-        # Idempotency: already-succeeded task → return cached result
-        cur = await self._db.execute("SELECT status FROM agent_llm_tasks WHERE id = ?", (task_id,))
-        row = await cur.fetchone()
+        # Idempotency: already-succeeded task -> return cached result
+        row = await self._db.fetchone("SELECT status FROM agent_llm_tasks WHERE id = %s", (task_id,))
         if row["status"] == "succeeded":
             return await self._build_execute_response(task_id)
 
@@ -402,15 +364,13 @@ class LLMService:
         # Atomically claim: only succeed if task is still 'queued' (not grabbed by Worker)
         now_iso = datetime.now(timezone.utc).isoformat()
         lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._config.lease_duration)
-        cur = await self._db.execute(
+        claimed = await self._db.fetchone(
             """UPDATE agent_llm_tasks
-               SET status = 'running', started_at = ?, lease_expires_at = ?, updated_at = ?
-               WHERE id = ? AND status = 'queued'
+               SET status = 'running', started_at = %s, lease_expires_at = %s, updated_at = %s
+               WHERE id = %s AND status = 'queued'
                RETURNING id""",
             (now_iso, lease_dt.isoformat(), now_iso, task_id),
         )
-        claimed = await cur.fetchone()
-        await self._db.commit()
 
         if not claimed:
             # Worker already claimed this task — poll until it finishes
@@ -420,8 +380,7 @@ class LLMService:
             deadline = loop.time() + effective_timeout
             while loop.time() < deadline:
                 await asyncio.sleep(0.5)
-                cur = await self._db.execute("SELECT status FROM agent_llm_tasks WHERE id = ?", (task_id,))
-                t = await cur.fetchone()
+                t = await self._db.fetchone("SELECT status FROM agent_llm_tasks WHERE id = %s", (task_id,))
                 if t and t["status"] in ("succeeded", "failed", "dead_letter", "cancelled"):
                     return await self._build_execute_response(task_id)
             return await self._build_execute_response(task_id)
@@ -436,12 +395,9 @@ class LLMService:
                 timeout=effective_timeout,
             )
         except asyncio.TimeoutError:
-            # Per design: timeout does NOT fail the task.
-            # Task stays 'running'; lease recovery will handle it later.
             await self._bus.emit(task_id, "failed", f"execute timed out after {effective_timeout}s (lease recovery pending)")
             return await self._build_execute_response(task_id)
         except Exception as e:
-            # Catch unexpected errors (DB failures, parse crashes, etc.)
             error_type = getattr(e, "error_type", "unexpected_error")
             await self._mgr.fail(task_id, error_type, str(e)[:500])
             return await self._build_execute_response(task_id)
@@ -453,16 +409,12 @@ class LLMService:
     # ------------------------------------------------------------------
 
     async def _build_execute_response(self, task_id: str) -> dict:
-        cur = await self._db.execute("SELECT status, attempt_count FROM agent_llm_tasks WHERE id = ?", (task_id,))
-        task = await cur.fetchone()
+        task = await self._db.fetchone("SELECT status, attempt_count FROM agent_llm_tasks WHERE id = %s", (task_id,))
         if not task:
             return {"task_id": task_id, "status": "unknown", "attempts": 0, "result": None, "error": None}
 
-        cur = await self._db.execute("SELECT parse_status, parsed_output_json, text_output, validation_errors_json FROM agent_llm_results WHERE task_id = ?", (task_id,))
-        result_row = await cur.fetchone()
-
-        cur = await self._db.execute("SELECT total_tokens, latency_ms FROM agent_llm_attempts WHERE task_id = ? ORDER BY attempt_no DESC LIMIT 1", (task_id,))
-        attempt_row = await cur.fetchone()
+        result_row = await self._db.fetchone("SELECT parse_status, parsed_output_json, text_output, validation_errors_json FROM agent_llm_results WHERE task_id = %s", (task_id,))
+        attempt_row = await self._db.fetchone("SELECT total_tokens, latency_ms FROM agent_llm_attempts WHERE task_id = %s ORDER BY attempt_no DESC LIMIT 1", (task_id,))
 
         resp = {
             "task_id": task_id,
@@ -473,14 +425,8 @@ class LLMService:
         }
 
         if result_row:
-            try:
-                parsed = json.loads(result_row["parsed_output_json"]) if result_row["parsed_output_json"] else None
-            except json.JSONDecodeError:
-                parsed = None
-            try:
-                validation = json.loads(result_row["validation_errors_json"]) if result_row["validation_errors_json"] else []
-            except json.JSONDecodeError:
-                validation = []
+            parsed = _safe_json_parse(result_row["parsed_output_json"])
+            validation = _safe_json_parse(result_row["validation_errors_json"], default=[])
             resp["result"] = {
                 "parse_status": result_row["parse_status"],
                 "parsed_output": parsed if parsed != {} else None,
@@ -491,8 +437,7 @@ class LLMService:
             resp["result"] = None
 
         if task["status"] in ("dead_letter", "failed"):
-            cur = await self._db.execute("SELECT error_type, error_message FROM agent_llm_attempts WHERE task_id = ? AND status = 'failed' ORDER BY attempt_no DESC LIMIT 1", (task_id,))
-            err_row = await cur.fetchone()
+            err_row = await self._db.fetchone("SELECT error_type, error_message FROM agent_llm_attempts WHERE task_id = %s AND status = 'failed' ORDER BY attempt_no DESC LIMIT 1", (task_id,))
             resp["error"] = {
                 "error_type": err_row["error_type"] if err_row else None,
                 "error_message": err_row["error_message"] if err_row else None,
@@ -503,8 +448,7 @@ class LLMService:
         return resp
 
     async def get_task(self, task_id: str) -> dict | None:
-        cur = await self._db.execute("SELECT * FROM agent_llm_tasks WHERE id = ?", (task_id,))
-        row = await cur.fetchone()
+        row = await self._db.fetchone("SELECT * FROM agent_llm_tasks WHERE id = %s", (task_id,))
         if not row:
             return None
         return _map_task_row(row)
@@ -513,26 +457,28 @@ class LLMService:
         await self._mgr.cancel(task_id)
 
     async def get_result(self, task_id: str) -> dict | None:
-        cur = await self._db.execute("SELECT * FROM agent_llm_results WHERE task_id = ?", (task_id,))
-        row = await cur.fetchone()
+        row = await self._db.fetchone("SELECT * FROM agent_llm_results WHERE task_id = %s", (task_id,))
         return _map_result_row(row) if row else None
 
     async def get_attempts(self, task_id: str) -> list[dict]:
-        cur = await self._db.execute("SELECT * FROM agent_llm_attempts WHERE task_id = ? ORDER BY attempt_no", (task_id,))
-        return [_map_attempt_row(r) for r in await cur.fetchall()]
+        rows = await self._db.fetchall("SELECT * FROM agent_llm_attempts WHERE task_id = %s ORDER BY attempt_no", (task_id,))
+        return [_map_attempt_row(r) for r in rows]
 
     async def get_events(self, task_id: str) -> list[dict]:
-        cur = await self._db.execute("SELECT * FROM agent_llm_events WHERE task_id = ? ORDER BY created_at", (task_id,))
-        return [_map_event_row(r) for r in await cur.fetchall()]
+        rows = await self._db.fetchall("SELECT * FROM agent_llm_events WHERE task_id = %s ORDER BY created_at", (task_id,))
+        return [_map_event_row(r) for r in rows]
 
 
 # ------------------------------------------------------------------
 # Stable response mapping — shields callers from DB column changes
 # ------------------------------------------------------------------
 
-def _parse_json(value: str | None, default=None):
-    if not value:
+def _safe_json_parse(value, default=None):
+    """Parse JSON from DB value. Handles both str (legacy) and dict/list (JSONB auto-parse)."""
+    if value is None:
         return default
+    if isinstance(value, (dict, list)):
+        return value
     try:
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
@@ -545,12 +491,13 @@ def _map_task_row(row) -> dict:
         "id": row["id"],
         "caller_domain": row["caller_domain"],
         "pipeline_stage": row["pipeline_stage"],
+        "task_type": row["task_type"],
         "status": row["status"],
         "idempotency_key": row["idempotency_key"],
         "priority": row["priority"],
         "attempt_count": row["attempt_count"],
         "max_attempts": row["max_attempts"],
-        "metadata": _parse_json(row["metadata_json"], {}),
+        "metadata": _safe_json_parse(row["metadata_json"], {}),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "started_at": row["started_at"],
@@ -564,10 +511,10 @@ def _map_result_row(row) -> dict:
         "id": row["id"],
         "task_id": row["task_id"],
         "parse_status": row["parse_status"],
-        "parsed_output": _parse_json(row["parsed_output_json"]) or None,
+        "parsed_output": _safe_json_parse(row["parsed_output_json"]) or None,
         "text_output": row["text_output"],
         "parse_error": row["parse_error"],
-        "validation_errors": _parse_json(row["validation_errors_json"], []),
+        "validation_errors": _safe_json_parse(row["validation_errors_json"], []),
         "created_at": row["created_at"],
     }
 

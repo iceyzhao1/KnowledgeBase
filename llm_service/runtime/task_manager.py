@@ -4,16 +4,14 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import aiosqlite
-
+from llm_service.db import LlmRuntimeDB
 from llm_service.runtime.event_bus import EventBus
-from llm_service.runtime.idempotency import find_existing_task
 
 
 class TaskManager:
     def __init__(
         self,
-        db: aiosqlite.Connection,
+        db: LlmRuntimeDB,
         event_bus: EventBus,
         max_attempts: int = 3,
         lease_duration: int = 300,
@@ -38,6 +36,8 @@ class TaskManager:
         priority: int = 100,
         metadata: dict | None = None,
     ) -> str:
+        from llm_service.runtime.idempotency import find_existing_task
+
         if idempotency_key:
             existing = await find_existing_task(self._db, idempotency_key)
             if existing:
@@ -52,7 +52,6 @@ class TaskManager:
             priority=priority,
             metadata=metadata,
         )
-        await self._db.commit()
         await self._bus.emit(task_id, "submitted", "task submitted")
         return task_id
 
@@ -67,7 +66,7 @@ class TaskManager:
         priority: int = 100,
         metadata: dict | None = None,
     ) -> str:
-        """Insert the task row without committing or emitting events.
+        """Insert the task row without emitting events.
 
         This lets higher-level callers create the task and its request row in
         one transaction before workers can claim it.
@@ -80,7 +79,7 @@ class TaskManager:
                (id, caller_domain, pipeline_stage, task_type,
                 idempotency_key, status, priority, available_at, attempt_count, max_attempts,
                 created_at, updated_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, 0, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s, 0, %s, %s, %s, %s)""",
             (
                 task_id, caller_domain, pipeline_stage, task_type,
                 idempotency_key, priority, now, ma,
@@ -94,19 +93,18 @@ class TaskManager:
         lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._lease_duration)
         lease_str = lease_dt.isoformat()
 
-        cur = await self._db.execute(
+        row = await self._db.fetchone(
             """UPDATE agent_llm_tasks
-               SET status = 'running', started_at = ?, lease_expires_at = ?, updated_at = ?
+               SET status = 'running', started_at = %s, lease_expires_at = %s, updated_at = %s
                WHERE id = (
                    SELECT id FROM agent_llm_tasks
-                   WHERE status = 'queued' AND available_at <= ?
+                   WHERE status = 'queued' AND available_at <= %s
                    ORDER BY priority DESC, created_at ASC LIMIT 1
+                   FOR UPDATE SKIP LOCKED
                )
                RETURNING id""",
             (now, lease_str, now, now),
         )
-        row = await cur.fetchone()
-        await self._db.commit()
         if not row:
             return None
 
@@ -117,19 +115,17 @@ class TaskManager:
     async def complete(self, task_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         await self._db.execute(
-            "UPDATE agent_llm_tasks SET status = 'succeeded', attempt_count = attempt_count + 1, finished_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE agent_llm_tasks SET status = 'succeeded', attempt_count = attempt_count + 1, finished_at = %s, updated_at = %s WHERE id = %s",
             (now, now, task_id),
         )
-        await self._db.commit()
         await self._bus.emit(task_id, "succeeded", "task completed")
 
     async def fail(self, task_id: str, error_type: str, error_message: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        cur = await self._db.execute(
-            "SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = ?",
+        row = await self._db.fetchone(
+            "SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = %s",
             (task_id,),
         )
-        row = await cur.fetchone()
         if row is None:
             return
         new_count = row["attempt_count"] + 1
@@ -139,30 +135,28 @@ class TaskManager:
             available = datetime.now(timezone.utc) + timedelta(seconds=backoff)
             await self._db.execute(
                 """UPDATE agent_llm_tasks
-                   SET status = 'queued', attempt_count = ?, available_at = ?, updated_at = ?
-                   WHERE id = ?""",
+                   SET status = 'queued', attempt_count = %s, available_at = %s, updated_at = %s
+                   WHERE id = %s""",
                 (new_count, available.isoformat(), now, task_id),
             )
-            await self._db.commit()
             await self._bus.emit(task_id, "retried", f"attempt {new_count} failed: {error_message}")
         else:
             await self._db.execute(
                 """UPDATE agent_llm_tasks
-                   SET status = 'dead_letter', attempt_count = ?, finished_at = ?, updated_at = ?
-                   WHERE id = ?""",
+                   SET status = 'dead_letter', attempt_count = %s, finished_at = %s, updated_at = %s
+                   WHERE id = %s""",
                 (new_count, now, now, task_id),
             )
-            await self._db.commit()
             await self._bus.emit(task_id, "dead_letter", f"exhausted after {new_count} attempts: {error_message}")
 
     async def cancel(self, task_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        cur = await self._db.execute(
-            "UPDATE agent_llm_tasks SET status = 'cancelled', finished_at = ?, updated_at = ? "
-            "WHERE id = ? AND status = 'queued'",
-            (now, now, task_id),
-        )
-        await self._db.commit()
-        if cur.rowcount == 0:
-            raise ValueError(f"Task {task_id} cannot be cancelled (not in 'queued' status)")
+        async with self._db.pool.connection() as conn:
+            cur = await conn.execute(
+                "UPDATE agent_llm_tasks SET status = 'cancelled', finished_at = %s, updated_at = %s "
+                "WHERE id = %s AND status = 'queued'",
+                (now, now, task_id),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Task {task_id} cannot be cancelled (not in 'queued' status)")
         await self._bus.emit(task_id, "cancelled", "task cancelled")
