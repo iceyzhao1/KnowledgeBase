@@ -56,7 +56,7 @@ const stageIcons: Record<string, string> = {
 }
 
 function findStage(key: string): MiningRunStage | undefined {
-  return props.stageEvents.find(s => s.name === key)
+  return props.stageEvents.find(s => s.stage === key)
 }
 
 function getStageStatus(key: string): string {

@@ -51,26 +51,30 @@ export interface MiningRun {
 }
 
 export interface MiningRunStage {
-  name: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
-  started_at?: string
-  finished_at?: string
-  duration_ms?: number
-  progress?: number
-  summary?: string
-  details?: Record<string, unknown>
+  id: string
+  stage: string
+  status: string
+  created_at: string
+  duration_ms?: number | null
+  output_summary?: string | null
+  error_message?: string | null
+  run_document_id?: string | null
 }
 
 export interface MiningRunDocument {
+  id?: string
   document_id: string
   document_name: string
+  document_key?: string
   status: 'pending' | 'processing' | 'committed' | 'failed' | 'skipped'
   action: 'new' | 'updated' | 'unchanged'
   error_message?: string
   error_summary?: string
   current_stage?: string | null
   duration_ms?: number | null
-  document_key?: string
+  started_at?: string
+  finished_at?: string
+  document_snapshot_id?: string | null
   stage?: string
 }
 

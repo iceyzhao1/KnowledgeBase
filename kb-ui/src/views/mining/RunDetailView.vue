@@ -99,6 +99,8 @@
           :data="filteredDocs"
           class="kb-table"
           :header-cell-style="{ background: 'transparent' }"
+          @row-click="(row: Record<string, unknown>) => $router.push(`/mining/${props.runId}/documents/${row.id}`)"
+          style="cursor: pointer"
         >
           <el-table-column label="文件名" min-width="200">
             <template #default="{ row }">

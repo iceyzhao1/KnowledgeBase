@@ -24,6 +24,12 @@ const router = createRouter({
           props: true,
         },
         {
+          path: 'mining/:runId/documents/:docId',
+          name: 'mining-document-detail',
+          component: () => import('@/views/mining/RunDocumentDetailView.vue'),
+          props: true,
+        },
+        {
           path: 'search',
           name: 'search',
           component: () => import('@/views/SearchView.vue'),

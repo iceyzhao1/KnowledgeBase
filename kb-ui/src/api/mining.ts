@@ -9,7 +9,7 @@ import { useDomainStore } from '@/stores/domain'
 function extractItems<T>(data: unknown): T[] {
   if (Array.isArray(data)) return data
   const obj = data as Record<string, unknown>
-  const items = obj.items ?? obj.data
+  const items = obj.items ?? obj.data ?? obj.stages
   if (Array.isArray(items)) return items
   return []
 }
@@ -79,6 +79,47 @@ export function useMiningApi() {
 
     async publishRun(runId: string, domain?: string): Promise<void> {
       await client.post(`/api/runs/${runId}/publish`, domain ? { domain } : undefined)
+    },
+
+    // Run document detail
+    async getRunDocument(runId: string, docId: string): Promise<MiningRunDocument> {
+      const { data } = await client.get(`/api/runs/${runId}/documents/${docId}`)
+      return data
+    },
+
+    async getRunDocumentStages(runId: string, docId: string): Promise<MiningRunStage[]> {
+      const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/stages`)
+      return extractItems<MiningRunStage>(data)
+    },
+
+    async getRunDocumentArtifacts(runId: string, docId: string): Promise<{
+      run_id: string; document_id: string; snapshot_id: string | null
+      segment_count: number; unit_count: number; relation_count: number
+    }> {
+      const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/artifacts`)
+      return data
+    },
+
+    async getRunDocumentSegments(runId: string, docId: string, params?: {
+      limit?: number; offset?: number
+    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; items: KnowledgeSegment[] }> {
+      const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/segments`, { params })
+      return data
+    },
+
+    async getRunDocumentUnits(runId: string, docId: string, params?: {
+      unit_type?: string; limit?: number; offset?: number
+    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; items: KnowledgeUnit[] }> {
+      const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/units`, { params })
+      return data
+    },
+
+    async getRunArtifacts(runId: string): Promise<{
+      run_id: string; document_count: number
+      segment_count: number; unit_count: number; relation_count: number
+    }> {
+      const { data } = await client.get(`/api/runs/${runId}/artifacts`)
+      return data
     },
 
     // Upload

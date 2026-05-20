@@ -368,6 +368,242 @@ async def get_run_progress(run_id: str, request: Request) -> dict:
     }
 
 
+@router.get("/{run_id}/documents/{doc_id}")
+async def get_run_document(run_id: str, doc_id: str, request: Request) -> dict:
+    """Get single document detail within a run."""
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT d.id, d.run_id, d.document_key, d.action, d.status, "
+            "d.document_id, d.document_snapshot_id, d.error_message, "
+            "d.raw_content_hash, d.normalized_content_hash, d.started_at, d.finished_at "
+            "FROM mining_run_documents d "
+            "WHERE d.id = %s AND d.run_id = %s",
+            [doc_id, run_id],
+        )
+        doc = await cur.fetchone()
+        if not doc:
+            raise HTTPException(404, f"Document {doc_id} not found in run {run_id}")
+
+        result = dict(doc)
+        # Compute document_name
+        dk = result.get("document_key", "")
+        result["document_name"] = dk.replace("doc:/", "", 1) if dk.startswith("doc:/") else dk
+
+    return result
+
+
+@router.get("/{run_id}/documents/{doc_id}/stages")
+async def get_run_document_stages(run_id: str, doc_id: str, request: Request) -> dict:
+    """Get stage timeline for a single document within a run."""
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        # Verify doc belongs to run
+        check_cur = await conn.execute(
+            "SELECT id FROM mining_run_documents WHERE id = %s AND run_id = %s",
+            [doc_id, run_id],
+        )
+        if not await check_cur.fetchone():
+            raise HTTPException(404, f"Document {doc_id} not found in run {run_id}")
+
+        cur = await conn.execute(
+            "SELECT id, stage, status, created_at, duration_ms, "
+            "output_summary, error_message "
+            "FROM mining_run_stage_events "
+            "WHERE run_id = %s AND run_document_id = %s "
+            "ORDER BY created_at",
+            [run_id, doc_id],
+        )
+        rows = await cur.fetchall()
+
+    return {"run_id": run_id, "document_id": doc_id, "stages": [dict(r) for r in rows]}
+
+
+@router.get("/{run_id}/documents/{doc_id}/artifacts")
+async def get_run_document_artifacts(run_id: str, doc_id: str, request: Request) -> dict:
+    """Get artifact counts for a single document (via document_snapshot_id)."""
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        # Get document_snapshot_id
+        doc_cur = await conn.execute(
+            "SELECT id, document_snapshot_id FROM mining_run_documents "
+            "WHERE id = %s AND run_id = %s",
+            [doc_id, run_id],
+        )
+        doc = await doc_cur.fetchone()
+        if not doc:
+            raise HTTPException(404, f"Document {doc_id} not found in run {run_id}")
+
+        snapshot_id = doc["document_snapshot_id"]
+        if not snapshot_id:
+            return {"run_id": run_id, "document_id": doc_id, "snapshot_id": None,
+                    "segment_count": 0, "unit_count": 0, "relation_count": 0}
+
+        # Count segments
+        seg_cur = await conn.execute(
+            "SELECT COUNT(*) as c FROM asset_raw_segments WHERE document_snapshot_id = %s",
+            [snapshot_id],
+        )
+        segment_count = (await seg_cur.fetchone())["c"]
+
+        # Count retrieval units
+        unit_cur = await conn.execute(
+            "SELECT COUNT(*) as c FROM asset_retrieval_units WHERE document_snapshot_id = %s",
+            [snapshot_id],
+        )
+        unit_count = (await unit_cur.fetchone())["c"]
+
+        # Count relations
+        rel_cur = await conn.execute(
+            "SELECT COUNT(*) as c FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
+            [snapshot_id],
+        )
+        relation_count = (await rel_cur.fetchone())["c"]
+
+    return {
+        "run_id": run_id,
+        "document_id": doc_id,
+        "snapshot_id": snapshot_id,
+        "segment_count": segment_count,
+        "unit_count": unit_count,
+        "relation_count": relation_count,
+    }
+
+
+@router.get("/{run_id}/documents/{doc_id}/segments")
+async def get_run_document_segments(
+    run_id: str, doc_id: str, request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Get segments for a single document in run context."""
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        doc_cur = await conn.execute(
+            "SELECT document_snapshot_id FROM mining_run_documents "
+            "WHERE id = %s AND run_id = %s",
+            [doc_id, run_id],
+        )
+        doc = await doc_cur.fetchone()
+        if not doc:
+            raise HTTPException(404, f"Document {doc_id} not found in run {run_id}")
+
+        snapshot_id = doc["document_snapshot_id"]
+        if not snapshot_id:
+            return {"run_id": run_id, "document_id": doc_id, "items": []}
+
+        cur = await conn.execute(
+            "SELECT id, segment_key, segment_index, block_type, semantic_role, "
+            "section_title, raw_text, token_count "
+            "FROM asset_raw_segments "
+            "WHERE document_snapshot_id = %s "
+            "ORDER BY segment_index LIMIT %s OFFSET %s",
+            [snapshot_id, limit, offset],
+        )
+        rows = await cur.fetchall()
+
+    return {"run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+
+
+@router.get("/{run_id}/documents/{doc_id}/units")
+async def get_run_document_units(
+    run_id: str, doc_id: str, request: Request,
+    unit_type: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Get retrieval units for a single document in run context."""
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        doc_cur = await conn.execute(
+            "SELECT document_snapshot_id FROM mining_run_documents "
+            "WHERE id = %s AND run_id = %s",
+            [doc_id, run_id],
+        )
+        doc = await doc_cur.fetchone()
+        if not doc:
+            raise HTTPException(404, f"Document {doc_id} not found in run {run_id}")
+
+        snapshot_id = doc["document_snapshot_id"]
+        if not snapshot_id:
+            return {"run_id": run_id, "document_id": doc_id, "items": []}
+
+        where = "AND unit_type = %s" if unit_type else ""
+        params: list[str] = [snapshot_id] + ([unit_type] if unit_type else [])
+
+        cur = await conn.execute(
+            f"SELECT id, unit_key, unit_type, target_type, title, text, "
+            f"block_type, semantic_role, weight, created_at "
+            f"FROM asset_retrieval_units "
+            f"WHERE document_snapshot_id = %s {where} "
+            f"ORDER BY created_at LIMIT %s OFFSET %s",
+            params + [limit, offset],
+        )
+        rows = await cur.fetchall()
+
+    return {"run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+
+
+@router.get("/{run_id}/artifacts")
+async def get_run_artifacts(run_id: str, request: Request) -> dict:
+    """Get run-level artifact aggregation."""
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        # Verify run exists
+        run_cur = await conn.execute(
+            "SELECT id FROM mining_runs WHERE id = %s", [run_id]
+        )
+        if not await run_cur.fetchone():
+            raise HTTPException(404, f"Run {run_id} not found")
+
+        # Collect all snapshot IDs for this run
+        snap_cur = await conn.execute(
+            "SELECT document_snapshot_id FROM mining_run_documents "
+            "WHERE run_id = %s AND document_snapshot_id IS NOT NULL",
+            [run_id],
+        )
+        snap_rows = await snap_cur.fetchall()
+        snapshot_ids = [r["document_snapshot_id"] for r in snap_rows]
+
+        if not snapshot_ids:
+            return {"run_id": run_id, "document_count": 0,
+                    "segment_count": 0, "unit_count": 0, "relation_count": 0}
+
+        placeholders = ",".join(["%s"] * len(snapshot_ids))
+
+        seg_cur = await conn.execute(
+            f"SELECT COUNT(*) as c FROM asset_raw_segments "
+            f"WHERE document_snapshot_id IN ({placeholders})", snapshot_ids
+        )
+        segment_count = (await seg_cur.fetchone())["c"]
+
+        unit_cur = await conn.execute(
+            f"SELECT COUNT(*) as c FROM asset_retrieval_units "
+            f"WHERE document_snapshot_id IN ({placeholders})", snapshot_ids
+        )
+        unit_count = (await unit_cur.fetchone())["c"]
+
+        rel_cur = await conn.execute(
+            f"SELECT COUNT(*) as c FROM asset_raw_segment_relations "
+            f"WHERE document_snapshot_id IN ({placeholders})", snapshot_ids
+        )
+        relation_count = (await rel_cur.fetchone())["c"]
+
+    return {
+        "run_id": run_id,
+        "document_count": len(snapshot_ids),
+        "segment_count": segment_count,
+        "unit_count": unit_count,
+        "relation_count": relation_count,
+    }
+
+
 @router.post("/{run_id}/cancel", response_model=CancelRunResponse)
 async def cancel_run(run_id: str, request: Request) -> dict:
     """Cancel a running run (best-effort)."""
