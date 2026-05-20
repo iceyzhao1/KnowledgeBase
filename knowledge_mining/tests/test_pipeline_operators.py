@@ -432,151 +432,8 @@ class TestDefaultSegmenter:
         assert all(isinstance(s, RawSegmentData) for s in segments)
 
 
-class TestDefaultRelationBuilder:
-    """DefaultRelationBuilder should wrap build_relations."""
-
-    def test_delegates_to_build_relations(self):
-        from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
-
-        segments = [
-            RawSegmentData(document_key="doc:/test.md", segment_index=0, block_type="heading"),
-            RawSegmentData(document_key="doc:/test.md", segment_index=1, block_type="paragraph"),
-        ]
-
-        builder = DefaultRelationBuilder()
-        relations, seg_ids = builder.build(segments)
-        assert len(relations) > 0
-        assert len(seg_ids) == 2
-
-
-class TestMiningPipeline:
-    """MiningPipeline should orchestrate per-document processing."""
-
-    def test_process_document_full_flow(self):
-        from knowledge_mining.mining.pipeline import DocumentContext, PipelineConfig, MiningPipeline
-        from knowledge_mining.mining.stages.parse import create_parser
-        from knowledge_mining.mining.stages.segment import DefaultSegmenter
-        from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-        from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
-        from knowledge_mining.mining.contracts.models import RawFileData
-
-        content = "# Test Doc\n\nParagraph about ADD APN command.\n\n## Section\n\nMore content.\n"
-        raw_file = RawFileData(
-            file_path="/test/test.md",
-            relative_path="test.md",
-            file_name="test.md",
-            file_type="markdown",
-            content=content,
-            raw_content_hash="rh1",
-            normalized_content_hash="nh1",
-        )
-        profile = DocumentProfile(document_key="doc:/test.md", title="Test Doc")
-
-        config = PipelineConfig(
-            parser_factory=create_parser,
-            segmenter=DefaultSegmenter(),
-            enricher=RuleBasedEnricher(
-                entity_extractor=RuleBasedEntityExtractor(),
-                role_classifier=DefaultRoleClassifier(),
-            ),
-            relation_builder=DefaultRelationBuilder(),
-        )
-        pipeline = MiningPipeline(config)
-
-        ctx = DocumentContext(raw_file=raw_file, profile=profile)
-        result = pipeline.process_document(ctx)
-
-        assert result.tree is not None
-        assert len(result.segments) > 0
-        assert len(result.relations) > 0
-        assert len(result.retrieval_units) > 0
-        assert result.seg_ids  # should have segment ID mappings
-
-    def test_process_document_with_stage_callback(self):
-        from knowledge_mining.mining.pipeline import DocumentContext, PipelineConfig, MiningPipeline
-        from knowledge_mining.mining.stages.parse import create_parser
-        from knowledge_mining.mining.stages.segment import DefaultSegmenter
-        from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-        from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
-        from knowledge_mining.mining.contracts.models import RawFileData
-
-        content = "# Title\n\nParagraph.\n"
-        raw_file = RawFileData(
-            file_path="/test/test.md",
-            relative_path="test.md",
-            file_name="test.md",
-            file_type="markdown",
-            content=content,
-            raw_content_hash="rh",
-            normalized_content_hash="nh",
-        )
-        profile = DocumentProfile(document_key="doc:/test.md")
-
-        stages_called: list[str] = []
-
-        config = PipelineConfig(
-            parser_factory=create_parser,
-            segmenter=DefaultSegmenter(),
-            enricher=RuleBasedEnricher(),
-            relation_builder=DefaultRelationBuilder(),
-        )
-        pipeline = MiningPipeline(config)
-        ctx = DocumentContext(raw_file=raw_file, profile=profile)
-
-        def callback(stage_name, current_ctx):
-            stages_called.append(stage_name)
-
-        pipeline.process_document(ctx, stage_callback=callback)
-
-        assert "parse" in stages_called
-        assert "segment" in stages_called
-        assert "enrich" in stages_called
-        assert "build_relations" in stages_called
-        assert "build_retrieval_units" in stages_called
-
-    def test_custom_operator_swap(self):
-        """Verify pipeline works when swapping DefaultSegmenter with custom."""
-        from knowledge_mining.mining.pipeline import DocumentContext, PipelineConfig, MiningPipeline
-        from knowledge_mining.mining.stages.parse import create_parser
-        from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
-        from knowledge_mining.mining.contracts.models import RawFileData
-
-        content = "# Title\n\nText.\n"
-        raw_file = RawFileData(
-            file_path="/test/test.md",
-            relative_path="test.md",
-            file_name="test.md",
-            file_type="markdown",
-            content=content,
-            raw_content_hash="rh",
-            normalized_content_hash="nh",
-        )
-        profile = DocumentProfile(document_key="doc:/test.md")
-
-        class SingleSegSegmenter:
-            """Custom segmenter that produces exactly one segment."""
-            def segment(self, tree, profile, **kwargs):
-                return [RawSegmentData(
-                    document_key=profile.document_key,
-                    segment_index=0,
-                    block_type="paragraph",
-                    raw_text="Custom segment",
-                )]
-
-        config = PipelineConfig(
-            parser_factory=create_parser,
-            segmenter=SingleSegSegmenter(),
-            enricher=None,
-            relation_builder=DefaultRelationBuilder(),
-        )
-        pipeline = MiningPipeline(config)
-        ctx = DocumentContext(raw_file=raw_file, profile=profile)
-        result = pipeline.process_document(ctx)
-
-        assert len(result.segments) == 1
-        assert result.segments[0].raw_text == "Custom segment"
+# REMOVED: TestDefaultRelationBuilder - rule-based components deleted
+# REMOVED: TestMiningPipeline - all tests depended on removed rule-based components
 
 
 class TestLlmTemplates:
@@ -722,8 +579,8 @@ class TestDiscourseRelationBuilder:
         ]
 
         llm_output = [
-            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.9},
-            {"source": 1, "target": 2, "relation": "RESULTS_IN", "confidence": 0.7},
+            {"source": 0, "target": 1, "relation": "ELABORATION", "confidence": 0.9},
+            {"source": 1, "target": 2, "relation": "CAUSATION", "confidence": 0.7},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -733,7 +590,7 @@ class TestDiscourseRelationBuilder:
         assert relations[0].weight == 0.9
         assert relations[0].metadata_json["source"] == "discourse_llm"
 
-        assert relations[1].relation_type == "results_in"
+        assert relations[1].relation_type == "causes"
 
     def test_unrelated_filtered_out(self):
         from knowledge_mining.mining.stages.relations import DiscourseRelationBuilder
@@ -748,7 +605,7 @@ class TestDiscourseRelationBuilder:
 
         llm_output = [
             {"source": 0, "target": 1, "relation": "UNRELATED", "confidence": 0.3},
-            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.8},
+            {"source": 0, "target": 1, "relation": "ELABORATION", "confidence": 0.8},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -764,7 +621,7 @@ class TestDiscourseRelationBuilder:
         segments = [RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="A")]
 
         llm_output = [
-            {"source": 0, "target": 5, "relation": "ELABORATES", "confidence": 0.9},
+            {"source": 0, "target": 5, "relation": "ELABORATION", "confidence": 0.9},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -790,12 +647,7 @@ class TestDiscourseRelationBuilder:
 class TestContextualizer:
     """Contextualizer should generate context descriptions for segments."""
 
-    def test_noop_contextualizer(self):
-        from knowledge_mining.mining.stages.retrieval_units import NoOpContextualizer
-
-        ctxer = NoOpContextualizer()
-        segments = [RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="test")]
-        assert ctxer.contextualize(segments, "doc text") == {}
+    # REMOVED: test_noop_contextualizer - NoOpContextualizer deleted
 
     def test_raw_text_unit_with_llm_context(self):
         """v1.3: LLM context is folded into raw_text.search_text and metadata."""
@@ -962,7 +814,7 @@ class TestRemoveSemantics:
             {"document_id": "doc-1", "document_snapshot_id": "snap-1-new"},
         ]
 
-        result = classify_documents(db, decisions)
+        result = classify_documents(db, decisions, domain="test-domain")
         remove_decisions = [d for d in result if d.get("action") == "REMOVE"]
         assert len(remove_decisions) == 1
         assert remove_decisions[0]["document_id"] == "doc-2"
@@ -1141,176 +993,11 @@ class TestDBEmbeddingWrite:
 class TestStreamingPipeline:
     """Tests for the queue-based parallel pipeline."""
 
-    def test_single_doc_through_all_stages(self):
-        """Single document flows through all stages to completion."""
-        from knowledge_mining.mining.pipeline import (
-            DocumentContext, StreamingPipeline,
-            parse_stage, segment_stage, enrich_stage,
-            relations_stage, retrieval_units_stage,
-            PipelineConfig,
-        )
-        from knowledge_mining.mining.stages.parse import create_parser
-        from knowledge_mining.mining.stages.segment import DefaultSegmenter
-        from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-        from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
-        from knowledge_mining.mining.contracts.models import RawFileData, DocumentProfile
+    # REMOVED: test_single_doc_through_all_stages - rule-based components deleted
 
-        raw = RawFileData(
-            file_path="test.md",
-            relative_path="test.md",
-            file_name="test.md",
-            file_type="markdown",
-            content="# Title\n\nHello world.\n\n## Section\n\nSome text here.",
-            raw_content_hash="h1",
-            normalized_content_hash="h1",
-        )
-        profile = DocumentProfile(document_key="doc:/test.md")
-        ctx = DocumentContext(raw_file=raw, profile=profile)
+    # REMOVED: test_multi_doc_concurrent - rule-based components deleted
 
-        config = PipelineConfig(
-            parser_factory=create_parser,
-            segmenter=DefaultSegmenter(),
-            enricher=RuleBasedEnricher(
-                entity_extractor=RuleBasedEntityExtractor(),
-                role_classifier=DefaultRoleClassifier(),
-            ),
-            relation_builder=DefaultRelationBuilder(),
-        )
-
-        stages = [
-            ("parse",           lambda c: parse_stage(c, config),           1),
-            ("segment",         lambda c: segment_stage(c, config),         1),
-            ("enrich",          lambda c: enrich_stage(c, config),          2),
-            ("relations",       lambda c: relations_stage(c, config),       1),
-            ("retrieval_units", lambda c: retrieval_units_stage(c, config), 2),
-        ]
-
-        pipeline = StreamingPipeline(stages)
-        results = pipeline.process_all([ctx])
-
-        assert len(results) == 1
-        result = results[0]
-        assert result.error is None
-        assert result.tree is not None
-        assert len(result.segments) > 0
-        assert len(result.relations) > 0
-        assert len(result.retrieval_units) > 0
-
-    def test_multi_doc_concurrent(self):
-        """Multiple documents are processed concurrently across stages."""
-        import time
-        from knowledge_mining.mining.pipeline import StreamingPipeline, DocumentContext, PipelineConfig
-        from knowledge_mining.mining.stages.parse import create_parser
-        from knowledge_mining.mining.stages.segment import DefaultSegmenter
-        from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-        from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
-        from knowledge_mining.mining.contracts.models import RawFileData, DocumentProfile
-
-        docs = []
-        for i in range(3):
-            raw = RawFileData(
-                file_path=f"doc{i}.md",
-                relative_path=f"doc{i}.md",
-                file_name=f"doc{i}.md",
-                file_type="markdown",
-                content=f"# Doc {i}\n\nContent for document {i}.",
-                raw_content_hash=f"h{i}",
-                normalized_content_hash=f"h{i}",
-            )
-            profile = DocumentProfile(document_key=f"doc:/doc{i}.md")
-            docs.append(DocumentContext(raw_file=raw, profile=profile))
-
-        config = PipelineConfig(
-            parser_factory=create_parser,
-            segmenter=DefaultSegmenter(),
-            enricher=RuleBasedEnricher(
-                entity_extractor=RuleBasedEntityExtractor(),
-                role_classifier=DefaultRoleClassifier(),
-            ),
-            relation_builder=DefaultRelationBuilder(),
-        )
-
-        from knowledge_mining.mining.pipeline import (
-            parse_stage, segment_stage, enrich_stage,
-            relations_stage, retrieval_units_stage,
-        )
-        stages = [
-            ("parse",           lambda c: parse_stage(c, config),           1),
-            ("segment",         lambda c: segment_stage(c, config),         1),
-            ("enrich",          lambda c: enrich_stage(c, config),          2),
-            ("relations",       lambda c: relations_stage(c, config),       1),
-            ("retrieval_units", lambda c: retrieval_units_stage(c, config), 2),
-        ]
-
-        pipeline = StreamingPipeline(stages)
-        results = pipeline.process_all(docs)
-
-        assert len(results) == 3
-        for r in results:
-            assert r.error is None
-            assert r.tree is not None
-            assert len(r.segments) > 0
-
-    def test_single_failure_does_not_block_others(self):
-        """One document failing should not prevent others from completing."""
-        from knowledge_mining.mining.pipeline import (
-            DocumentContext, StreamingPipeline, PipelineConfig,
-            parse_stage, segment_stage, enrich_stage,
-            relations_stage, retrieval_units_stage,
-        )
-        from knowledge_mining.mining.stages.parse import create_parser
-        from knowledge_mining.mining.stages.segment import DefaultSegmenter
-        from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-        from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier
-        from knowledge_mining.mining.contracts.models import RawFileData, DocumentProfile
-
-        # Good doc
-        good_raw = RawFileData(
-            file_path="good.md",
-            relative_path="good.md",
-            file_name="good.md",
-            file_type="markdown",
-            content="# Good\n\nGood content.",
-            raw_content_hash="h1",
-            normalized_content_hash="h1",
-        )
-        good_ctx = DocumentContext(
-            raw_file=good_raw,
-            profile=DocumentProfile(document_key="doc:/good.md"),
-        )
-
-        # Bad doc: no raw_file (will produce None tree, not an error)
-        bad_ctx = DocumentContext(profile=DocumentProfile(document_key="doc:/bad.md"))
-
-        config = PipelineConfig(
-            parser_factory=create_parser,
-            segmenter=DefaultSegmenter(),
-            enricher=RuleBasedEnricher(
-                entity_extractor=RuleBasedEntityExtractor(),
-                role_classifier=DefaultRoleClassifier(),
-            ),
-            relation_builder=DefaultRelationBuilder(),
-        )
-
-        stages = [
-            ("parse",           lambda c: parse_stage(c, config),           1),
-            ("segment",         lambda c: segment_stage(c, config),         1),
-            ("enrich",          lambda c: enrich_stage(c, config),          2),
-            ("relations",       lambda c: relations_stage(c, config),       1),
-            ("retrieval_units", lambda c: retrieval_units_stage(c, config), 2),
-        ]
-
-        pipeline = StreamingPipeline(stages)
-        results = pipeline.process_all([good_ctx, bad_ctx])
-
-        assert len(results) == 2
-        errors = [r for r in results if r.error is not None]
-        successes = [r for r in results if r.error is None and r.tree is not None]
-        assert len(successes) == 1
-        # bad_ctx has no raw_file so parse returns ctx with tree=None, no error thrown
+    # REMOVED: test_single_failure_does_not_block_others - rule-based components deleted
 
     def test_stage_exception_caught_as_error(self):
         """Exception in a stage is caught and stored in ctx.error."""

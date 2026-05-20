@@ -62,8 +62,8 @@ def _execute_ddl(conn, ddl: str) -> None:
     # Split respecting $$ quoting
     stmts = _split_ddl(ddl)
     for stmt in stmts:
-        stmt = stmt.strip()
-        if not stmt or stmt.startswith("--"):
+        stmt = _strip_leading_comments(stmt)
+        if not stmt:
             continue
         try:
             with conn.cursor() as cur:
@@ -74,6 +74,23 @@ def _execute_ddl(conn, ddl: str) -> None:
             psycopg.errors.DuplicateFunction,
         ):
             pass  # Already exists — idempotent
+        except Exception as exc:
+            logger.error("DDL execution failed: %s | Statement: %s", exc, stmt[:200])
+            raise
+
+
+def _strip_leading_comments(stmt: str) -> str:
+    """Remove leading single-line comments (-- ...) from a SQL statement."""
+    lines = stmt.split("\n")
+    start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("--") or not stripped:
+            start = i + 1
+        else:
+            break
+    result = "\n".join(lines[start:]).strip()
+    return result
 
 
 def _split_ddl(ddl: str) -> list[str]:

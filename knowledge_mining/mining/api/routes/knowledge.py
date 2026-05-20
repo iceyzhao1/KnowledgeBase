@@ -33,17 +33,16 @@ async def knowledge_stats(request: Request) -> dict:
         )
         type_dist = {r["unit_type"]: r["c"] for r in await cur.fetchall()}
 
-        # Active release
+        # Active releases (by domain+channel)
         cur = await conn.execute(
-            "SELECT id FROM asset_publish_releases WHERE status = 'active' LIMIT 1"
+            "SELECT id, domain, channel FROM asset_publish_releases WHERE status = 'active'"
         )
-        active = await cur.fetchone()
-        active_release = active["id"] if active else None
+        active_releases = [dict(r) for r in await cur.fetchall()]
 
     return {
         **counts,
         "retrieval_units_by_type": type_dist,
-        "active_release": active_release,
+        "active_releases": active_releases,
     }
 
 

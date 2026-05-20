@@ -39,16 +39,6 @@ _QUESTIONWORTHY_ROLES = frozenset({
 # Question Generators
 # ---------------------------------------------------------------------------
 
-class NoOpQuestionGenerator:
-    """Default: no questions generated (LLM not connected)."""
-
-    def generate(self, segment: RawSegmentData) -> list[str]:
-        return []
-
-    def generate_batch(self, segments: list[RawSegmentData]) -> dict[str, list[str]]:
-        return {}
-
-
 class LlmQuestionGenerator:
     """LLM-backed question generation via llm_service HTTP API.
 
@@ -135,13 +125,6 @@ class LlmQuestionGenerator:
 # ---------------------------------------------------------------------------
 # Contextualizers
 # ---------------------------------------------------------------------------
-
-class NoOpContextualizer:
-    """Fallback: returns empty context descriptions."""
-
-    def contextualize(self, segments: list[RawSegmentData], document_text: str) -> dict[str, str]:
-        return {}
-
 
 class LLMContextualizer:
     """Anthropic-style contextual retrieval via LLM.
@@ -249,8 +232,8 @@ def build_retrieval_units(
     max_questions = profile.retrieval_policy.max_questions_per_segment
     max_entity_cards = profile.retrieval_policy.max_entity_cards_per_segment
 
-    qgen = question_generator or NoOpQuestionGenerator()
-    ctxer = contextualizer or NoOpContextualizer()
+    qgen = question_generator
+    ctxer = contextualizer
     units: list[RetrievalUnitData] = []
     seen_entity_cards: set[str] = set()
 
@@ -271,7 +254,7 @@ def build_retrieval_units(
     # Phase 1b: Batch-generate contextual descriptions (for search_text enrichment)
     context_map: dict[str, str] = {}
     ctxer_task_ids: dict[str, str] = {}
-    if profile.retrieval_policy.contextual_retrieval != "off":
+    if ctxer is not None and profile.retrieval_policy.contextual_retrieval != "off":
         document_text = "\n".join(s.raw_text for s in segments)
         try:
             context_map = ctxer.contextualize(

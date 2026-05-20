@@ -5,7 +5,7 @@ Two entry points:
 - publish(run_id): publish a completed run's build
 
 Pipeline stages per document:
-  ingest -> parse -> segment -> enrich -> build_relations -> build_retrieval_units
+  ingest -> parse -> segment -> enrich -> discourse_relations -> build_retrieval_units
 
 Global stages:
   select_snapshot -> assemble_build -> [publish_release]
@@ -57,17 +57,14 @@ from knowledge_mining.mining.runtime import RuntimeTracker
 from knowledge_mining.mining.ingestion import ingest_directory
 from knowledge_mining.mining.stages.parse import create_parser
 from knowledge_mining.mining.stages.segment import DefaultSegmenter
-from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-from knowledge_mining.mining.stages.relations import DefaultRelationBuilder
 from knowledge_mining.mining.snapshot import select_or_create_snapshot
 from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, demo_quality_summary, publish_release
-from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor, DefaultRoleClassifier  # noqa: F401 — used for enrich
 from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack
 from knowledge_mining.mining.pipeline import (
     DocumentContext, PipelineConfig, MiningPipeline,
     StreamingPipeline,
     parse_stage, segment_stage, enrich_stage,
-    relations_stage, discourse_stage, retrieval_units_stage,
+    discourse_stage, retrieval_units_stage,
 )
 
 
@@ -182,7 +179,7 @@ def publish(
     run_id: str,
     *,
     db_config: MiningDbConfig | None = None,
-    channel: str = "default",
+    channel: str = "prod",
     released_by: str | None = None,
 ) -> dict[str, Any]:
     """Publish a completed run's build as an active release."""
@@ -198,12 +195,19 @@ def publish(
         if not build_id:
             raise ValueError(f"Run {run_id} has no build_id")
 
+        # Read domain from build row for domain isolation
+        build_row = asset_db._fetchone(
+            "SELECT domain FROM asset_builds WHERE id = %s", (build_id,)
+        )
+        domain = build_row["domain"] if build_row else None
+
         release_id = publish_release(
             asset_db,
             build_id=build_id,
             channel=channel,
             released_by=released_by,
             release_notes=f"Published from run {run_id}",
+            domain=domain,
         )
 
         return {"run_id": run_id, "build_id": build_id, "release_id": release_id}
@@ -257,7 +261,6 @@ def _init_llm(
         from knowledge_mining.mining.stages.enrich import LlmEnricher
         result["enricher"] = LlmEnricher(
             base_url=llm_base_url,
-            fallback_enricher=RuleBasedEnricher(profile=profile),
             bypass_proxy=bypass_proxy,
             profile=profile,
         )
@@ -360,24 +363,16 @@ def _run_pipeline(
         batch_id=batch_id,
         batch_code=f"batch-{run_id[:8]}",
         source_type=params.default_source_type,
+        domain=profile.domain_id,
         description=f"Mining run {run_id}",
     )
     asset_db.commit()
 
     # Build pipeline config with pluggable operators (profile-driven)
-    entity_extractor = RuleBasedEntityExtractor(profile=profile)
-    role_classifier = DefaultRoleClassifier(profile=profile)
-    enricher = RuleBasedEnricher(
-        entity_extractor=entity_extractor,
-        role_classifier=role_classifier,
-        profile=profile,
-    )
-
     pipeline_config = PipelineConfig(
         parser_factory=create_parser,
         segmenter=DefaultSegmenter(),
-        enricher=llm.get("enricher") or enricher,
-        relation_builder=DefaultRelationBuilder(),
+        enricher=llm.get("enricher"),
         question_generator=llm.get("question_generator"),
         embedding_generator=embedding_generator,
         discourse_relation_builder=llm.get("discourse_relation_builder"),
@@ -446,7 +441,7 @@ def _run_pipeline(
                 continue
 
         # Queue for streaming pipeline
-        profile = DocumentProfile(
+        doc_profile = DocumentProfile(
             document_key=doc_key,
             source_type=doc.source_type or params.default_source_type,
             document_type=doc.document_type or params.default_document_type,
@@ -454,14 +449,14 @@ def _run_pipeline(
             tags_json=doc.tags_json,
             title=doc.title,
         )
-        ctx = DocumentContext(raw_file=doc, profile=profile, run_document_id=rd_id)
+        ctx = DocumentContext(raw_file=doc, profile=doc_profile, run_document_id=rd_id)
         work_items.append({
             "doc": doc,
             "rd_id": rd_id,
             "doc_key": doc_key,
             "action": action,
             "existing_doc": existing_doc,
-            "profile": profile,
+            "doc_profile": doc_profile,
             "ctx": ctx,
         })
 
@@ -473,7 +468,6 @@ def _run_pipeline(
             ("parse",           lambda ctx: parse_stage(ctx, config),           1),
             ("segment",         lambda ctx: segment_stage(ctx, config),         1),
             ("enrich",          lambda ctx: enrich_stage(ctx, config),          max_workers),
-            ("relations",       lambda ctx: relations_stage(ctx, config),       1),
             ("discourse",       lambda ctx: discourse_stage(ctx, config),       min(max_workers, 2)),
             ("retrieval_units", lambda ctx: retrieval_units_stage(ctx, config), max_workers),
         ]
@@ -489,7 +483,7 @@ def _run_pipeline(
         doc_key = item["doc_key"]
         action = item["action"]
         existing_doc = item["existing_doc"]
-        profile = item["profile"]
+        doc_profile = item["doc_profile"]
 
         # Pipeline error
         if ctx.error:
@@ -514,7 +508,7 @@ def _run_pipeline(
             # Stage 6: Select/create snapshot
             evt = tracker.start_stage(run_id, "select_snapshot", rd_id)
             document_id, snapshot_id, link_id = select_or_create_snapshot(
-                asset_db, doc, profile, batch_id=batch_id,
+                asset_db, doc, doc_profile, batch_id=batch_id,
             )
             tracker.end_stage(evt, run_id, "select_snapshot")
             asset_db.commit()
@@ -667,7 +661,7 @@ def _run_pipeline(
         # Classify documents: NEW/UPDATE/SKIP against previous active build
         # REMOVE detection disabled — incremental batches only process a subset,
         # parent build snapshots are carried forward by assemble_build instead.
-        snapshot_decisions = classify_documents(asset_db, snapshot_decisions, detect_remove=False)
+        snapshot_decisions = classify_documents(asset_db, snapshot_decisions, detect_remove=False, domain=profile.domain_id)
 
         # Stage 7: Assemble build (auto-selects full vs incremental)
         evt = tracker.start_stage(run_id, "assemble_build")
@@ -676,6 +670,7 @@ def _run_pipeline(
             run_id=run_id,
             batch_id=batch_id,
             snapshot_decisions=snapshot_decisions,
+            domain=profile.domain_id,
         )
         tracker.end_stage(evt, run_id, "assemble_build", output_summary=f"build_id={build_id}")
         asset_db.commit()
@@ -700,6 +695,7 @@ def _run_pipeline(
                 asset_db,
                 build_id=build_id,
                 released_by=f"run:{run_id}",
+                domain=profile.domain_id,
             )
             tracker.end_stage(evt, run_id, "publish_release", output_summary=f"release_id={release_id}")
             asset_db.commit()

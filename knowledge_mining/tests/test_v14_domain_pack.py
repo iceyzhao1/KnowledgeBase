@@ -102,51 +102,7 @@ class TestDomainEntitySchema:
 # Test: Domain Rule Extractor
 # ---------------------------------------------------------------------------
 
-class TestDomainRuleExtractor:
-    def test_cloud_extracts_commands(self, cloud_profile):
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-        ext = RuleBasedEntityExtractor(profile=cloud_profile)
-        refs = ext.extract("ADD SMF instance-name", {})
-        assert any(r["type"] == "command" and "ADD" in r["name"] for r in refs)
-
-    def test_cloud_extracts_network_elements(self, cloud_profile):
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-        ext = RuleBasedEntityExtractor(profile=cloud_profile)
-        refs = ext.extract("Configure SMF and UPF for 5GC", {})
-        types = {r["type"] for r in refs}
-        names = {r["name"] for r in refs}
-        assert "network_element" in types
-        assert "SMF" in names
-        assert "UPF" in names
-
-    def test_cloud_extracts_interfaces(self, cloud_profile):
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-        ext = RuleBasedEntityExtractor(profile=cloud_profile)
-        refs = ext.extract("N4 interface between SMF and UPF", {})
-        iface_refs = [r for r in refs if r["type"] == "interface"]
-        assert len(iface_refs) >= 1
-        assert "N4" in iface_refs[0]["name"]
-
-    def test_cloud_extracts_alarms(self, cloud_profile):
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-        ext = RuleBasedEntityExtractor(profile=cloud_profile)
-        refs = ext.extract("ALM-SMF-001 occurred", {})
-        assert any(r["type"] == "alarm" for r in refs)
-
-    def test_generic_no_regex_extractions(self, generic_profile):
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-        ext = RuleBasedEntityExtractor(profile=generic_profile)
-        refs = ext.extract("ADD SMF instance-name", {})
-        # Generic has no extractor rules, so no regex extractions
-        assert len(refs) == 0
-
-    def test_section_title_extraction(self, cloud_profile):
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-        ext = RuleBasedEntityExtractor(profile=cloud_profile)
-        result = ext.extract_from_section_title("ADD SMF")
-        assert result is not None
-        assert result["type"] == "command"
-        assert "ADD" in result["name"]
+# REMOVED: TestDomainRuleExtractor - rule-based components deleted (RuleBasedEntityExtractor)
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +125,8 @@ class TestDomainRetrievalPolicy:
         )
         units = build_retrieval_units([seg], profile=cloud_profile)
         entity_cards = [u for u in units if u.unit_type == "entity_card"]
-        assert len(entity_cards) == 1  # SMF gets card, concept does not
-        assert entity_cards[0].title == "SMF"
+        # entity_card is "off" in cloud_core_network retrieval_policy, so no cards expected
+        assert len(entity_cards) == 0
 
     def test_generic_no_entity_cards(self, generic_profile):
         from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
@@ -194,45 +150,7 @@ class TestDomainRetrievalPolicy:
 # Test: Toy Domain Pack (no core code changes)
 # ---------------------------------------------------------------------------
 
-class TestToyDomainPack:
-    def test_toy_domain_works(self):
-        """Create a toy domain pack and verify extraction works without core code changes."""
-        from knowledge_mining.mining.infra.domain_pack import load_domain_pack
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-
-        # Write toy domain pack to temp dir
-        with tempfile.TemporaryDirectory() as tmpdir:
-            toy_dir = Path(tmpdir) / "toy"
-            toy_dir.mkdir()
-            toy_yaml = toy_dir / "domain.yaml"
-            toy_yaml.write_text(
-                "domain_id: toy\n"
-                'display_name: "Toy Domain"\n'
-                "entity_types:\n  - person\n"
-                "strong_entity_types:\n  - person\n"
-                "role_keyword_rules: []\n"
-                "heading_role_keywords: []\n"
-                "extractor_rules:\n"
-                "  - name: person_name\n"
-                r'    pattern: "\\b([A-Z][a-z]+ [A-Z][a-z]+)\\b"' + "\n"
-                "    entity_type: person\n"
-                "retrieval_policy:\n  max_questions_per_segment: 1\n"
-                "llm_templates: []\n"
-                "eval_questions: []\n",
-                encoding="utf-8",
-            )
-
-            profile = load_domain_pack("toy", packs_root=Path(tmpdir))
-            assert profile.domain_id == "toy"
-            assert profile.strong_entity_types == frozenset({"person"})
-
-            ext = RuleBasedEntityExtractor(profile=profile)
-            refs = ext.extract("John Smith met Jane Doe today", {})
-            assert len(refs) == 2
-            assert all(r["type"] == "person" for r in refs)
-            names = {r["name"] for r in refs}
-            assert "John Smith" in names
-            assert "Jane Doe" in names
+# REMOVED: TestToyDomainPack - all tests depended on removed RuleBasedEntityExtractor
 
 
 # ---------------------------------------------------------------------------
@@ -282,56 +200,14 @@ class TestEvalQuestionsContract:
 # Test: Role Classifier Profile-driven
 # ---------------------------------------------------------------------------
 
-class TestRoleClassifier:
-    def test_cloud_role_classification(self, cloud_profile):
-        from knowledge_mining.mining.infra.extractors import DefaultRoleClassifier
-        clf = DefaultRoleClassifier(profile=cloud_profile)
-        assert clf.classify("text", "参数说明", "paragraph", {}) == "parameter"
-        assert clf.classify("text", "使用实例", "paragraph", {}) == "example"
-        assert clf.classify("text", "操作步骤", "paragraph", {}) == "procedure_step"
-        assert clf.classify("text", "some random title", "paragraph", {}) == "unknown"
-
-    def test_generic_role_classification(self, generic_profile):
-        from knowledge_mining.mining.infra.extractors import DefaultRoleClassifier
-        clf = DefaultRoleClassifier(profile=generic_profile)
-        assert clf.classify("text", "parameter settings", "paragraph", {}) == "parameter"
-        assert clf.classify("text", "some title", "paragraph", {}) == "unknown"
+# REMOVED: TestRoleClassifier - rule-based components deleted (DefaultRoleClassifier)
 
 
 # ---------------------------------------------------------------------------
 # Test: Enricher Profile-driven
 # ---------------------------------------------------------------------------
 
-class TestEnricherProfile:
-    def test_enricher_uses_profile(self, cloud_profile):
-        from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-        from knowledge_mining.mining.contracts.models import RawSegmentData
-
-        enricher = RuleBasedEnricher(profile=cloud_profile)
-        seg = RawSegmentData(
-            document_key="doc:test",
-            segment_index=0,
-            block_type="paragraph",
-            raw_text="ADD SMF instance-name",
-        )
-        result = enricher.enrich([seg])
-        assert len(result) == 1
-        assert any(r["type"] == "command" for r in result[0].entity_refs_json)
-
-    def test_enricher_heading_role(self, cloud_profile):
-        from knowledge_mining.mining.stages.enrich import RuleBasedEnricher
-        from knowledge_mining.mining.contracts.models import RawSegmentData
-
-        enricher = RuleBasedEnricher(profile=cloud_profile)
-        seg = RawSegmentData(
-            document_key="doc:test",
-            segment_index=0,
-            block_type="heading",
-            section_title="参数说明",
-            raw_text="参数说明",
-        )
-        result = enricher.enrich([seg])
-        assert result[0].metadata_json.get("heading_role") == "parameter_definition"
+# REMOVED: TestEnricherProfile - rule-based components deleted (RuleBasedEnricher)
 
 
 # ---------------------------------------------------------------------------
@@ -350,9 +226,4 @@ class TestBackwardCompat:
         assert profile.domain_id == "cloud_core_network"
         assert "command" in profile.strong_entity_types
 
-    def test_extractors_without_profile(self):
-        """RuleBasedEntityExtractor works without explicit profile (loads default)."""
-        from knowledge_mining.mining.infra.extractors import RuleBasedEntityExtractor
-        ext = RuleBasedEntityExtractor()
-        refs = ext.extract("ADD SMF instance-name", {})
-        assert any(r["type"] == "command" for r in refs)
+    # REMOVED: test_extractors_without_profile - rule-based components deleted (RuleBasedEntityExtractor)
