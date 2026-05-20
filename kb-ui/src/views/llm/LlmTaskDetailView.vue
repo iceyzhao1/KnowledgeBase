@@ -29,40 +29,48 @@
         <div class="info-card">
           <h4 class="info-card__title">任务信息</h4>
           <table class="kv-table">
-            <tr><td>知识域</td><td>{{ task.knowledge_domain || '-' }}</td></tr>
-            <tr><td>调用方</td><td>{{ task.caller_service || '-' }}</td></tr>
-            <tr><td>阶段</td><td>{{ task.pipeline_stage || '-' }}</td></tr>
-            <tr><td>优先级</td><td>{{ task.priority }}</td></tr>
-            <tr><td>重试</td><td>{{ task.attempt_count }} / {{ task.max_attempts }}</td></tr>
-            <tr><td>幂等键</td><td><span class="text-mono">{{ task.idempotency_key || '-' }}</span></td></tr>
+            <tbody>
+              <tr><td>知识域</td><td>{{ task.knowledge_domain || '-' }}</td></tr>
+              <tr><td>调用方</td><td>{{ task.caller_service || '-' }}</td></tr>
+              <tr><td>阶段</td><td>{{ task.pipeline_stage || '-' }}</td></tr>
+              <tr><td>优先级</td><td>{{ task.priority }}</td></tr>
+              <tr><td>重试</td><td>{{ task.attempt_count }} / {{ task.max_attempts }}</td></tr>
+              <tr><td>幂等键</td><td><span class="text-mono">{{ task.idempotency_key || '-' }}</span></td></tr>
+            </tbody>
           </table>
         </div>
         <div class="info-card">
           <h4 class="info-card__title">时间</h4>
           <table class="kv-table">
-            <tr><td>创建</td><td>{{ formatTime(task.created_at) }}</td></tr>
-            <tr><td>开始</td><td>{{ formatTime(task.started_at) }}</td></tr>
-            <tr><td>完成</td><td>{{ formatTime(task.finished_at) }}</td></tr>
-            <tr><td>耗时</td><td>{{ duration }}</td></tr>
+            <tbody>
+              <tr><td>创建</td><td>{{ formatTime(task.created_at) }}</td></tr>
+              <tr><td>开始</td><td>{{ formatTime(task.started_at) }}</td></tr>
+              <tr><td>完成</td><td>{{ formatTime(task.finished_at) }}</td></tr>
+              <tr><td>耗时</td><td>{{ duration }}</td></tr>
+            </tbody>
           </table>
         </div>
         <div class="info-card">
           <h4 class="info-card__title">模型配置</h4>
           <table class="kv-table">
-            <tr><td>Provider</td><td>{{ requestData?.provider || '-' }}</td></tr>
-            <tr><td>Model</td><td>{{ requestData?.model || '-' }}</td></tr>
-            <tr><td>输出类型</td><td>{{ requestData?.expected_output_type || '-' }}</td></tr>
+            <tbody>
+              <tr><td>Provider</td><td>{{ requestData?.provider || '-' }}</td></tr>
+              <tr><td>Model</td><td>{{ requestData?.model || '-' }}</td></tr>
+              <tr><td>输出类型</td><td>{{ requestData?.expected_output_type || '-' }}</td></tr>
+            </tbody>
           </table>
         </div>
         <div class="info-card">
           <h4 class="info-card__title">Token 用量</h4>
           <table class="kv-table">
-            <tr>
-              <td>总 Tokens</td>
-              <td><span class="num-highlight">{{ totalTokens }}</span></td>
-            </tr>
-            <tr><td>延迟</td><td>{{ lastAttemptLatency }}</td></tr>
-            <tr><td>尝试次数</td><td>{{ attempts.length }}</td></tr>
+            <tbody>
+              <tr>
+                <td>总 Tokens</td>
+                <td><span class="num-highlight">{{ totalTokens }}</span></td>
+              </tr>
+              <tr><td>延迟</td><td>{{ lastAttemptLatency }}</td></tr>
+              <tr><td>尝试次数</td><td>{{ attempts.length }}</td></tr>
+            </tbody>
           </table>
         </div>
       </div>
@@ -369,10 +377,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { useLlmApi } from '@/api/llm'
+import { usePolling } from '@/composables/usePolling'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
@@ -579,6 +588,13 @@ function mapAttemptStatus(s: string): 'succeeded' | 'failed' | 'running' | 'queu
   return 'queued'
 }
 
+function isTerminalTaskStatus(status?: string | null): boolean {
+  return status === 'succeeded'
+    || status === 'failed'
+    || status === 'dead_letter'
+    || status === 'cancelled'
+}
+
 function goBack() {
   router.push('/llm?tab=tasks')
 }
@@ -609,7 +625,29 @@ async function loadAll() {
   }
 }
 
-onMounted(loadAll)
+async function refreshTaskDetail() {
+  if (document.visibilityState !== 'visible') return
+  if (isTerminalTaskStatus(task.value?.status)) {
+    stopPolling()
+    return
+  }
+  await loadAll()
+}
+
+const { start: startPolling, stop: stopPolling } = usePolling(refreshTaskDetail, 3000, { immediate: false })
+
+watch(() => task.value?.status, (status) => {
+  if (isTerminalTaskStatus(status)) {
+    stopPolling()
+  }
+})
+
+onMounted(async () => {
+  await loadAll()
+  if (!isTerminalTaskStatus(task.value?.status)) {
+    startPolling()
+  }
+})
 </script>
 
 <style scoped>

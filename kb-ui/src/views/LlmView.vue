@@ -230,12 +230,14 @@
               <div class="tpl-drawer__body">
                 <div class="tpl-drawer__meta">
                   <table class="kv-table">
-                    <tr><td>Key</td><td class="text-id">{{ selectedTemplate.template_key }}</td></tr>
-                    <tr><td>知识域</td><td>{{ selectedTemplate.knowledge_domain || 'global' }}</td></tr>
-                    <tr><td>输出类型</td><td>{{ selectedTemplate.expected_output_type || selectedTemplate.output_type || '-' }}</td></tr>
-                    <tr><td>状态</td><td><span class="type-badge">{{ selectedTemplate.status || 'active' }}</span></td></tr>
-                    <tr v-if="selectedTemplate.purpose"><td>用途</td><td>{{ selectedTemplate.purpose }}</td></tr>
-                    <tr><td>创建时间</td><td>{{ formatTime(selectedTemplate.created_at) }}</td></tr>
+                    <tbody>
+                      <tr><td>Key</td><td class="text-id">{{ selectedTemplate.template_key }}</td></tr>
+                      <tr><td>知识域</td><td>{{ selectedTemplate.knowledge_domain || 'global' }}</td></tr>
+                      <tr><td>输出类型</td><td>{{ selectedTemplate.expected_output_type || selectedTemplate.output_type || '-' }}</td></tr>
+                      <tr><td>状态</td><td><span class="type-badge">{{ selectedTemplate.status || 'active' }}</span></td></tr>
+                      <tr v-if="selectedTemplate.purpose"><td>用途</td><td>{{ selectedTemplate.purpose }}</td></tr>
+                      <tr><td>创建时间</td><td>{{ formatTime(selectedTemplate.created_at) }}</td></tr>
+                    </tbody>
                   </table>
                 </div>
 
@@ -283,6 +285,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useLlmApi } from '@/api/llm'
 import type { LlmTaskStats, LlmTask } from '@/types'
+import { usePolling } from '@/composables/usePolling'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import PieChart from '@/components/charts/PieChart.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -432,6 +435,11 @@ async function loadTemplates() {
   finally { loadingTemplates.value = false }
 }
 
+async function refreshLiveData() {
+  if (document.visibilityState !== 'visible') return
+  await Promise.all([loadStats(), loadTasks()])
+}
+
 async function loadAll() {
   await Promise.all([loadStats(), loadTasks(), loadTemplates()])
 }
@@ -439,6 +447,8 @@ async function loadAll() {
 function goToTask(row: LlmTask) {
   router.push(`/llm/${row.id}`)
 }
+
+const { start: startPolling } = usePolling(refreshLiveData, 5000, { immediate: false })
 
 watch([filterStatus, filterType, filterStage], () => { currentPage.value = 1; loadTasks() })
 watch(currentPage, loadTasks)
@@ -450,6 +460,7 @@ watch(activeTab, (tab) => {
 })
 onMounted(async () => {
   await loadAll()
+  startPolling()
   // Read tab from query param
   const q = route.query
   if (q.tab && typeof q.tab === 'string') {
