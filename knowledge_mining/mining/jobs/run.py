@@ -201,11 +201,12 @@ def run(
     run_id = uuid.uuid4().hex
 
     # LLM integration: create question generator if URL provided
-    llm_services = _init_llm(llm_base_url, llm_bypass_proxy, profile)
+    llm_services = _init_llm(llm_base_url, llm_bypass_proxy, profile, knowledge_domain=profile.domain_id)
 
     # Embedding integration: prefer llm_service, fallback to direct Zhipu
     embedding_generator = _init_embedding(
         llm_base_url, embedding_api_key, embedding_model, embedding_base_url, embedding_dimensions,
+        knowledge_domain=profile.domain_id,
     )
 
     try:
@@ -299,6 +300,8 @@ def _init_llm(
     llm_base_url: str | None,
     bypass_proxy: bool = False,
     profile: DomainProfile | None = None,
+    *,
+    knowledge_domain: str | None = None,
 ) -> dict[str, Any] | None:
     """Initialize LLM services if URL provided.
 
@@ -321,13 +324,14 @@ def _init_llm(
     if profile is None:
         from knowledge_mining.mining.infra.domain_pack import get_default_profile
         profile = get_default_profile()
-    templates = build_templates_from_profile(profile)
+    templates = build_templates_from_profile(profile, domain_id=knowledge_domain or profile.domain_id)
     for tpl in templates:
         client.register_template(tpl)
 
     result: dict[str, Any] = {
         "question_generator": LlmQuestionGenerator(
             base_url=llm_base_url, bypass_proxy=bypass_proxy, profile=profile,
+            knowledge_domain=knowledge_domain,
         ),
     }
 
@@ -338,6 +342,7 @@ def _init_llm(
             base_url=llm_base_url,
             bypass_proxy=bypass_proxy,
             profile=profile,
+            knowledge_domain=knowledge_domain,
         )
     except (ImportError, Exception):
         pass
@@ -347,6 +352,7 @@ def _init_llm(
         from knowledge_mining.mining.stages.relations import DiscourseRelationBuilder
         result["discourse_relation_builder"] = DiscourseRelationBuilder(
             base_url=llm_base_url, bypass_proxy=bypass_proxy,
+            knowledge_domain=knowledge_domain,
         )
     except (ImportError, Exception):
         pass
@@ -357,6 +363,7 @@ def _init_llm(
             from knowledge_mining.mining.stages.retrieval_units import LLMContextualizer
             result["contextualizer"] = LLMContextualizer(
                 base_url=llm_base_url, bypass_proxy=bypass_proxy,
+                knowledge_domain=knowledge_domain,
             )
         except (ImportError, Exception):
             pass
@@ -370,6 +377,8 @@ def _init_embedding(
     model: str,
     base_url: str,
     dimensions: int | None,
+    *,
+    knowledge_domain: str | None = None,
 ) -> Any | None:
     """Prefer shared llm_service embedding endpoint, fallback to direct Zhipu client.
 
@@ -382,6 +391,7 @@ def _init_embedding(
             base_url=llm_base_url,
             model=model,
             dimensions=dimensions,
+            knowledge_domain=knowledge_domain,
         )
 
     if not api_key:

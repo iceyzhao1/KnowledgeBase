@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 # Default port matches llm_service QUICKSTART
 DEFAULT_BASE_URL = "http://localhost:8900"
 
+# Audit constants for llm_service multi-domain routing
+CALLER_SERVICE = "mining"
+UNKNOWN_DOMAIN = "unknown"
+
 
 class LlmClient:
     """Sync HTTP client for llm_service. Field names match llm_service/client.py.
@@ -50,19 +54,26 @@ class LlmClient:
         self,
         template_key: str,
         input: dict[str, Any] | None = None,
-        caller_domain: str = "mining",
+        caller_domain: str | None = None,
         pipeline_stage: str = "retrieval_units",
         expected_output_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         max_attempts: int = 3,
+        *,
+        caller_service: str = CALLER_SERVICE,
+        knowledge_domain: str | None = None,
     ) -> str | None:
         """Submit async task via POST /api/v1/tasks. Returns task_id or None."""
         payload: dict[str, Any] = {
-            "caller_domain": caller_domain,
+            "caller_service": caller_service,
+            "knowledge_domain": knowledge_domain or UNKNOWN_DOMAIN,
             "pipeline_stage": pipeline_stage,
             "template_key": template_key,
             "max_attempts": max_attempts,
         }
+        # Backward compat: if legacy caller_domain passed, add to payload
+        if caller_domain is not None:
+            payload["caller_domain"] = caller_domain
         if input is not None:
             payload["input"] = input
         if expected_output_type is not None:
@@ -218,16 +229,23 @@ class LlmClient:
         self,
         template_key: str,
         input: dict[str, Any] | None = None,
-        caller_domain: str = "mining",
+        caller_domain: str | None = None,
         pipeline_stage: str = "retrieval_units",
         expected_output_type: str | None = None,
+        *,
+        caller_service: str = CALLER_SERVICE,
+        knowledge_domain: str | None = None,
     ) -> dict | None:
         """Sync execute via POST /api/v1/execute. Returns full response or None."""
         payload: dict[str, Any] = {
-            "caller_domain": caller_domain,
+            "caller_service": caller_service,
+            "knowledge_domain": knowledge_domain or UNKNOWN_DOMAIN,
             "pipeline_stage": pipeline_stage,
             "template_key": template_key,
         }
+        # Backward compat: if legacy caller_domain passed, add to payload
+        if caller_domain is not None:
+            payload["caller_domain"] = caller_domain
         if input is not None:
             payload["input"] = input
         if expected_output_type is not None:

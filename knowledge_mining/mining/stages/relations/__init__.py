@@ -56,10 +56,12 @@ class DiscourseRelationBuilder:
         base_url: str = "http://localhost:8900",
         bypass_proxy: bool = False,
         window_size: int = 15,
+        knowledge_domain: str | None = None,
     ) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._window_size = window_size
+        self._knowledge_domain = knowledge_domain
 
     def build(
         self,
@@ -106,7 +108,7 @@ class DiscourseRelationBuilder:
             task_id = self._client.submit_task(
                 template_key="mining-discourse-relation",
                 input={"segments": "\n".join(seg_lines)},
-                caller_domain="mining",
+                knowledge_domain=self._knowledge_domain,
                 pipeline_stage="discourse_relations",
                 expected_output_type="json_array",
             )

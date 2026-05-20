@@ -46,12 +46,13 @@ class LlmQuestionGenerator:
     Results are capped at MAX_QUESTIONS_PER_SEGMENT.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, profile: DomainProfile | None = None) -> None:
+    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, profile: DomainProfile | None = None, knowledge_domain: str | None = None) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
         self._last_task_ids: dict[str, str] = {}
         self._profile = profile
+        self._knowledge_domain = knowledge_domain or (profile.domain_id if profile else None)
 
     def generate(self, segment: RawSegmentData) -> list[str]:
         """Single segment submit+poll (fallback)."""
@@ -63,7 +64,7 @@ class LlmQuestionGenerator:
                     "title": segment.section_title or "",
                     "content": segment.raw_text,
                 },
-                caller_domain="mining",
+                knowledge_domain=self._knowledge_domain,
                 pipeline_stage="retrieval_units",
                 expected_output_type="json_array",
             )
@@ -98,7 +99,7 @@ class LlmQuestionGenerator:
                     "title": seg.section_title or "",
                     "content": seg.raw_text,
                 },
-                caller_domain="mining",
+                knowledge_domain=self._knowledge_domain,
                 pipeline_stage="retrieval_units",
                 expected_output_type="json_array",
             )
@@ -133,11 +134,12 @@ class LLMContextualizer:
     In v1.3, the context is folded into raw_text.search_text, NOT a separate unit.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False) -> None:
+    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, knowledge_domain: str | None = None) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
         self._last_task_ids: dict[str, str] = {}
+        self._knowledge_domain = knowledge_domain
 
     @property
     def last_task_ids(self) -> dict[str, str]:
@@ -171,7 +173,7 @@ class LLMContextualizer:
                     "document": doc_preview,
                     "segment": seg.raw_text[:500],
                 },
-                caller_domain="mining",
+                knowledge_domain=self._knowledge_domain,
                 pipeline_stage="contextual_retrieval",
                 expected_output_type="json_object",
             )

@@ -31,10 +31,12 @@ class LlmEnricher:
         base_url: str = "http://localhost:8900",
         bypass_proxy: bool = False,
         profile: "DomainProfile | None" = None,
+        knowledge_domain: str | None = None,
     ) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._profile = profile
+        self._knowledge_domain = knowledge_domain or (profile.domain_id if profile else None)
 
     def enrich(
         self,
@@ -65,7 +67,7 @@ class LlmEnricher:
                     "section_title": seg.section_title or "",
                     "block_type": seg.block_type,
                 },
-                caller_domain="mining",
+                knowledge_domain=self._knowledge_domain,
                 pipeline_stage="enrich",
                 expected_output_type="json_object",
             )
