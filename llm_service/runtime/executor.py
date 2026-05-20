@@ -136,7 +136,9 @@ class Executor:
                     row = await self._db.fetchone("SELECT available_at FROM agent_llm_tasks WHERE id = %s", (task_id,))
                     if row is None:
                         return None
-                    available_at = datetime.fromisoformat(row["available_at"])
+                    available_at = row["available_at"]
+                    if isinstance(available_at, str):
+                        available_at = datetime.fromisoformat(available_at)
                     delay = (available_at - datetime.now(timezone.utc)).total_seconds()
                     if delay > 0:
                         await asyncio.sleep(delay)
@@ -163,7 +165,9 @@ class Executor:
                     row = await self._db.fetchone("SELECT available_at FROM agent_llm_tasks WHERE id = %s", (task_id,))
                     if row is None:
                         return None
-                    available_at = datetime.fromisoformat(row["available_at"])
+                    available_at = row["available_at"]
+                    if isinstance(available_at, str):
+                        available_at = datetime.fromisoformat(available_at)
                     delay = (available_at - datetime.now(timezone.utc)).total_seconds()
                     if delay > 0:
                         await asyncio.sleep(delay)
