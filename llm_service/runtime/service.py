@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from string import Template
@@ -12,7 +13,7 @@ from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.runtime.event_bus import EventBus
-from llm_service.runtime.executor import Executor
+from llm_service.runtime.parser import ParseResult, parse_output
 from llm_service.runtime.task_manager import TaskManager
 from llm_service.runtime.template_registry import TemplateRegistry
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class LLMService:
-    """Top-level orchestrator: owns task_manager, executor, event_bus, provider, templates."""
+    """Top-level orchestrator: owns task_manager, event_bus, provider, templates."""
 
     def __init__(
         self,
@@ -41,11 +42,10 @@ class LLMService:
             backoff_base=config.retry_backoff_base,
             backoff_max=config.retry_backoff_max,
         )
-        self._executor = Executor(db, self._mgr, self._bus, provider)
         self._templates = TemplateRegistry(db)
         self._model_provider = model_provider
         self._provider = provider
-        # Store provider info directly instead of accessing _executor._provider
+        # Store provider info for request recording
         self._provider_name = getattr(provider, 'provider_name', 'unknown')
         self._default_model = getattr(provider, 'default_model', config.provider_model)
 
@@ -136,6 +136,110 @@ class LLMService:
         if not injected:
             new_msgs.insert(0, {"role": "system", "content": schema_instruction.strip()})
         result["messages"] = new_msgs
+
+    # ------------------------------------------------------------------
+    # Shared chat execution (used by both Worker and sync /execute)
+    # ------------------------------------------------------------------
+
+    async def execute_chat_attempt(
+        self,
+        task_id: str,
+        request_id: str,
+        messages: list[dict],
+        params: dict,
+        expected_type: str,
+        schema: dict | None,
+    ) -> ParseResult:
+        """Execute a single chat attempt: call provider -> parse -> write result.
+
+        On parse success: calls _mgr.complete() and returns ParseResult.
+        On parse failure: calls _mgr.fail() (triggers retry) and returns ParseResult.
+        On provider error: writes failed attempt, calls _mgr.fail(), raises the exception.
+        """
+        task_row = await self._db.fetchone(
+            "SELECT attempt_count FROM agent_llm_tasks WHERE id = %s", (task_id,)
+        )
+        if not task_row:
+            return ParseResult(parse_status="failed", parse_error="task not found")
+        attempt_no = task_row["attempt_count"] + 1
+
+        attempt_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            """INSERT INTO agent_llm_attempts
+               (id, task_id, request_id, attempt_no, status, started_at)
+               VALUES (%s, %s, %s, %s, 'running', %s)""",
+            (attempt_id, task_id, request_id, attempt_no, now),
+        )
+
+        start = time.monotonic()
+        try:
+            response_format = (
+                {"type": "json_object"}
+                if expected_type in ("json_object", "json_array")
+                else None
+            )
+            resp = await self._provider.complete(
+                messages=messages, params=params,
+                response_format=response_format,
+            )
+            latency = int((time.monotonic() - start) * 1000)
+            finished = datetime.now(timezone.utc).isoformat()
+
+            await self._db.execute(
+                """UPDATE agent_llm_attempts
+                   SET status = 'succeeded', raw_output_text = %s, prompt_tokens = %s,
+                       completion_tokens = %s, total_tokens = %s, latency_ms = %s, finished_at = %s,
+                       raw_response_json = %s
+                   WHERE id = %s""",
+                (
+                    resp.output_text, resp.prompt_tokens, resp.completion_tokens,
+                    resp.total_tokens, latency, finished,
+                    json.dumps(resp.raw_response or {}), attempt_id,
+                ),
+            )
+
+            parse_result = parse_output(resp.output_text, expected_type, schema)
+
+            # Always write result row (contains parse_error for debugging)
+            result_id = str(uuid.uuid4())
+            await self._db.execute(
+                """INSERT INTO agent_llm_results
+                   (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
+                    parse_error, validation_errors_json, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    result_id, task_id, attempt_id, parse_result.parse_status,
+                    json.dumps(parse_result.parsed_output if parse_result.parsed_output is not None else {}),
+                    parse_result.text_output, parse_result.parse_error,
+                    json.dumps(parse_result.validation_errors),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+            if parse_result.parse_status == "succeeded":
+                await self._mgr.complete(task_id)
+            else:
+                await self._mgr.fail(
+                    task_id, "parse_failed",
+                    parse_result.parse_error or f"parse_status={parse_result.parse_status}",
+                )
+            return parse_result
+
+        except Exception as e:
+            latency = int((time.monotonic() - start) * 1000)
+            finished = datetime.now(timezone.utc).isoformat()
+            error_type = getattr(e, "error_type", "unexpected_error")
+            error_msg = str(e)
+
+            await self._db.execute(
+                """UPDATE agent_llm_attempts
+                   SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
+                   WHERE id = %s""",
+                (error_type, error_msg, latency, finished, attempt_id),
+            )
+            await self._mgr.fail(task_id, error_type, error_msg)
+            raise
 
     # ------------------------------------------------------------------
     # Common submit with idempotency
@@ -337,7 +441,9 @@ class LLMService:
         priority: int = 100,
         timeout: int | None = None,
     ) -> dict:
-        """Sync execute: submit, then run immediately, return result."""
+        """Sync execute: submit with high priority, then run immediately, return result."""
+        # Boost priority so Worker's claim (ORDER BY priority DESC) prefers sync tasks
+        effective_priority = max(priority, 999)
         task_id = await self.submit(
             caller_domain, pipeline_stage,
             template_key=template_key, input=input, messages=messages,
@@ -345,7 +451,7 @@ class LLMService:
             output_schema=output_schema,
             idempotency_key=idempotency_key,
             metadata=metadata,
-            max_attempts=max_attempts, priority=priority,
+            max_attempts=max_attempts, priority=effective_priority,
         )
 
         # Idempotency: already-succeeded task -> return cached result
@@ -387,20 +493,21 @@ class LLMService:
 
         effective_timeout = timeout or self._config.execute_timeout
         try:
+            # Get request_id for the shared attempt method
+            req_row = await self._db.fetchone("SELECT id FROM agent_llm_requests WHERE task_id = %s", (task_id,))
+            request_id = req_row["id"] if req_row else ""
+
             await asyncio.wait_for(
-                self._executor.run(
-                    task_id, actual_messages, params or {},
-                    expected_type=actual_expected_type, schema=actual_schema,
+                self.execute_chat_attempt(
+                    task_id, request_id, actual_messages, params or {},
+                    actual_expected_type, actual_schema,
                 ),
                 timeout=effective_timeout,
             )
         except asyncio.TimeoutError:
             await self._bus.emit(task_id, "failed", f"execute timed out after {effective_timeout}s (lease recovery pending)")
-            return await self._build_execute_response(task_id)
-        except Exception as e:
-            error_type = getattr(e, "error_type", "unexpected_error")
-            await self._mgr.fail(task_id, error_type, str(e)[:500])
-            return await self._build_execute_response(task_id)
+        except Exception:
+            pass  # execute_chat_attempt already called _mgr.fail()
 
         return await self._build_execute_response(task_id)
 

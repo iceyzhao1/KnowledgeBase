@@ -15,11 +15,8 @@ from llm_service.providers.bigmodel_models import BigModelProvider
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.openai_compatible import OpenAICompatibleProvider
-from llm_service.runtime.event_bus import EventBus
 from llm_service.runtime.model_service import ModelService
 from llm_service.runtime.service import LLMService
-from llm_service.runtime.task_manager import TaskManager
-from llm_service.runtime.template_registry import TemplateRegistry
 from llm_service.runtime.worker import LeaseRecovery, Worker
 
 logger = logging.getLogger(__name__)
@@ -89,15 +86,6 @@ def create_app(
                 extra_headers=cfg.model_extra_headers,
             )
         )
-        bus = EventBus(db)
-        mgr = TaskManager(
-            db, bus,
-            max_attempts=cfg.default_max_attempts,
-            lease_duration=cfg.lease_duration,
-            backoff_base=cfg.retry_backoff_base,
-            backoff_max=cfg.retry_backoff_max,
-        )
-
         svc = LLMService(db=db, provider=provider, config=cfg, model_provider=model_provider)
         model_svc = ModelService(
             model_provider, db=db,
@@ -112,38 +100,23 @@ def create_app(
         recovery = None
         try:
             if start_worker:
-                worker_bus = EventBus(db)
-                worker_tmpl = TemplateRegistry(db)
-                worker_mgr = TaskManager(
-                    db, worker_bus,
-                    max_attempts=cfg.default_max_attempts,
-                    lease_duration=cfg.lease_duration,
-                    backoff_base=cfg.retry_backoff_base,
-                    backoff_max=cfg.retry_backoff_max,
-                )
+                # Share LLMService's bus and mgr — single source of truth
                 worker = Worker(
                     db=db,
-                    task_manager=worker_mgr,
-                    event_bus=worker_bus,
+                    task_manager=svc._mgr,
+                    event_bus=svc._bus,
                     provider=provider,
                     model_provider=model_provider,
-                    templates=worker_tmpl,
+                    templates=svc._templates,
                     concurrency=cfg.worker_concurrency,
+                    llm_service=svc,
                 )
                 await worker.start()
 
-                recovery_bus = EventBus(db)
-                recovery_mgr = TaskManager(
-                    db, recovery_bus,
-                    max_attempts=cfg.default_max_attempts,
-                    lease_duration=cfg.lease_duration,
-                    backoff_base=cfg.retry_backoff_base,
-                    backoff_max=cfg.retry_backoff_max,
-                )
                 recovery = LeaseRecovery(
                     db=db,
-                    task_manager=recovery_mgr,
-                    event_bus=recovery_bus,
+                    task_manager=svc._mgr,
+                    event_bus=svc._bus,
                     interval=30.0,
                 )
                 await recovery.start()

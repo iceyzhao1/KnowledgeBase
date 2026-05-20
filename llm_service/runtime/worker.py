@@ -7,15 +7,18 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.providers.utils import extract_doc_text
 from llm_service.runtime.event_bus import EventBus
-from llm_service.runtime.parser import parse_output
 from llm_service.runtime.task_manager import TaskManager
 from llm_service.runtime.template_registry import TemplateRegistry
+
+if TYPE_CHECKING:
+    from llm_service.runtime.service import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +64,7 @@ class Worker:
         templates: TemplateRegistry | None = None,
         concurrency: int = 4,
         poll_interval: float = 1.0,
+        llm_service: LLMService | None = None,
     ):
         self._db = db
         self._mgr = task_manager
@@ -70,6 +74,7 @@ class Worker:
         self._templates = templates
         self._concurrency = concurrency
         self._poll_interval = poll_interval
+        self._svc = llm_service
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
@@ -120,11 +125,11 @@ class Worker:
             await self._mgr.fail(task_id, "unknown_task_type", f"unsupported task_type: {task_type}")
 
     # ------------------------------------------------------------------
-    # Chat execution
+    # Chat execution — delegates to LLMService.execute_chat_attempt()
     # ------------------------------------------------------------------
 
     async def _execute_chat(self, task_id: str) -> None:
-        """Execute a chat task: read request -> call provider -> parse -> complete/fail."""
+        """Execute a chat task: read request -> delegate to shared execution."""
         req = await self._db.fetchone("SELECT * FROM agent_llm_requests WHERE task_id = %s", (task_id,))
         if not req:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
@@ -136,80 +141,14 @@ class Worker:
         schema = _ensure_dict(req["output_schema_json"]) or None
         request_id = req["id"]
 
-        task_row = await self._db.fetchone("SELECT attempt_count, max_attempts FROM agent_llm_tasks WHERE id = %s", (task_id,))
-        if not task_row:
-            return
-        attempt_no = task_row["attempt_count"] + 1
-
-        attempt_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            """INSERT INTO agent_llm_attempts
-               (id, task_id, request_id, attempt_no, status, started_at)
-               VALUES (%s, %s, %s, %s, 'running', %s)""",
-            (attempt_id, task_id, request_id, attempt_no, now),
-        )
-
-        start = time.monotonic()
         try:
-            response_format = (
-                {"type": "json_object"}
-                if expected_type in ("json_object", "json_array")
-                else None
+            await self._svc.execute_chat_attempt(
+                task_id, request_id, messages, params,
+                expected_type, schema,
             )
-            resp = await self._provider.complete(
-                messages=messages, params=params,
-                response_format=response_format,
-            )
-            latency = int((time.monotonic() - start) * 1000)
-            finished = datetime.now(timezone.utc).isoformat()
-
-            await self._db.execute(
-                """UPDATE agent_llm_attempts
-                   SET status = 'succeeded', raw_output_text = %s, prompt_tokens = %s,
-                       completion_tokens = %s, total_tokens = %s, latency_ms = %s, finished_at = %s,
-                       raw_response_json = %s
-                   WHERE id = %s""",
-                (
-                    resp.output_text, resp.prompt_tokens, resp.completion_tokens,
-                    resp.total_tokens, latency, finished,
-                    json.dumps(resp.raw_response or {}), attempt_id,
-                ),
-            )
-
-            parse_result = parse_output(resp.output_text, expected_type, schema)
-
-            result_id = str(uuid.uuid4())
-            await self._db.execute(
-                """INSERT INTO agent_llm_results
-                   (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
-                    parse_error, validation_errors_json, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (
-                    result_id, task_id, attempt_id, parse_result.parse_status,
-                    json.dumps(parse_result.parsed_output if parse_result.parsed_output is not None else {}),
-                    parse_result.text_output, parse_result.parse_error,
-                    json.dumps(parse_result.validation_errors),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-
-            await self._mgr.complete(task_id)
-
-        except Exception as e:
-            latency = int((time.monotonic() - start) * 1000)
-            finished = datetime.now(timezone.utc).isoformat()
-            error_type = getattr(e, "error_type", "unexpected_error")
-            error_msg = str(e)
-
-            await self._db.execute(
-                """UPDATE agent_llm_attempts
-                   SET status = 'failed', error_type = %s, error_message = %s, latency_ms = %s, finished_at = %s
-                   WHERE id = %s""",
-                (error_type, error_msg, latency, finished, attempt_id),
-            )
-
-            await self._mgr.fail(task_id, error_type, error_msg)
+        except Exception:
+            # execute_chat_attempt already wrote failed attempt + called _mgr.fail()
+            pass
 
     # ------------------------------------------------------------------
     # Embedding execution

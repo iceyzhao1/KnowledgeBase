@@ -94,15 +94,11 @@ async def test_cancel_prevents_execution(api_client):
 
 
 async def test_template_crud_and_usage(api_client):
-    """Dashboard endpoint works; templates can be queried."""
-    # Verify dashboard renders without error
-    dash = await api_client.get("/dashboard")
-    assert dash.status_code == 200
-
+    """Templates can be queried via API."""
     # Verify stats API
-    stats = await api_client.get("/dashboard/api/stats")
+    stats = await api_client.get("/api/v1/stats")
     assert stats.status_code == 200
-    assert isinstance(stats.json()["tasks_by_status"], dict)
+    assert isinstance(stats.json()["data"]["tasks_by_status"], dict)
 
 
 async def test_execute_with_text_output_type(api_client):
@@ -186,8 +182,8 @@ async def test_template_key_expands_messages(api_client):
     assert resp.json()["status"] == "succeeded"
 
 
-async def test_dashboard_task_detail(api_client):
-    """Dashboard detail page shows task info."""
+async def test_task_detail_api(api_client):
+    """Task detail API shows task info."""
     exec_resp = await api_client.post(
         "/api/v1/execute",
         json={
@@ -196,32 +192,10 @@ async def test_dashboard_task_detail(api_client):
             "messages": [{"role": "user", "content": "rewrite"}],
         },
     )
-    task_id = exec_resp.json()["task_id"]
+    task_id = exec_resp.json()["data"]["task_id"]
 
-    detail = await api_client.get(f"/dashboard/tasks/{task_id}")
+    detail = await api_client.get(f"/api/v1/tasks/{task_id}")
     assert detail.status_code == 200
-    assert task_id[:8] in detail.text
-    assert "serving" in detail.text
-
-
-async def test_dashboard_filtering(api_client):
-    """Dashboard supports status/domain/stage filtering."""
-    # Create a task with known params
-    await api_client.post(
-        "/api/v1/execute",
-        json={
-            "caller_domain": "evaluation",
-            "pipeline_stage": "grade",
-            "messages": [{"role": "user", "content": "test"}],
-        },
-    )
-
-    # Filter by domain
-    resp = await api_client.get("/dashboard?domain=evaluation")
-    assert resp.status_code == 200
-    assert "evaluation" in resp.text
-
-    # Filter by non-existent status
-    resp = await api_client.get("/dashboard?status=dead_letter")
-    assert resp.status_code == 200
-    assert "No tasks found" in resp.text
+    data = detail.json()["data"]
+    assert data["task"]["id"] == task_id
+    assert data["task"]["caller_domain"] == "serving"
