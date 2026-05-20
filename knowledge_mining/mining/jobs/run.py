@@ -213,7 +213,7 @@ def run(
         return _run_pipeline(
             asset_db, runtime_db, input_path, params, phase1_only, run_id,
             publish_on_partial_failure, llm_services, embedding_generator,
-            max_workers, profile,
+            max_workers, profile, channel=channel,
         )
     except MiningCancelled:
         return {"run_id": run_id, "status": "cancelled"}
@@ -418,6 +418,7 @@ def _run_pipeline(
     embedding_generator: Any | None = None,
     max_workers: int = 4,
     profile: DomainProfile | None = None,
+    channel: str | None = None,
 ) -> dict[str, Any]:
     """Core pipeline logic. Assumes DBs are already open."""
     tracker = RuntimeTracker(runtime_db)
@@ -438,6 +439,8 @@ def _run_pipeline(
         id=run_id,
         source_batch_id=batch_id,
         input_path=str(input_path),
+        domain=profile.domain_id,
+        channel=channel,
         status="running",
         total_documents=len(docs),
         started_at=now,

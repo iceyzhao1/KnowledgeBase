@@ -22,7 +22,8 @@ _run_lock = threading.Lock()
 
 class CreateRunRequest(BaseModel):
     input_path: str
-    domain_pack: str | None = None
+    domain: str | None = None
+    domain_pack: str | None = None  # deprecated, use domain
     max_workers: int | None = None
     phase1_only: bool = False
     publish_on_partial_failure: bool = False
@@ -52,9 +53,11 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
     pool = request.app.state.pg_pool
     db_config: MiningDbConfig = request.app.state.db_config
 
-    # Load defaults from MiningConfig (env vars)
+    # Resolve domain: explicit domain > domain_pack > config default > cloud_core_network
     from knowledge_mining.mining.infra.mining_config import MiningConfig
     cfg = MiningConfig()
+    resolved_domain = body.domain or body.domain_pack or cfg.domain or "cloud_core_network"
+
     embedding_api_key = body.embedding_api_key
     llm_base_url = body.llm_base_url or cfg.llm_service_url
 
@@ -75,7 +78,7 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
                 embedding_model=body.embedding_model,
                 embedding_dimensions=body.embedding_dimensions,
                 max_workers=body.max_workers,
-                domain_pack=body.domain_pack,
+                domain=resolved_domain,
             )
         except Exception as e:
             logger.error("Mining run failed: %s", e, exc_info=True)
@@ -111,15 +114,23 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
 async def list_runs(
     request: Request,
     status: str | None = None,
+    domain: str | None = None,
     limit: int = Query(20, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict:
-    """List mining runs with optional status filter."""
+    """List mining runs with optional status/domain filter."""
     pool = request.app.state.pg_pool
 
     async with pool.connection() as conn:
-        where = "WHERE status = %s" if status else ""
-        params: list[str] = [status] if status else []
+        conds: list[str] = []
+        params: list[str] = []
+        if status:
+            conds.append("status = %s")
+            params.append(status)
+        if domain:
+            conds.append("domain = %s")
+            params.append(domain)
+        where = f"WHERE {' AND '.join(conds)}" if conds else ""
 
         count_cur = await conn.execute(
             f"SELECT COUNT(*) as c FROM mining_runs {where}", params
@@ -127,7 +138,7 @@ async def list_runs(
         total = (await count_cur.fetchone())["c"]
 
         cur = await conn.execute(
-            f"SELECT id, status, input_path, total_documents, "
+            f"SELECT id, status, input_path, domain, total_documents, "
             f"committed_count, failed_count, skipped_count, "
             f"new_count, updated_count, build_id, started_at, finished_at "
             f"FROM mining_runs {where} "
@@ -151,7 +162,7 @@ async def get_run(run_id: str, request: Request) -> dict:
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT id, source_batch_id, input_path, status, build_id, "
+            "SELECT id, source_batch_id, input_path, domain, status, build_id, "
             "total_documents, new_count, updated_count, skipped_count, "
             "failed_count, committed_count, started_at, finished_at, "
             "error_summary, metadata_json "
@@ -223,14 +234,30 @@ async def cancel_run(run_id: str, request: Request) -> dict:
     return {"run_id": run_id, "status": "cancelled", "message": "Run cancellation requested"}
 
 
+class PublishRunRequest(BaseModel):
+    domain: str | None = None
+
+
 @router.post("/{run_id}/publish")
-async def publish_run(run_id: str, request: Request) -> dict:
+async def publish_run(run_id: str, request: Request, body: PublishRunRequest | None = None) -> dict:
     """Publish a completed run's build as active release."""
     db_config: MiningDbConfig = request.app.state.db_config
 
     try:
+        # Resolve domain: body > run record > fallback
+        publish_domain = body.domain if body and body.domain else None
+        if not publish_domain:
+            pool = request.app.state.pg_pool
+            async with pool.connection() as conn:
+                cur = await conn.execute("SELECT domain FROM mining_runs WHERE id = %s", [run_id])
+                row = await cur.fetchone()
+                if row and row["domain"]:
+                    publish_domain = row["domain"]
+        if not publish_domain:
+            publish_domain = "cloud_core_network"
+
         from knowledge_mining.mining.jobs.run import publish
-        result = publish(run_id, db_config=db_config)
+        result = publish(run_id, domain=publish_domain, db_config=db_config)
         return result
     except ValueError as e:
         raise HTTPException(400, str(e))

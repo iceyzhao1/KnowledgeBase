@@ -96,16 +96,22 @@
         <el-form-item label="Domain">
           <el-input :model-value="domainStore.currentDomain" disabled />
         </el-form-item>
-        <el-form-item label="输入路径">
-          <el-input v-model="createForm.inputPath" placeholder="D:\path\to\knowledge_base\domain" />
+        <el-form-item label="上传文件">
+          <el-upload
+            v-model:file-list="uploadFiles"
+            :auto-upload="false"
+            :multiple="true"
+            :limit="50"
+            accept=".md,.txt,.pdf,.html,.docx"
+          >
+            <el-button size="small">选择文件</el-button>
+            <template #tip>
+              <div class="el-upload__tip">支持 .md, .txt, .pdf, .html, .docx</div>
+            </template>
+          </el-upload>
         </el-form-item>
-        <el-form-item label="配置">
-          <el-input
-            v-model="createForm.configJson"
-            type="textarea"
-            :rows="6"
-            placeholder='{"document_paths": [...], "pipeline": "full"}'
-          />
+        <el-form-item label="或输入路径">
+          <el-input v-model="createForm.inputPath" placeholder="手动输入目录路径（可选，优先使用上传）" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -119,19 +125,23 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { Plus, Refresh } from '@element-plus/icons-vue'
+import type { UploadUserFile } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
+import { useMiningApi } from '@/api/mining'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 
 const domainStore = useDomainStore()
 const miningStore = useMiningStore()
+const miningApi = useMiningApi()
 
 const showCreateDialog = ref(false)
 const creating = ref(false)
 const activeFilter = ref('all')
+const uploadFiles = ref<UploadUserFile[]>([])
 const createForm = ref({
   inputPath: '',
-  configJson: '{}',
 })
 
 const filters = computed(() => {
@@ -183,16 +193,37 @@ function formatDuration(start?: string, end?: string) {
 async function handleCreate() {
   creating.value = true
   try {
-    let config = {}
-    try { config = JSON.parse(createForm.value.configJson) } catch { /* empty */ }
+    let inputPath = createForm.value.inputPath
+
+    // Upload files first if selected
+    if (uploadFiles.value.length > 0) {
+      const files = uploadFiles.value
+        .map(f => f.raw)
+        .filter((f): f is File => f instanceof File)
+      if (files.length === 0) {
+        ElMessage.warning('请选择有效的文件')
+        creating.value = false
+        return
+      }
+      const result = await miningApi.uploadFiles(domainStore.currentDomain, files)
+      inputPath = result.storage_path
+    }
+
+    if (!inputPath) {
+      ElMessage.warning('请上传文件或输入路径')
+      creating.value = false
+      return
+    }
+
     await miningStore.createRun({
       domain: domainStore.currentDomain,
-      input_path: createForm.value.inputPath,
-      ...config,
+      input_path: inputPath,
     })
     showCreateDialog.value = false
-    createForm.value.configJson = '{}'
     createForm.value.inputPath = ''
+    uploadFiles.value = []
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '创建失败')
   } finally {
     creating.value = false
   }

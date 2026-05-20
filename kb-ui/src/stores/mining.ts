@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { MiningRun, MiningRunStage, MiningRunDocument } from '@/types'
 import { useMiningApi } from '@/api/mining'
+import { useDomainStore } from '@/stores/domain'
 
 export const useMiningStore = defineStore('mining', () => {
   const runs = ref<MiningRun[]>([])
@@ -12,6 +13,7 @@ export const useMiningStore = defineStore('mining', () => {
   const error = ref<string | null>(null)
 
   const miningApi = useMiningApi()
+  const domainStore = useDomainStore()
 
   async function fetchRuns() {
     loading.value = true
@@ -68,7 +70,7 @@ export const useMiningStore = defineStore('mining', () => {
 
   async function publishRun(runId: string) {
     try {
-      await miningApi.publishRun(runId)
+      await miningApi.publishRun(runId, domainStore.currentDomain)
       const run = runs.value.find(r => r.id === runId)
       if (run) run.build_id = `bld_${runId}`
       if (currentRun.value?.id === runId) currentRun.value.build_id = `bld_${runId}`

@@ -66,8 +66,38 @@ export function useMiningApi() {
       await client.post(`/api/runs/${runId}/cancel`)
     },
 
-    async publishRun(runId: string): Promise<void> {
-      await client.post(`/api/runs/${runId}/publish`)
+    async publishRun(runId: string, domain?: string): Promise<void> {
+      await client.post(`/api/runs/${runId}/publish`, domain ? { domain } : undefined)
+    },
+
+    // Upload
+    async uploadFiles(domain: string, files: File[]): Promise<{
+      upload_batch_id: string
+      domain: string
+      file_count: number
+      files: string[]
+      storage_path: string
+    }> {
+      const form = new FormData()
+      form.append('domain', domain)
+      for (const f of files) {
+        form.append('files', f)
+      }
+      const { data } = await client.post('/api/uploads', form)
+      return data
+    },
+
+    async listUploads(domain?: string): Promise<{
+      items: Array<{
+        upload_batch_id: string
+        domain: string
+        file_count: number
+        files: string[]
+        storage_path: string
+      }>
+    }> {
+      const { data } = await client.get('/api/uploads', { params: domain ? { domain } : undefined })
+      return data
     },
 
     // Knowledge assets

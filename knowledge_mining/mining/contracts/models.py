@@ -333,6 +333,8 @@ class MiningRunData:
     id: str
     source_batch_id: str | None = None
     input_path: str = ""
+    domain: str | None = None
+    channel: str | None = None
     status: str = "queued"
     build_id: str | None = None
     total_documents: int = 0

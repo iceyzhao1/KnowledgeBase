@@ -633,13 +633,14 @@ class MiningRuntimeDB(_DB):
     def insert_run(self, data: MiningRunData) -> str:
         self._execute(
             """INSERT INTO mining_runs
-                   (id, source_batch_id, input_path, status, build_id,
+                   (id, source_batch_id, input_path, domain, channel, status, build_id,
                     total_documents, new_count, updated_count, skipped_count,
                     failed_count, committed_count, started_at, finished_at,
                     error_summary, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
-                data.id, data.source_batch_id, data.input_path, data.status, data.build_id,
+                data.id, data.source_batch_id, data.input_path, data.domain, data.channel,
+                data.status, data.build_id,
                 data.total_documents, data.new_count, data.updated_count, data.skipped_count,
                 data.failed_count, data.committed_count, data.started_at or _utcnow(),
                 data.finished_at, data.error_summary, _json_dumps(data.metadata_json),
