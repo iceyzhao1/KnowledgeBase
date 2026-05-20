@@ -64,9 +64,9 @@
         <div class="relation-list">
           <div v-for="rel in relations" :key="rel.id" class="relation-row">
             <span class="relation-row__id">{{ rel.source_segment_id.slice(0, 6) }}</span>
-            <span class="relation-row__type">{{ rel.relation_type }}</span>
+            <span class="relation-row__type">{{ relationTypeLabel(rel.relation_type) }}</span>
             <span class="relation-row__id">{{ rel.target_segment_id.slice(0, 6) }}</span>
-            <span class="relation-row__conf">conf={{ rel.confidence.toFixed(2) }}</span>
+            <span class="relation-row__conf">置信度={{ rel.confidence.toFixed(2) }}</span>
           </div>
           <EmptyState v-if="!relations.length" text="无关系数据" />
         </div>
@@ -102,6 +102,15 @@ function unitTypeLabel(type: string) {
   return map[type] || type
 }
 
+function relationTypeLabel(type: string) {
+  const map: Record<string, string> = {
+    elaboration: '详述', contrast: '对比', sequence: '顺序',
+    cause_effect: '因果', problem_solution: '问题-方案',
+    similarity: '相似', dependency: '依赖', reference: '引用',
+  }
+  return map[type] || type
+}
+
 function formatTime(t: string) {
   if (!t) return '-'
   return new Date(t).toLocaleString('zh-CN')
@@ -110,16 +119,16 @@ function formatTime(t: string) {
 async function loadData() {
   loading.value = true
   try {
-    const [doc, segs, unts] = await Promise.all([
+    const [doc, segs, unts, rels] = await Promise.all([
       miningApi.getDocument(props.docId),
       miningApi.getDocumentSegments(props.docId),
       miningApi.getDocumentUnits(props.docId),
+      miningApi.getDocumentRelations(props.docId),
     ])
     document.value = doc
     segments.value = segs
     units.value = unts
-    // Relations are global, skip for now
-    relations.value = []
+    relations.value = rels
   } catch {
     document.value = null
   } finally {

@@ -616,7 +616,7 @@ def _run_pipeline(
                 asset_db.commit()
 
             # Write segments to DB (track at commit time since pipeline ran in streaming)
-            evt_seg = tracker.start_stage(run_id, "segment", rd_id)
+            evt_seg = tracker.start_stage(run_id, "commit_segments", rd_id)
             for seg in segments:
                 seg_key = f"{seg.document_key}#{seg.segment_index}"
                 seg_id = seg_id_map.get(seg_key, uuid.uuid4().hex)
@@ -659,7 +659,7 @@ def _run_pipeline(
                     )
             tracker.end_stage(evt_rel, run_id, "build_relations",
                               output_summary=f"{len(relations)} relations")
-            tracker.end_stage(evt_seg, run_id, "segment",
+            tracker.end_stage(evt_seg, run_id, "commit_segments",
                               output_summary=f"{len(segments)} segments")
 
             # Write retrieval units to DB

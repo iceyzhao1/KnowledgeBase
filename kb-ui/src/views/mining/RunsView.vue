@@ -10,10 +10,12 @@
         <el-button @click="miningStore.fetchRuns()" :loading="miningStore.loading">
           <el-icon><Refresh /></el-icon>
         </el-button>
-        <el-button type="primary" @click="showCreateDialog = true">
-          <el-icon class="el-icon--left"><Plus /></el-icon>
-          新建 Run
-        </el-button>
+        <router-link to="/mining/create">
+          <el-button type="primary">
+            <el-icon class="el-icon--left"><Plus /></el-icon>
+            新建 Run
+          </el-button>
+        </router-link>
       </div>
     </div>
 

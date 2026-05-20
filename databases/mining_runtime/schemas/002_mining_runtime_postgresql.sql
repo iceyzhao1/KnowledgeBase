@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS mining_run_stage_events (
     stage            TEXT NOT NULL CHECK (
         stage IN (
             'parse', 'segment', 'enrich', 'discourse', 'retrieval_units',
-            'build_relations', 'build_retrieval_units', 'select_snapshot',
+            'commit_segments', 'build_relations', 'build_retrieval_units', 'select_snapshot',
             'assemble_build', 'validate_build', 'publish_release',
             'discourse_relations'
         )

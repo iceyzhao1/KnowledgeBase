@@ -18,6 +18,11 @@ const router = createRouter({
           component: () => import('@/views/mining/RunsView.vue'),
         },
         {
+          path: 'mining/create',
+          name: 'mining-create',
+          component: () => import('@/views/mining/CreateRunView.vue'),
+        },
+        {
           path: 'mining/:runId',
           name: 'mining-detail',
           component: () => import('@/views/mining/RunDetailView.vue'),

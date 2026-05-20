@@ -45,19 +45,18 @@ interface PipelineStage {
 }
 
 const stages: PipelineStage[] = [
-  { key: 'parse', label: 'Parse', backendKeys: ['parse'] },
-  { key: 'segment', label: 'Segment', backendKeys: ['segment'] },
-  { key: 'enrich', label: 'Enrich', backendKeys: ['enrich'] },
-  { key: 'build_relations', label: 'Relations', backendKeys: ['build_relations'] },
-  { key: 'discourse', label: 'Discourse', backendKeys: ['discourse'] },
-  { key: 'retrieval_units', label: 'Retrieval Units', backendKeys: ['retrieval_units', 'build_retrieval_units'] },
-  { key: 'select_snapshot', label: 'Snapshot', backendKeys: ['select_snapshot'] },
-  { key: 'build', label: 'Build & Release', backendKeys: ['assemble_build', 'validate_build', 'publish_release'] },
+  { key: 'parse', label: '解析', backendKeys: ['parse'] },
+  { key: 'segment', label: '分段', backendKeys: ['segment'] },
+  { key: 'enrich', label: '增强', backendKeys: ['enrich'] },
+  { key: 'discourse', label: '语篇分析', backendKeys: ['discourse', 'build_relations'] },
+  { key: 'retrieval_units', label: '检索单元', backendKeys: ['retrieval_units', 'build_retrieval_units'] },
+  { key: 'commit', label: '数据提交', backendKeys: ['select_snapshot', 'commit_segments'] },
+  { key: 'build', label: '构建&发布', backendKeys: ['assemble_build', 'validate_build', 'publish_release'] },
 ]
 
 const stageIcons: Record<string, string> = {
-  parse: '🔍', segment: '✂️', enrich: '🧠', build_relations: '🔗',
-  discourse: '💬', retrieval_units: '🔎', select_snapshot: '📸', build: '📦',
+  parse: '🔍', segment: '✂️', enrich: '🧠', discourse: '💬',
+  retrieval_units: '🔎', commit: '💾', build: '📦',
 }
 
 function findStageEvents(stage: PipelineStage): MiningRunStage[] {

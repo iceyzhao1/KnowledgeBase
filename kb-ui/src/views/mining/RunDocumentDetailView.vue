@@ -39,12 +39,12 @@
         <h4 class="section-label">阶段时间线</h4>
         <div class="stage-timeline">
           <div
-            v-for="(stage, idx) in miningStore.documentStages"
+            v-for="(stage, idx) in mergedStages"
             :key="stage.id"
             class="stage-item"
             :class="`stage-item--${stage.status}`"
           >
-            <div class="stage-item__line" v-if="idx < miningStore.documentStages.length - 1" />
+            <div class="stage-item__line" v-if="idx < mergedStages.length - 1" />
             <div class="stage-item__dot" />
             <div class="stage-item__content">
               <div class="stage-item__header">
@@ -61,7 +61,7 @@
               <div v-if="stage.output_summary" class="stage-item__summary">{{ stage.output_summary }}</div>
             </div>
           </div>
-          <div v-if="miningStore.documentStages.length === 0" class="stage-empty">暂无阶段数据</div>
+          <div v-if="mergedStages.length === 0" class="stage-empty">暂无阶段数据</div>
         </div>
       </div>
 
@@ -71,15 +71,15 @@
         <div class="artifact-stats">
           <div class="artifact-stat">
             <span class="artifact-stat__value">{{ miningStore.documentArtifacts.segment_count }}</span>
-            <span class="artifact-stat__label">Segments</span>
+            <span class="artifact-stat__label">原始分段</span>
           </div>
           <div class="artifact-stat">
             <span class="artifact-stat__value">{{ miningStore.documentArtifacts.unit_count }}</span>
-            <span class="artifact-stat__label">Retrieval Units</span>
+            <span class="artifact-stat__label">检索单元</span>
           </div>
           <div class="artifact-stat">
             <span class="artifact-stat__value">{{ miningStore.documentArtifacts.relation_count }}</span>
-            <span class="artifact-stat__label">Relations</span>
+            <span class="artifact-stat__label">关系图谱</span>
           </div>
         </div>
       </div>
@@ -138,9 +138,39 @@
         </el-table>
 
         <!-- Relations Table -->
-        <div v-if="activeArtifactTab === 'relations'" class="relations-placeholder">
-          <span class="text-muted">关联关系数据请通过全局知识图谱页面查看</span>
-        </div>
+        <el-table
+          v-if="activeArtifactTab === 'relations'"
+          :data="relations"
+          class="kb-table"
+          :header-cell-style="{ background: 'transparent' }"
+          v-loading="artifactsLoading"
+        >
+          <el-table-column label="源分段" min-width="120">
+            <template #default="{ row }">
+              <span class="text-preview">{{ truncate(row.source_text as string || row.source_segment_id?.slice(0, 8) || '-', 60) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="关系类型" width="140">
+            <template #default="{ row }">
+              <span class="relation-type-tag">{{ relationTypeLabel(row.relation_type) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="目标分段" min-width="120">
+            <template #default="{ row }">
+              <span class="text-preview">{{ truncate(row.target_text as string || row.target_segment_id?.slice(0, 8) || '-', 60) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="置信度" width="90">
+            <template #default="{ row }">
+              {{ row.confidence != null ? Number(row.confidence).toFixed(2) : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="距离" width="80">
+            <template #default="{ row }">
+              {{ row.distance != null ? row.distance : '-' }}
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
     </template>
   </div>
@@ -161,14 +191,38 @@ const activeArtifactTab = ref('segments')
 const artifactsLoading = ref(false)
 const segments = ref<Record<string, unknown>[]>([])
 const units = ref<Record<string, unknown>[]>([])
+const relations = ref<Record<string, unknown>[]>([])
 
 const artifactTabs = [
-  { key: 'segments', label: 'Segments' },
-  { key: 'units', label: 'Units' },
-  { key: 'relations', label: 'Relations' },
+  { key: 'segments', label: '原始分段' },
+  { key: 'units', label: '检索单元' },
+  { key: 'relations', label: '关系图谱' },
 ]
 
 // ── Computed ──
+
+// Merge adjacent started+completed events for the same stage into one row
+const mergedStages = computed(() => {
+  const stages = miningStore.documentStages
+  const result: typeof stages = []
+  for (let i = 0; i < stages.length; i++) {
+    const cur = stages[i]
+    const next = stages[i + 1]
+    if (
+      cur.status === 'started' &&
+      next &&
+      next.stage === cur.stage &&
+      next.status === 'completed'
+    ) {
+      // Merge: show as completed with duration from the completed event
+      result.push({ ...next })
+      i++ // skip the completed event
+    } else {
+      result.push(cur)
+    }
+  }
+  return result
+})
 
 const docDisplayName = computed(() => {
   const doc = miningStore.currentDocument
@@ -206,8 +260,11 @@ function actionLabel(action: string) {
 
 function stageLabel(stage: string) {
   const map: Record<string, string> = {
-    parse: '解析', segment: '分段', enrich: '增强', discourse: '语篇', retrieval_units: '检索单元',
-    select_snapshot: '快照选择', assemble_build: '构建组装', validate_build: '构建校验', publish_release: '发布',
+    parse: '解析', segment: '分段', enrich: '增强', discourse: '语篇分析',
+    retrieval_units: '检索单元构建', commit_segments: '写入分段',
+    build_relations: '写入关系', build_retrieval_units: '写入检索单元',
+    select_snapshot: '快照选择', assemble_build: '构建组装', validate_build: '构建校验',
+    publish_release: '发布',
   }
   return map[stage] || stage
 }
@@ -234,6 +291,15 @@ function truncate(text: string | null | undefined, len: number) {
   return text.length > len ? text.slice(0, len) + '...' : text
 }
 
+function relationTypeLabel(type: string) {
+  const map: Record<string, string> = {
+    elaboration: '详述', contrast: '对比', sequence: '顺序',
+    cause_effect: '因果', problem_solution: '问题-方案',
+    similarity: '相似', dependency: '依赖', reference: '引用',
+  }
+  return map[type] || type
+}
+
 // ── Data loading ──
 
 async function loadArtifacts() {
@@ -249,6 +315,13 @@ async function loadArtifacts() {
     try {
       const result = await miningApi.getRunDocumentUnits(props.runId, props.docId)
       units.value = result.items
+    } catch { /* ignore */ }
+    finally { artifactsLoading.value = false }
+  } else if (activeArtifactTab.value === 'relations') {
+    artifactsLoading.value = true
+    try {
+      const result = await miningApi.getRunDocumentRelations(props.runId, props.docId)
+      relations.value = result.items
     } catch { /* ignore */ }
     finally { artifactsLoading.value = false }
   }
@@ -476,7 +549,15 @@ watch(() => activeArtifactTab.value, loadArtifacts)
 /* Common */
 .text-muted { color: var(--kb-text-tertiary); font-size: 13px; }
 .text-preview { font-size: 12px; color: var(--kb-text-secondary); }
-.relations-placeholder { padding: 24px 0; text-align: center; }
+.relation-type-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 3px;
+  background: var(--kb-accent-soft);
+  color: var(--kb-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
 
 .action-badge {
   display: inline-block;

@@ -122,6 +122,8 @@ export interface KnowledgeRelation {
   weight: number
   confidence: number
   distance: number
+  source_text?: string
+  target_text?: string
 }
 
 // ─── Search / Serving ───

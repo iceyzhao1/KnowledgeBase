@@ -114,6 +114,13 @@ export function useMiningApi() {
       return data
     },
 
+    async getRunDocumentRelations(runId: string, docId: string, params?: {
+      limit?: number; offset?: number
+    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; items: KnowledgeRelation[] }> {
+      const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/relations`, { params })
+      return data
+    },
+
     async getRunArtifacts(runId: string): Promise<{
       run_id: string; document_count: number
       segment_count: number; unit_count: number; relation_count: number
@@ -171,6 +178,15 @@ export function useMiningApi() {
     async getDocumentUnits(docId: string): Promise<KnowledgeUnit[]> {
       const { data } = await client.get(`/api/knowledge/documents/${docId}/units`)
       return extractItems<KnowledgeUnit>(data)
+    },
+
+    async getDocumentRelations(docId: string): Promise<KnowledgeRelation[]> {
+      try {
+        const { data } = await client.get(`/api/knowledge/documents/${docId}/relations`)
+        return extractItems<KnowledgeRelation>(data)
+      } catch {
+        return []
+      }
     },
 
     async getSegments(params?: { limit?: number }): Promise<PaginatedResponse<KnowledgeSegment>> {

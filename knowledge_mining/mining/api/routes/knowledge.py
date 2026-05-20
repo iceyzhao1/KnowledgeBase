@@ -183,6 +183,41 @@ async def get_document_units(
     return {"document_id": document_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
 
 
+@router.get("/documents/{document_id}/relations")
+async def get_document_relations(
+    document_id: str,
+    request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Get segment relations for a document (via latest snapshot)."""
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT document_snapshot_id FROM asset_document_snapshot_links "
+            "WHERE document_id = %s ORDER BY linked_at DESC LIMIT 1",
+            [document_id],
+        )
+        link = await cur.fetchone()
+        if not link:
+            raise HTTPException(404, f"No snapshots found for document {document_id}")
+
+        snapshot_id = link["document_snapshot_id"]
+        cur = await conn.execute(
+            "SELECT r.id, r.document_snapshot_id, r.source_segment_id, "
+            "r.target_segment_id, r.relation_type, r.weight, "
+            "r.confidence, r.distance "
+            "FROM asset_raw_segment_relations r "
+            "WHERE r.document_snapshot_id = %s "
+            "ORDER BY r.confidence DESC NULLS LAST LIMIT %s OFFSET %s",
+            [snapshot_id, limit, offset],
+        )
+        rows = await cur.fetchall()
+
+    return {"document_id": document_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+
+
 @router.get("/segments")
 async def list_segments(
     request: Request,
