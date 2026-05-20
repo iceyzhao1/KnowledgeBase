@@ -2,6 +2,8 @@
 *
 
 # === Allowlisted directories ===
+!scenario_packs/
+!scenario_packs/**
 !agent_serving/
 !agent_serving/**
 !databases/
@@ -26,13 +28,12 @@
 !agent_serving_zdy/**
 !kb-ui/
 !kb-ui/**
-!docs/
-!docs/**
 
 # === Allowlisted root files ===
 !.env.example
 !.gitignore
 !README.md
+!domain_registry.yaml
 
 # === But still exclude these within allowlisted dirs ===
 *.sqlite

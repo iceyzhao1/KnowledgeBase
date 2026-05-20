@@ -42,7 +42,7 @@ def _check_cancelled(runtime_db: "MiningRuntimeDB", run_id: str) -> None:
 
 
 from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
-from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+from knowledge_mining.mining.infra.pg_config import MiningDbConfig, conninfo_from_env
 from knowledge_mining.mining.infra.pg_schema import ensure_schema
 from knowledge_mining.mining.contracts.models import (
     BatchParams,
@@ -59,7 +59,7 @@ from knowledge_mining.mining.stages.parse import create_parser
 from knowledge_mining.mining.stages.segment import DefaultSegmenter
 from knowledge_mining.mining.snapshot import select_or_create_snapshot
 from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, demo_quality_summary, publish_release
-from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack
+from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack, resolve_domain
 from knowledge_mining.mining.pipeline import (
     DocumentContext, PipelineConfig, MiningPipeline,
     StreamingPipeline,
@@ -68,19 +68,43 @@ from knowledge_mining.mining.pipeline import (
 )
 
 
-def _create_dbs(cfg: MiningDbConfig | None = None) -> tuple[AssetCoreDB, MiningRuntimeDB]:
-    """Create and open PG-backed database adapters."""
-    if cfg is None:
-        cfg = MiningDbConfig()
-    ensure_schema(cfg)
-    from psycopg_pool import ConnectionPool
-    pool = ConnectionPool(
-        cfg.conninfo,
-        min_size=cfg.pg_pool_min,
-        max_size=cfg.pg_pool_max,
-        open=True,
-        kwargs={"row_factory": __import__("psycopg").rows.dict_row},
-    )
+def _create_dbs(
+    cfg: MiningDbConfig | None = None,
+    conninfo: str | None = None,
+) -> tuple[AssetCoreDB, MiningRuntimeDB]:
+    """Create and open PG-backed database adapters.
+
+    Args:
+        cfg: MiningDbConfig for the legacy PG_HOST/PG_PORT path.
+        conninfo: Explicit psycopg conninfo string (from per-domain URL).
+                  If provided, cfg is ignored for connection but still used for pool sizing.
+    """
+    if conninfo:
+        # Per-domain connection from registry URL
+        pool_min, pool_max = 2, 10
+        if cfg:
+            pool_min, pool_max = cfg.pg_pool_min, cfg.pg_pool_max
+        from psycopg_pool import ConnectionPool
+        pool = ConnectionPool(
+            conninfo,
+            min_size=pool_min,
+            max_size=pool_max,
+            open=True,
+            kwargs={"row_factory": __import__("psycopg").rows.dict_row},
+        )
+    else:
+        # Legacy path: all from MiningDbConfig
+        if cfg is None:
+            cfg = MiningDbConfig()
+        ensure_schema(cfg)
+        from psycopg_pool import ConnectionPool
+        pool = ConnectionPool(
+            cfg.conninfo,
+            min_size=cfg.pg_pool_min,
+            max_size=cfg.pg_pool_max,
+            open=True,
+            kwargs={"row_factory": __import__("psycopg").rows.dict_row},
+        )
     asset_db = AssetCoreDB(pool)
     runtime_db = MiningRuntimeDB(pool)
     return asset_db, runtime_db
@@ -100,7 +124,9 @@ def run(
     embedding_base_url: str | None = None,
     embedding_dimensions: int | None = None,
     max_workers: int | None = None,
+    domain: str | None = None,
     domain_pack: str | None = None,
+    channel: str | None = None,
 ) -> dict[str, Any]:
     """Execute the mining pipeline.
 
@@ -116,12 +142,25 @@ def run(
         embedding_model: Embedding model name. None = from env.
         embedding_base_url: Direct embedding API base URL (fallback). None = from env.
         embedding_dimensions: Embedding vector dimensions. None = from env.
-        domain_pack: Domain pack ID to load. None = from env.
+        domain: Domain ID to load from registry. None = from env.
+        domain_pack: (Deprecated) Use domain instead.
+        channel: Release channel. None = from registry default_channel.
         max_workers: Max concurrent workers for streaming pipeline. None = from env.
 
     Returns:
         Summary dict with run_id, counts, and status.
     """
+    import warnings as _w
+
+    # Backward compat: domain_pack → domain
+    if domain_pack and not domain:
+        _w.warn(
+            "domain_pack is deprecated; use domain instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        domain = domain_pack
+
     from knowledge_mining.mining.infra.mining_config import MiningConfig
     cfg = MiningConfig()
 
@@ -132,17 +171,31 @@ def run(
     embedding_base_url = embedding_base_url or ""
     embedding_dimensions = embedding_dimensions or cfg.embedding_dimensions
     max_workers = max_workers or cfg.max_workers
-    domain_pack = domain_pack or cfg.domain_pack
+    domain = domain or cfg.domain
 
     input_path = Path(input_path)
     batch_params = batch_params or BatchParams()
     params = batch_params
 
-    # Load domain profile
-    profile = load_domain_pack(domain_pack)
+    # Resolve domain from registry
+    conninfo: str | None = None
+    try:
+        registry_entry = resolve_domain(domain)
+        env_var = registry_entry.get("database_url_env")
+        if env_var:
+            conninfo = conninfo_from_env(env_var)
+        if channel is None:
+            channel = registry_entry.get("default_channel", "prod")
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        logger.warning("Registry resolution failed for domain '%s': %s; using fallback config", domain, e)
+        if channel is None:
+            channel = "prod"
 
-    # Open databases (PostgreSQL)
-    asset_db, runtime_db = _create_dbs(db_config)
+    # Load domain profile
+    profile = load_domain_pack(domain)
+
+    # Open databases (PostgreSQL) — per-domain conninfo if available
+    asset_db, runtime_db = _create_dbs(db_config, conninfo=conninfo)
 
     # Pre-generate run_id so we can fail_run on global exception
     run_id = uuid.uuid4().hex
@@ -178,12 +231,34 @@ def run(
 def publish(
     run_id: str,
     *,
+    domain: str = "cloud_core_network",
     db_config: MiningDbConfig | None = None,
-    channel: str = "prod",
+    channel: str | None = None,
     released_by: str | None = None,
 ) -> dict[str, Any]:
-    """Publish a completed run's build as an active release."""
-    asset_db, runtime_db = _create_dbs(db_config)
+    """Publish a completed run's build as an active release.
+
+    Args:
+        run_id: Mining run ID to publish.
+        domain: Domain ID (used to resolve per-domain DB connection).
+        db_config: PostgreSQL config (fallback if registry URL unavailable).
+        channel: Release channel. None = from registry default_channel.
+        released_by: Who triggered the publish.
+    """
+    # Resolve per-domain connection
+    conninfo: str | None = None
+    try:
+        registry_entry = resolve_domain(domain)
+        env_var = registry_entry.get("database_url_env")
+        if env_var:
+            conninfo = conninfo_from_env(env_var)
+        if channel is None:
+            channel = registry_entry.get("default_channel", "prod")
+    except (FileNotFoundError, KeyError, ValueError):
+        if channel is None:
+            channel = "prod"
+
+    asset_db, runtime_db = _create_dbs(db_config, conninfo=conninfo)
 
     try:
         run_data = runtime_db.get_run(run_id)

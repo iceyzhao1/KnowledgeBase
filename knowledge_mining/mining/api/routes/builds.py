@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from knowledge_mining.mining.infra.domain_pack import resolve_domain
+
 router = APIRouter(tags=["builds"])
 
 
@@ -119,6 +121,14 @@ async def get_active_release(
     channel: str = Query("prod", description="Channel name"),
 ) -> dict:
     """Get current active release for a domain+channel."""
+    # Validate domain exists and is enabled in registry
+    try:
+        resolve_domain(domain)
+    except KeyError:
+        raise HTTPException(400, f"Unknown domain: {domain}")
+    except ValueError:
+        raise HTTPException(400, f"Domain is disabled: {domain}")
+
     pool = request.app.state.pg_pool
 
     async with pool.connection() as conn:
