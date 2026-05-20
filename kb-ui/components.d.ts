@@ -30,6 +30,7 @@ declare module 'vue' {
     ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
     ElTabPane: typeof import('element-plus/es')['ElTabPane']
     ElTabs: typeof import('element-plus/es')['ElTabs']
+    ElUpload: typeof import('element-plus/es')['ElUpload']
     EmptyState: typeof import('./src/components/common/EmptyState.vue')['default']
     EvidenceCard: typeof import('./src/components/search/EvidenceCard.vue')['default']
     ForceGraph: typeof import('./src/components/charts/ForceGraph.vue')['default']

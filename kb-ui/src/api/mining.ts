@@ -52,9 +52,20 @@ export function useMiningApi() {
       return extractItems<MiningRunStage>(data)
     },
 
-    async getRunDocuments(runId: string): Promise<MiningRunDocument[]> {
-      const { data } = await client.get(`/api/runs/${runId}/documents`)
-      return extractItems<MiningRunDocument>(data)
+    async getRunDocuments(runId: string, params?: {
+      status?: string; action?: string; has_error?: boolean; page?: number; page_size?: number
+    }): Promise<{ total: number; page: number; page_size: number; documents: MiningRunDocument[] }> {
+      const { data } = await client.get(`/api/runs/${runId}/documents`, { params })
+      return data
+    },
+
+    async getRunProgress(runId: string): Promise<{
+      run_id: string; total: number; completed: number; failed: number
+      skipped: number; processing: number; progress_percent: number
+      current_stage: string | null; stage_summary: Record<string, { done: number; failed: number }>
+    }> {
+      const { data } = await client.get(`/api/runs/${runId}/progress`)
+      return data
     },
 
     async createRun(config: Record<string, unknown>): Promise<MiningRun> {

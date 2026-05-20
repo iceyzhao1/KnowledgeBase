@@ -9,6 +9,11 @@ export const useMiningStore = defineStore('mining', () => {
   const currentRun = ref<MiningRun | null>(null)
   const stages = ref<MiningRunStage[]>([])
   const documents = ref<MiningRunDocument[]>([])
+  const progress = ref<{
+    total: number; completed: number; failed: number; skipped: number
+    processing: number; progress_percent: number; current_stage: string | null
+    stage_summary: Record<string, { done: number; failed: number }>
+  } | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -31,14 +36,14 @@ export const useMiningStore = defineStore('mining', () => {
     loading.value = true
     error.value = null
     try {
-      const [run, runStages, runDocs] = await Promise.all([
+      const [run, runStages, runDocsResult] = await Promise.all([
         miningApi.getRun(runId),
         miningApi.getRunStages(runId),
         miningApi.getRunDocuments(runId),
       ])
       currentRun.value = run
       stages.value = runStages
-      documents.value = runDocs
+      documents.value = runDocsResult.documents
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch run detail'
     } finally {
@@ -79,14 +84,23 @@ export const useMiningStore = defineStore('mining', () => {
     }
   }
 
+  async function fetchProgress(runId: string) {
+    try {
+      progress.value = await miningApi.getRunProgress(runId)
+    } catch {
+      // silently ignore progress fetch failures
+    }
+  }
+
   function clearCurrentRun() {
     currentRun.value = null
     stages.value = []
     documents.value = []
+    progress.value = null
   }
 
   return {
-    runs, currentRun, stages, documents, loading, error,
-    fetchRuns, fetchRunDetail, createRun, cancelRun, publishRun, clearCurrentRun,
+    runs, currentRun, stages, documents, progress, loading, error,
+    fetchRuns, fetchRunDetail, fetchProgress, createRun, cancelRun, publishRun, clearCurrentRun,
   }
 })

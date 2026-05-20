@@ -64,9 +64,13 @@ export interface MiningRunStage {
 export interface MiningRunDocument {
   document_id: string
   document_name: string
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'skipped'
+  status: 'pending' | 'processing' | 'committed' | 'failed' | 'skipped'
   action: 'new' | 'updated' | 'unchanged'
   error_message?: string
+  error_summary?: string
+  current_stage?: string | null
+  duration_ms?: number | null
+  document_key?: string
   stage?: string
 }
 
