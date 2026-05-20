@@ -11,6 +11,7 @@ import java.util.Map;
  * @param entities  pre-recognized entities; defaults to empty list
  * @param debug     whether to include debug information in the response
  * @param domain    knowledge domain (e.g. "cloud_core_network")
+ * @param channel   release channel (e.g. "prod", "staging"); null means use registry default
  * @param mode      retrieval mode; defaults to "evidence"
  */
 public record SearchRequest(
@@ -19,9 +20,11 @@ public record SearchRequest(
         List<EntityRef> entities,
         boolean debug,
         String domain,
+        String channel,
         String mode
 ) {
     public SearchRequest {
+        if (query == null || query.isBlank()) throw new IllegalArgumentException("query_required");
         if (scope == null) scope = Map.of();
         if (entities == null) entities = List.of();
         if (mode == null) mode = "evidence";

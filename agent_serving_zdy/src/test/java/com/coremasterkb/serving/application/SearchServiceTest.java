@@ -1,10 +1,11 @@
 package com.coremasterkb.serving.application;
 
 import com.coremasterkb.serving.domain.*;
+import com.coremasterkb.serving.domainpack.DomainContext;
 import com.coremasterkb.serving.domainpack.DomainPackReader;
-import com.coremasterkb.serving.domainpack.ServingDomainProfile;
+import com.coremasterkb.serving.domainpack.DomainPoolManager;
+import com.coremasterkb.serving.domainpack.DomainRegistry;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
-import com.coremasterkb.serving.observability.TraceCollector;
 import com.coremasterkb.serving.pipeline.*;
 import com.coremasterkb.serving.rerank.RerankPipeline;
 import com.coremasterkb.serving.rerank.RerankPipeline.RerankResult;
@@ -31,7 +32,10 @@ class SearchServiceTest {
     private RerankPipeline rerankPipeline;
     private ContextAssembler assembler;
     private DomainPackReader domainPackReader;
+    private DomainRegistry domainRegistry;
+    private DomainPoolManager domainPoolManager;
     private EmbeddingClient embeddingClient;
+    private com.coremasterkb.serving.repository.AssetRepository assetRepo;
     private SearchService searchService;
 
     @BeforeEach
@@ -42,11 +46,21 @@ class SearchServiceTest {
         rerankPipeline = mock(RerankPipeline.class);
         assembler = mock(ContextAssembler.class);
         domainPackReader = mock(DomainPackReader.class);
+        domainRegistry = mock(DomainRegistry.class);
+        domainPoolManager = mock(DomainPoolManager.class);
         embeddingClient = mock(EmbeddingClient.class);
+        assetRepo = mock(com.coremasterkb.serving.repository.AssetRepository.class);
+
+        when(domainRegistry.getDefaultChannel(anyString())).thenReturn("prod");
+        when(domainRegistry.findEntry(anyString())).thenReturn(java.util.Optional.empty());
+        when(domainPoolManager.getDataSource(anyString())).thenReturn(mock(javax.sql.DataSource.class));
+        when(assetRepo.resolveActiveScope(anyString(), anyString()))
+                .thenReturn(new ActiveScope("rel1", "b1", List.of("snap1"), Map.of()));
 
         searchService = new SearchService(
                 quEngine, router, orchestrator, rerankPipeline,
-                assembler, domainPackReader, embeddingClient);
+                assembler, domainPackReader, domainRegistry, domainPoolManager,
+                embeddingClient, assetRepo);
     }
 
     @Nested
@@ -76,13 +90,7 @@ class SearchServiceTest {
             when(assembler.assemble(anyString(), any(), any(), any(), any())).thenReturn(expectedPack);
 
             var request = new SearchRequest("SMF配置", Map.of(), List.of(), false,
-                    "cloud_core_network", "evidence");
-
-            // SearchService needs an asset repo for scope resolution
-            var assetRepo = mock(com.coremasterkb.serving.repository.AssetRepository.class);
-            when(assetRepo.resolveActiveScope(anyString()))
-                    .thenReturn(new ActiveScope("rel1", "b1", List.of("snap1"), Map.of()));
-            searchService.withAssetRepository(assetRepo);
+                    "cloud_core_network", null, "evidence");
 
             var result = searchService.search(request);
 
@@ -114,13 +122,8 @@ class SearchServiceTest {
             when(assembler.assemble(anyString(), any(), any(), any(), any()))
                     .thenReturn(new ContextPack(null, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), Map.of()));
 
-            var assetRepo = mock(com.coremasterkb.serving.repository.AssetRepository.class);
-            when(assetRepo.resolveActiveScope(anyString()))
-                    .thenReturn(new ActiveScope("rel1", "b1", List.of("snap1"), Map.of()));
-            searchService.withAssetRepository(assetRepo);
-
             var request = new SearchRequest("test", Map.of(), List.of(), true,
-                    "cloud_core_network", "evidence");
+                    "cloud_core_network", null, "evidence");
             var result = searchService.search(request);
 
             assertThat(result.debug()).containsKey("understanding");
@@ -129,8 +132,8 @@ class SearchServiceTest {
         }
 
         @Test
-        @DisplayName("no asset repo throws IllegalStateException")
-        void noAssetRepoThrows() {
+        @DisplayName("DomainContext is cleared even when pipeline throws")
+        void domainContextClearedOnException() {
             var understanding = new QueryUnderstanding("test", "general",
                     List.of(), List.of(), Map.of(), List.of(),
                     EvidenceNeed.empty(), List.of(), "rule");
@@ -143,13 +146,18 @@ class SearchServiceTest {
             when(domainPackReader.getProfile(anyString())).thenReturn(null);
             when(quEngine.understand(anyString(), any())).thenReturn(understanding);
             when(router.route(any(), any())).thenReturn(routePlan);
+            when(assetRepo.resolveActiveScope(anyString(), anyString()))
+                    .thenThrow(new IllegalArgumentException("no_active_release"));
 
             var request = new SearchRequest("test", Map.of(), List.of(), false,
-                    "cloud_core_network", "evidence");
+                    "cloud_core_network", null, "evidence");
 
             assertThatThrownBy(() -> searchService.search(request))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("AssetRepository not configured");
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            assertThat(DomainContext.get())
+                    .as("DomainContext must be cleared after exception")
+                    .isNull();
         }
     }
 }
