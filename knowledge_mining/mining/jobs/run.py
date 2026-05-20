@@ -640,6 +640,9 @@ def _run_pipeline(
                     metadata_json=seg.metadata_json,
                 )
 
+            tracker.end_stage(evt_seg, run_id, "commit_segments",
+                              output_summary=f"{len(segments)} segments")
+
             # Write relations to DB
             evt_rel = tracker.start_stage(run_id, "build_relations", rd_id)
             for rel in relations:
@@ -659,8 +662,6 @@ def _run_pipeline(
                     )
             tracker.end_stage(evt_rel, run_id, "build_relations",
                               output_summary=f"{len(relations)} relations")
-            tracker.end_stage(evt_seg, run_id, "commit_segments",
-                              output_summary=f"{len(segments)} segments")
 
             # Write retrieval units to DB
             evt_ru = tracker.start_stage(run_id, "build_retrieval_units", rd_id)
