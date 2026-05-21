@@ -24,6 +24,8 @@
 !agent_serving_java/**
 !agent_serving_fzl/
 !agent_serving_fzl/**
+!main_control_service/
+!main_control_service/**
 !agent_serving_zdy/
 !agent_serving_zdy/**
 !kb-ui/
@@ -34,6 +36,9 @@
 !.gitignore
 !README.md
 !domain_registry.yaml
+
+# === Generated config (re-initialized from source) ===
+main_control_service/config/
 
 # === But still exclude these within allowlisted dirs ===
 *.sqlite
