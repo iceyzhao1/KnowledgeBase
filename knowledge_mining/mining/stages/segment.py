@@ -39,6 +39,21 @@ _SCHEMA_BLOCK_TYPES = {
     "html_table", "raw_html", "unknown",
 }
 
+# Merge thresholds — module-level named constants for discoverability
+_MERGE_MAX_TOKENS = 512
+_TABLE_MIN_INDEPENDENT_TOKENS = 300
+
+# Block type priority for merged segments (higher = dominant)
+_BLOCK_TYPE_PRIORITY: dict[str, int] = {
+    "table": 4, "html_table": 4,
+    "list": 3,
+    "code": 2,
+    "blockquote": 1,
+    "paragraph": 1,
+    "raw_html": 1,
+    "unknown": 0,
+}
+
 
 def segment_document(
     doc_root: SectionNode,
@@ -158,9 +173,6 @@ def _merge_small_segments(
     if not segments:
         return segments
 
-    max_tokens = 512
-    table_min_independent = 300
-
     merged: list[RawSegmentData] = [segments[0]]
 
     for seg in segments[1:]:
@@ -171,19 +183,24 @@ def _merge_small_segments(
             merged.append(seg)
             continue
 
+        # Guard against None token_count — treat as 0 (very short, mergeable)
+        prev_tc = prev.token_count if prev.token_count is not None else 0
+        seg_tc = seg.token_count if seg.token_count is not None else 0
+
         # Try merge: short prev-paragraph + current list/table (intro→content pattern)
         intro_merge = (
             prev.block_type == "paragraph"
-            and prev.token_count < min_tokens
+            and prev_tc < min_tokens
             and seg.block_type in ("list", "table", "html_table")
-            and (prev.token_count + seg.token_count) <= max_tokens
-            and not (seg.block_type in ("table", "html_table") and seg.token_count > table_min_independent)
+            and (prev_tc + seg_tc) <= _MERGE_MAX_TOKENS
+            and not (seg.block_type in ("table", "html_table") and seg_tc > _TABLE_MIN_INDEPENDENT_TOKENS)
         )
 
-        # Try merge: short current segment into previous (any type)
+        # Try merge: short current segment into previous (paragraph/list only, never merge tables/code backward)
         backward_merge = (
-            seg.token_count < min_tokens
-            and (prev.token_count + seg.token_count) <= max_tokens
+            seg_tc < min_tokens
+            and seg.block_type not in ("table", "html_table", "code")
+            and (prev_tc + seg_tc) <= _MERGE_MAX_TOKENS
             and prev.block_type not in ("table", "html_table", "code")
         )
 
@@ -217,10 +234,9 @@ def _merge_small_segments(
 
 
 def _pick_block_type(a: str, b: str) -> str:
-    """Pick dominant block type: table > list > paragraph."""
-    priority = {"table": 3, "html_table": 3, "list": 2, "paragraph": 1}
-    pa = priority.get(a, 0)
-    pb = priority.get(b, 0)
+    """Pick dominant block type using _BLOCK_TYPE_PRIORITY."""
+    pa = _BLOCK_TYPE_PRIORITY.get(a, 0)
+    pb = _BLOCK_TYPE_PRIORITY.get(b, 0)
     return a if pa >= pb else b
 
 
