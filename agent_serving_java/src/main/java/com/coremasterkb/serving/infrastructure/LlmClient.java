@@ -7,59 +7,51 @@ import org.springframework.http.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
-import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * Client for the shared LLM service (llm_service).
+ *
+ * <p>Supports:
+ * <ul>
+ *   <li>{@code execute} — template-based LLM calls via POST /api/v1/execute</li>
+ *   <li>{@code embed} — text embedding via POST /api/v1/models/embeddings</li>
+ *   <li>{@code rerank} — model rerank via POST /api/v1/models/rerank</li>
+ *   <li>Template registration via POST /api/v1/templates (at startup)</li>
+ * </ul>
+ *
+ * <p>No health-check probing — availability is determined by baseUrl being configured.
+ * Call failures are surfaced as exceptions and handled by callers (fallback, retry, etc.).
+ */
 public class LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(LlmClient.class);
-    private static final long HEALTH_CACHE_TTL_MS = 30_000;
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
             new ParameterizedTypeReference<>() {};
 
     private final RestTemplate restTemplate;
     private final String baseUrl;
-
-    // Health check cache
-    private final AtomicLong lastHealthCheckMs = new AtomicLong(0);
-    private volatile boolean cachedHealth = false;
+    private volatile String knowledgeDomain;
 
     public LlmClient(RestTemplate restTemplate, String baseUrl) {
         this.restTemplate = restTemplate;
         this.baseUrl = baseUrl != null ? baseUrl.replaceAll("/+$", "") : null;
     }
 
-    // =========================================================================
-    // Availability
-    // =========================================================================
-
-    public boolean isAvailable() {
-        if (baseUrl == null || baseUrl.isBlank()) {
-            return false;
-        }
-        long now = System.currentTimeMillis();
-        long last = lastHealthCheckMs.get();
-        if (now - last < HEALTH_CACHE_TTL_MS) {
-            return cachedHealth;
-        }
-        boolean healthy = checkHealth();
-        cachedHealth = healthy;
-        lastHealthCheckMs.set(now);
-        return healthy;
+    /** Set the knowledge domain for billing and audit in llm_service. */
+    public void setKnowledgeDomain(String domain) {
+        this.knowledgeDomain = domain;
     }
 
-    public boolean checkHealth() {
-        try {
-            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
-                    baseUrl + "/health",
-                    HttpMethod.GET,
-                    new HttpEntity<>(buildHeaders()),
-                    MAP_TYPE
-            );
-            return response.getStatusCode().is2xxSuccessful();
-        } catch (Exception e) {
-            log.debug("LLM health check failed: {}", e.getMessage());
-            return false;
-        }
+    // =========================================================================
+    // Availability — lightweight check (no HTTP call)
+    // =========================================================================
+
+    /**
+     * Returns true if the client has a non-blank baseUrl configured.
+     * No HTTP health-check is performed — call failures are handled by callers.
+     */
+    public boolean isAvailable() {
+        return baseUrl != null && !baseUrl.isBlank();
     }
 
     // =========================================================================
@@ -67,15 +59,14 @@ public class LlmClient {
     // =========================================================================
 
     public Map<String, Object> execute(String pipelineStage, String templateKey, Map<String, Object> input) {
-        if (!isAvailable()) {
-            throw new IllegalStateException("LLM client not configured");
-        }
-
         Map<String, Object> payload = new HashMap<>();
         payload.put("pipeline_stage", pipelineStage);
         payload.put("template_key", templateKey);
         payload.put("input", input);
-        payload.put("caller_domain", "serving");
+        payload.put("caller_service", "serving");
+        if (knowledgeDomain != null && !knowledgeDomain.isBlank()) {
+            payload.put("knowledge_domain", knowledgeDomain);
+        }
 
         ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                 baseUrl + "/api/v1/execute",
@@ -90,14 +81,14 @@ public class LlmClient {
     // =========================================================================
 
     public Map<String, Object> embed(List<String> texts, String model, Integer dimensions) {
-        if (!isAvailable()) {
-            throw new IllegalStateException("LLM client not configured");
-        }
-
         Map<String, Object> payload = new HashMap<>();
         payload.put("input", texts);
         if (model != null) payload.put("model", model);
         if (dimensions != null) payload.put("dimensions", dimensions);
+        payload.put("caller_service", "serving");
+        if (knowledgeDomain != null && !knowledgeDomain.isBlank()) {
+            payload.put("knowledge_domain", knowledgeDomain);
+        }
 
         ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                 baseUrl + "/api/v1/models/embeddings",
@@ -112,15 +103,15 @@ public class LlmClient {
     // =========================================================================
 
     public Map<String, Object> rerank(String query, List<String> documents, String model, Integer topN) {
-        if (!isAvailable()) {
-            throw new IllegalStateException("LLM client not configured");
-        }
-
         Map<String, Object> payload = new HashMap<>();
         payload.put("query", query);
         payload.put("documents", documents);
         if (model != null) payload.put("model", model);
         if (topN != null) payload.put("top_n", topN);
+        payload.put("caller_service", "serving");
+        if (knowledgeDomain != null && !knowledgeDomain.isBlank()) {
+            payload.put("knowledge_domain", knowledgeDomain);
+        }
 
         ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                 baseUrl + "/api/v1/models/rerank",
@@ -135,10 +126,6 @@ public class LlmClient {
     // =========================================================================
 
     public void ensureTemplates() {
-        if (!isAvailable()) {
-            log.info("LLM service not available, skipping template registration");
-            return;
-        }
         for (var tpl : ServingTemplates.ALL) {
             try {
                 Map<String, Object> payload = new HashMap<>(tpl);
@@ -168,6 +155,28 @@ public class LlmClient {
                 log.warn("Failed to register template '{}': {}", tpl.get("template_key"), e.getMessage());
             }
         }
+    }
+
+    // =========================================================================
+    // Response unwrapping
+    // =========================================================================
+
+    /**
+     * Unwrap llm_service response envelope.
+     * llm_service returns: {@code {success: true, data: {...}}}
+     * The actual payload is inside {@code data}.
+     *
+     * @return the unwrapped payload, or the original body if no envelope detected
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> unwrapResponse(Map<String, Object> body) {
+        if (body == null) return Map.of();
+        // If body has "data" key, unwrap it
+        Object dataObj = body.get("data");
+        if (dataObj instanceof Map<?, ?> m) {
+            return (Map<String, Object>) m;
+        }
+        return body;
     }
 
     // =========================================================================

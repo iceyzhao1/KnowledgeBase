@@ -79,7 +79,12 @@ CREATE INDEX IF NOT EXISTS idx_asset_source_batches_domain
 
 -- ---------------------------------------------------------------------------
 -- Step 6: serving_query_logs — new table (did not exist in v1)
+--           Also ALTER TABLE for cases where the table was created without
+--           the domain column (IF NOT EXISTS skips CREATE silently).
 -- ---------------------------------------------------------------------------
+ALTER TABLE serving_query_logs
+    ADD COLUMN IF NOT EXISTS domain TEXT NOT NULL DEFAULT 'default';
+
 CREATE TABLE IF NOT EXISTS serving_query_logs (
     id                  TEXT    NOT NULL,
 

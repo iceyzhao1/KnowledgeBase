@@ -18,6 +18,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /**
  * Main search orchestrator wiring all components together.
@@ -44,6 +47,7 @@ public class SearchService {
     private final AssetRepository assetRepository;
     private final LlmClient llmClient;
     private final String defaultDomain;
+    private final Executor pipelineExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public SearchService(
             QueryUnderstandingEngine quEngine,
@@ -91,9 +95,23 @@ public class SearchService {
         // 1. Load Domain Profile
         ServingDomainProfile profile = domainPackReader.getProfile(request.domain());
 
-        // 2. Query Understanding (LLM-first, rule fallback)
+        // 2. Query Understanding + Embedding in parallel
+        //    Embedding is started optimistically — result is only used if dense route is enabled.
         trace.startStage("query_understanding");
-        QueryUnderstanding understanding = quEngine.understand(request.query(), profile);
+        CompletableFuture<QueryUnderstanding> understandingFuture = CompletableFuture.supplyAsync(
+                () -> quEngine.understand(request.query(), profile), pipelineExecutor);
+        CompletableFuture<float[]> embeddingFuture = embeddingClient.isConfigured()
+                ? CompletableFuture.supplyAsync(() -> {
+            try {
+                return embeddingClient.embed(request.query());
+            } catch (Exception e) {
+                log.warn("Query embedding failed: {}", e.getMessage());
+                return null;
+            }
+        }, pipelineExecutor)
+                : CompletableFuture.completedFuture(null);
+
+        QueryUnderstanding understanding = understandingFuture.join();
         trace.endStage("query_understanding",
                 "intent=" + understanding.intent()
                         + ", entities=" + understanding.entities().size()
@@ -142,18 +160,16 @@ public class SearchService {
             }
             trace.endStage("resolve_scope", "snapshots=" + scope.snapshotIds().size());
 
-            // 5. Generate query embedding (if dense route enabled and client ready)
+            // 5. Collect pre-computed embedding (started in parallel with understanding)
             boolean denseEnabled = routePlan.routes().stream()
                     .anyMatch(r -> "dense_vector".equals(r.name()) && r.enabled());
             if (denseEnabled && embeddingClient.isConfigured()) {
                 trace.startStage("embedding");
-                try {
-                    queryEmbedding = embeddingClient.embed(request.query());
-                } catch (Exception e) {
-                    log.warn("Query embedding failed: {}", e.getMessage());
-                }
+                queryEmbedding = embeddingFuture.join();
                 trace.endStage("embedding",
                         "dim=" + (queryEmbedding != null ? queryEmbedding.length : 0));
+            } else {
+                queryEmbedding = embeddingFuture.join(); // consume future to avoid wasted thread
             }
 
             // 6. Retrieve from all configured routes

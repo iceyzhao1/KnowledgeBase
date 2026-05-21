@@ -115,11 +115,15 @@ public class QueryUnderstandingEngine {
      * Understand a user query: LLM path first, rule fallback on failure.
      */
     public QueryUnderstanding understand(String query, ServingDomainProfile profile) {
-        // LLM path
+        // LLM path — try directly, fallback to rules on any failure
         if (llmClient != null && llmClient.isAvailable()) {
-            QueryUnderstanding result = tryLlmUnderstand(query);
-            if (result != null) {
-                return result;
+            try {
+                QueryUnderstanding result = tryLlmUnderstand(query);
+                if (result != null) {
+                    return result;
+                }
+            } catch (Exception e) {
+                log.warn("LLM query understanding failed, falling back to rules: {}", e.getMessage());
             }
         }
         // Rule fallback
@@ -131,27 +135,23 @@ public class QueryUnderstandingEngine {
     // =========================================================================
 
     private QueryUnderstanding tryLlmUnderstand(String query) {
-        try {
-            Map<String, Object> result = llmClient.execute(
-                    "query_understanding",
-                    "serving-query-understanding",
-                    Map.of("query", query));
+        Map<String, Object> result = llmClient.execute(
+                "query_understanding",
+                "serving-query-understanding",
+                Map.of("query", query));
 
-            // Execute endpoint returns {task_id, status, result: {parsed_output, ...}}
-            Object innerObj = result.getOrDefault("result", result);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> inner = (innerObj instanceof Map) ? (Map<String, Object>) innerObj : Map.of();
-            @SuppressWarnings("unchecked")
-            Map<String, Object> parsed = (Map<String, Object>) inner.getOrDefault("parsed_output", Map.of());
+        // Unwrap llm_service envelope: {success, data: {result: {parsed_output: ...}}}
+        Map<String, Object> data = LlmClient.unwrapResponse(result);
+        Object resultObj = data.getOrDefault("result", data);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> inner = (resultObj instanceof Map) ? (Map<String, Object>) resultObj : Map.of();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed = (Map<String, Object>) inner.getOrDefault("parsed_output", Map.of());
 
-            if (parsed.isEmpty()) {
-                return null;
-            }
-            return parseLlmOutput(query, parsed);
-        } catch (Exception e) {
-            log.warn("LLM query understanding failed, falling back to rules: {}", e.getMessage());
+        if (parsed.isEmpty()) {
             return null;
         }
+        return parseLlmOutput(query, parsed);
     }
 
     @SuppressWarnings("unchecked")

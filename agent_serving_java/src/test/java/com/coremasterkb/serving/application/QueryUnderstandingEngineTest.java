@@ -31,6 +31,8 @@ class QueryUnderstandingEngineTest {
     @BeforeEach
     void setUp() {
         llmClient = mock(LlmClient.class);
+        // isAvailable() now only checks baseUrl — mock it to return false
+        // so the engine uses rule-based fallback (no LLM calls in unit tests)
         when(llmClient.isAvailable()).thenReturn(false);
         engine = new QueryUnderstandingEngine(llmClient);
     }

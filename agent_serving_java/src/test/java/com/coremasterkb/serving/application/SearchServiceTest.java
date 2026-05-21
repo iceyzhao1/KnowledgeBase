@@ -1,11 +1,13 @@
 package com.coremasterkb.serving.application;
 
+import com.coremasterkb.serving.config.ServingProperties;
 import com.coremasterkb.serving.domain.*;
 import com.coremasterkb.serving.domainpack.DomainContext;
 import com.coremasterkb.serving.domainpack.DomainPackReader;
 import com.coremasterkb.serving.domainpack.DomainPoolManager;
 import com.coremasterkb.serving.domainpack.DomainRegistry;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
+import com.coremasterkb.serving.infrastructure.LlmClient;
 import com.coremasterkb.serving.pipeline.*;
 import com.coremasterkb.serving.rerank.RerankPipeline;
 import com.coremasterkb.serving.rerank.RerankPipeline.RerankResult;
@@ -60,7 +62,9 @@ class SearchServiceTest {
         searchService = new SearchService(
                 quEngine, router, orchestrator, rerankPipeline,
                 assembler, domainPackReader, domainRegistry, domainPoolManager,
-                embeddingClient, assetRepo);
+                embeddingClient, assetRepo,
+                mock(LlmClient.class),
+                new ServingProperties(null, null, "cloud_core_network", null, null, null));
     }
 
     @Nested

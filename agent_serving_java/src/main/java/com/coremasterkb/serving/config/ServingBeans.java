@@ -27,8 +27,13 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
+import org.apache.hc.client5.http.config.ConnectionConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.core5.util.Timeout;
 
 import javax.sql.DataSource;
 import java.util.LinkedHashMap;
@@ -99,19 +104,31 @@ public class ServingBeans {
 
     @Bean
     public RestTemplate restTemplate() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(5_000);
-        factory.setReadTimeout(60_000);
+        PoolingHttpClientConnectionManager connPool = new PoolingHttpClientConnectionManager();
+        connPool.setDefaultConnectionConfig(ConnectionConfig.custom()
+                .setConnectTimeout(Timeout.ofSeconds(5))
+                .setSocketTimeout(Timeout.ofSeconds(60))
+                .build());
+        connPool.setMaxTotal(20);
+        connPool.setDefaultMaxPerRoute(10);
+
+        CloseableHttpClient httpClient = HttpClients.custom()
+                .setConnectionManager(connPool)
+                .build();
+
+        HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(httpClient);
         return new RestTemplate(factory);
     }
 
     @Bean
     public LlmClient llmClient(RestTemplate restTemplate, ServingProperties properties) {
         LlmClient client = new LlmClient(restTemplate, properties.llm().baseUrl());
-        try {
-            client.ensureTemplates();
-        } catch (Exception e) {
-            log.warn("Template registration failed (non-fatal): {}", e.getMessage());
+        if (client.isAvailable()) {
+            try {
+                client.ensureTemplates();
+            } catch (Exception e) {
+                log.warn("Template registration failed (non-fatal): {}", e.getMessage());
+            }
         }
         return client;
     }

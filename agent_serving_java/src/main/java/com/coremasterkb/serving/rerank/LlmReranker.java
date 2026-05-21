@@ -33,9 +33,6 @@ public class LlmReranker implements Reranker {
         if (candidates == null || candidates.isEmpty()) {
             return null;
         }
-        if (llmClient == null || !llmClient.isAvailable()) {
-            return null;
-        }
 
         try {
             return doRerank(candidates, understanding);
@@ -63,9 +60,10 @@ public class LlmReranker implements Reranker {
             throw new IllegalStateException("Empty LLM rerank response");
         }
 
-        // Unwrap envelope: result.result.parsed_output.ranking  or  result.parsed_output.ranking
-        Map<String, Object> inner = result;
-        Object resultObj = result.get("result");
+        // Unwrap llm_service envelope: {success, data: {result: {parsed_output: ...}}}
+        Map<String, Object> data = LlmClient.unwrapResponse(result);
+        Map<String, Object> inner = data;
+        Object resultObj = data.get("result");
         if (resultObj instanceof Map<?, ?> m) {
             inner = (Map<String, Object>) m;
         }

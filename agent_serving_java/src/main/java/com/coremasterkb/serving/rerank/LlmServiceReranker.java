@@ -46,9 +46,6 @@ public class LlmServiceReranker implements Reranker {
         if (candidates == null || candidates.isEmpty()) {
             return null;
         }
-        if (llmClient == null || !llmClient.isAvailable()) {
-            return null;
-        }
 
         String query = resolveQuery(understanding);
         if (query == null || query.isBlank()) {
