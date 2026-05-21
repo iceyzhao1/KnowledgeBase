@@ -1,12 +1,14 @@
 package com.coremasterkb.serving.application;
 
 import com.coremasterkb.serving.domain.*;
+import com.coremasterkb.serving.config.ServingProperties;
 import com.coremasterkb.serving.domainpack.DomainContext;
 import com.coremasterkb.serving.domainpack.DomainPackReader;
 import com.coremasterkb.serving.domainpack.DomainPoolManager;
 import com.coremasterkb.serving.domainpack.DomainRegistry;
 import com.coremasterkb.serving.domainpack.ServingDomainProfile;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
+import com.coremasterkb.serving.infrastructure.LlmClient;
 import com.coremasterkb.serving.observability.TraceCollector;
 import com.coremasterkb.serving.pipeline.*;
 import com.coremasterkb.serving.rerank.RerankPipeline;
@@ -40,6 +42,8 @@ public class SearchService {
     private final DomainPoolManager domainPoolManager;
     private final EmbeddingClient embeddingClient;
     private final AssetRepository assetRepository;
+    private final LlmClient llmClient;
+    private final String defaultDomain;
 
     public SearchService(
             QueryUnderstandingEngine quEngine,
@@ -51,7 +55,9 @@ public class SearchService {
             DomainRegistry domainRegistry,
             DomainPoolManager domainPoolManager,
             EmbeddingClient embeddingClient,
-            AssetRepository assetRepository) {
+            AssetRepository assetRepository,
+            LlmClient llmClient,
+            ServingProperties properties) {
         this.quEngine = quEngine;
         this.router = router;
         this.orchestrator = orchestrator;
@@ -62,6 +68,8 @@ public class SearchService {
         this.domainPoolManager = domainPoolManager;
         this.embeddingClient = embeddingClient;
         this.assetRepository = assetRepository;
+        this.llmClient = llmClient;
+        this.defaultDomain = properties.defaultDomain();
         if (!embeddingClient.isConfigured()) {
             log.info("Embedding client not configured (LLM_SERVICE_URL blank) — dense retrieval disabled");
         }
@@ -100,10 +108,13 @@ public class SearchService {
 
         // 4. Resolve domain and channel; validate DB availability
         String effectiveDomain = (request.domain() != null && !request.domain().isBlank())
-                ? request.domain() : "default";
+                ? request.domain() : defaultDomain;
         String channel = (request.channel() != null && !request.channel().isBlank())
                 ? request.channel()
                 : domainRegistry.getDefaultChannel(effectiveDomain);
+
+        // Propagate domain to LLM client for billing/audit
+        llmClient.setKnowledgeDomain(effectiveDomain);
 
         // Validate DB reachable before touching the routing DataSource
         // (throws domain_database_unavailable if the pool cannot connect)
@@ -120,6 +131,7 @@ public class SearchService {
         List<RetrievalCandidate> ranked = List.of();
         ContextPack pack = null;
         float[] queryEmbedding = null;
+        OrchestratorResult orchResult = null;
         try {
             trace.startStage("resolve_scope");
             try {
@@ -146,7 +158,7 @@ public class SearchService {
 
             // 6. Retrieve from all configured routes
             trace.startStage("retrieve");
-            OrchestratorResult orchResult = orchestrator.execute(
+            orchResult = orchestrator.execute(
                     understanding, routePlan, queryEmbedding, scope.snapshotIds());
             List<RetrievalCandidate> rawCandidates = orchResult.candidates();
             trace.endStage("retrieve", "candidates=" + rawCandidates.size());
@@ -189,6 +201,9 @@ public class SearchService {
             debugInfo.put("candidate_count", ranked.size());
             debugInfo.put("fusion_method", routePlan.fusion().method());
             debugInfo.put("query_embedding_dim", queryEmbedding != null ? queryEmbedding.length : 0);
+            if (orchResult != null) {
+                debugInfo.put("route_traces", routeTracesToList(orchResult.routeTraces()));
+            }
 
             // Return new pack with debug info added
             return new ContextPack(
@@ -271,5 +286,19 @@ public class SearchService {
         }
         map.put("stages", stages);
         return map;
+    }
+
+    private static List<Map<String, Object>> routeTracesToList(List<RouteTrace> traces) {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (var t : traces) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("route", t.name());
+            m.put("attempted", t.attempted());
+            m.put("candidate_count", t.candidateCount());
+            m.put("skipped_reason", t.skippedReason());
+            m.put("latency_ms", Math.round(t.latencyMs() * 100.0) / 100.0);
+            list.add(m);
+        }
+        return list;
     }
 }

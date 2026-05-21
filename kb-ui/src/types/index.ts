@@ -147,11 +147,16 @@ export interface SearchContextItem {
   title: string
   blockType: string
   semanticRole: string
-  sourceId: string
-  relationToSeed?: string
+  sourceId: string | null
+  relationToSeed?: string | null
   routeSources?: string[]
-  scoreChain?: Record<string, number>
+  scoreChain?: Record<string, unknown>
   evidenceRole: string
+  citation?: {
+    raw_segment_ids?: string[]
+    section?: string
+    document_snapshot_id?: string
+  }
   metadata?: Record<string, unknown>
 }
 
@@ -172,9 +177,9 @@ export interface SearchSourceRef {
 }
 
 export interface SearchEvidenceGroup {
-  id: string
-  role: string
-  items: string[]
+  documentSnapshotId: string
+  itemIds: string[]
+  relationIds: string[]
 }
 
 export interface SearchIssue {

@@ -15,8 +15,13 @@
     <div class="evidence-card__body" v-show="expanded">
       <p class="evidence-card__text">{{ item.text }}</p>
       <div class="evidence-card__meta" v-if="item.scoreChain">
-        <span class="evidence-card__meta-item" v-for="(val, key) in item.scoreChain" :key="key">
-          {{ key }}: {{ typeof val === 'number' ? val.toFixed(3) : val }}
+        <template v-for="(val, key) in item.scoreChain" :key="key">
+          <span class="evidence-card__meta-item" v-if="typeof val === 'number'">
+            {{ key }}: {{ val.toFixed(3) }}
+          </span>
+        </template>
+        <span class="evidence-card__meta-item" v-if="item.routeSources?.length">
+          routes: {{ item.routeSources.join(' + ') }}
         </span>
       </div>
       <div class="evidence-card__tags">
@@ -37,7 +42,7 @@ const props = defineProps<{
   idx: number
 }>()
 
-const expanded = ref(false)
+const expanded = ref(props.idx < 3)
 
 const roleLabel = computed(() => {
   const map: Record<string, string> = {

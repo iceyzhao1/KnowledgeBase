@@ -59,7 +59,7 @@
     -->
     <select id="selectTopKByVector" resultMap="embeddingRowMap">
         SELECT re.retrieval_unit_id,
-               (1 - (re.embedding_vector &lt;=&gt; #{queryVector}::vector)) AS cosine_score,
+               (1 - (re.embedding_vector_vec &lt;=&gt; #{queryVector}::vector)) AS cosine_score,
                ru.document_snapshot_id,
                ru.text,
                ru.title,
@@ -81,7 +81,7 @@
         <foreach collection="scopeJsonParams" item="scopeParam">
             AND ru.facets_json @&gt; #{scopeParam}::jsonb
         </foreach>
-        ORDER BY re.embedding_vector &lt;=&gt; #{queryVector}::vector
+        ORDER BY re.embedding_vector_vec &lt;=&gt; #{queryVector}::vector
         LIMIT #{topK}
     </select>
 
