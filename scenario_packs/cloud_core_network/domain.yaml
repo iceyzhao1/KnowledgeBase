@@ -64,7 +64,7 @@ mining:
   # LLM templates
   llm_templates:
     - template_key: mining-question-gen
-      template_version: "3"
+      template_version: "4"
       purpose: "从段落内容生成假设性检索问题"
       system_prompt: "你是通信网络知识库的检索优化助手。你判断段落是否值得生成问题，如果是则生成高质量检索问题。"
       user_prompt_template: >
@@ -84,10 +84,24 @@ mining:
         - 问题应覆盖该段落最核心的知识点
         - 避免生成高度相似或近义的问题：如果该段落的核心概念已经可以从标题直接推断（如标题是"SMF与PCF的策略交互"），则生成一个更深入的具体问题（如"PCF下发的PCC规则包含哪些主要参数？"）而非表面的概念问题
 
-        输出 JSON 数组，每个元素包含 question 字段。无合适问题时输出空数组 []。
+        **⚠️ 问题质量要求（必须遵守）**：
+        - 问题应需要分析、推理或综合理解，而非仅从文中提取单个名词或数字
+        - 不要生成答案仅为一个接口名/协议名/网元名的问题（如"SMF通过哪个接口与PCF交互？"→答案只是"N7"）
+        - 不要生成仅复述段落内容的问题（如"SMF有哪些功能？"→答案就是罗列功能）
+        - 优先生成"如何"、"为什么"、"在什么条件下"、"有什么区别"类型的问题
+        - 如果段落主要是接口/协议名称的罗列表格，不要对每个接口都生成问题
 
-        输出示例（仅供参考格式，请根据实际内容生成）：
-        [{"question": "SMF如何配置PFCP会话？"}]
+        **好问题示例**：
+        ✅ "SMF在PDU会话建立过程中如何为UE分配IP地址？" — 需要理解流程细节
+        ✅ "PCF下发的PCC规则包含哪些主要参数？" — 需要分析和归纳
+        ✅ "SMF在离线计费和在线计费中分别如何收集和处理计费数据？" — 需要对比分析
+
+        **差问题示例（不要生成）**：
+        ❌ "SMF与计费系统交互支持哪两种计费方式？" — 答案就在引言句中（在线/离线）
+        ❌ "SMF通过哪个接口与PCF交互？" — 答案仅为"N7"
+        ❌ "SMF在5GC中通过哪些功能管理PDU会话？" — 几乎复述了列表内容
+
+        输出 JSON 数组，每个元素包含 question 字段。无合适问题时输出空数组 []。
       expected_output_type: json_array
       output_schema_json: '{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}'
 
@@ -146,7 +160,7 @@ mining:
       output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"},"content_assessment":{"type":"object","properties":{"is_substantive":{"type":"boolean"},"is_navigation":{"type":"boolean"},"assessment_reason":{"type":"string"}},"required":["is_substantive","is_navigation"],"additionalProperties":false}},"required":["entities","semantic_role","document_type","content_assessment"],"additionalProperties":false}'
 
     - template_key: mining-discourse-relation
-      template_version: "1"
+      template_version: "2"
       purpose: "分析段落间的语篇关系（RST修辞结构理论）"
       system_prompt: "你是通信网络技术文档的语篇关系分析专家。分析给定段落列表中段落之间的修辞关系，要尽可能识别出不同类型的关系。"
       user_prompt_template: >
@@ -172,12 +186,23 @@ mining:
         **关系识别指引**：
         - 仔细分析每对段落的语义关系，不要默认使用 ELABORATES
         - 因果关系：检查是否存在"A导致B"的逻辑（使用 CAUSES 或 RESULTS_IN）
+          例："SMF发起策略变更"→"会话释放" = RESULTS_IN; "PFCP Session Report上报"→"SMF请求配额" = CAUSES
         - 对比关系：检查是否在描述不同的方案或选项（使用 CONTRASTS_WITH）
+          例："在线计费 vs 离线计费" = CONTRASTS_WITH; "IPv4 vs IPv6地址分配" = CONTRASTS_WITH
         - 条件关系：检查是否描述前提条件（使用 CONDITIONS）
+          例："PDU会话建立"→"从UDM获取签约数据" = CONDITIONS
         - 使能关系：检查是否描述使某个功能成为可能的机制（使用 ENABLES）
+          例："N4接口" 使 "SMF控制UPF" 成为可能 = ENABLES
         - 并列关系：检查是否描述同一层级的不同功能（使用 PARALLELS）
+          例："PFCP交互"和"策略交互"是SMF的并列功能描述 = PARALLELS
         - 顺序关系：检查是否是流程中的先后步骤（使用 SEQUENCES）
-        - 目标：生成的关系统计中至少应包含 3 种以上的关系类型
+          例："PDU会话建立"→"PDU会话修改"→"PDU会话释放" = SEQUENCES
+        - 目标：生成的关系统计中至少应包含 4 种以上的关系类型
+
+        **⚠️ 常见误标警告（务必避免）**：
+        - ❌ 两个段落描述不同的交互方向（如"SMF与PCF的策略交互"和"SMF与计费系统交互"）不是 CONTRASTS_WITH，应该是 PARALLELS
+        - ❌ "参考规范列表"不是前文内容的 EVIDENCES。参考规范是文献引用，不是数据/实验证据
+        - ❌ 如果两个段落只是不同的主题（如"计费接口"和"NF接口总表"），不构成对比关系
 
         输出 JSON 数组，每个元素包含：
         - source: 源段落编号（整数）

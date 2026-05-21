@@ -6,7 +6,7 @@ v1.2 key points:
 - structure_json preserves table columns/rows from ContentBlock.structure
 - source_offsets_json includes parser, block_index, line_start, line_end
 - Entity extraction and role classification are NOT done here — deferred to enrich stage
-- Post-processing merges small paragraphs (<10 tokens) into adjacent segments
+- Post-processing merges small segments (<100 tokens) with adjacent intro+list/table pairs (Unstructured CompositeElement)
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def segment_document(
     """
     segments: list[RawSegmentData] = []
     _walk_sections(doc_root, profile.document_key, [], segments, parser_name)
-    segments = _merge_small_segments(segments, min_tokens=10)
+    segments = _merge_small_segments(segments, min_tokens=100)
     return [
         RawSegmentData(
             document_key=s.document_key,
@@ -142,33 +142,61 @@ def _walk_sections(
 
 def _merge_small_segments(
     segments: list[RawSegmentData],
-    min_tokens: int = 10,
+    min_tokens: int = 100,
 ) -> list[RawSegmentData]:
-    """Merge segments with fewer than min_tokens into the previous segment.
+    """Merge small segments into adjacent segments (Unstructured.io CompositeElement pattern).
 
-    Only merges within the same section (same section_path) and same block_type
-    (paragraph only). Non-paragraph blocks (tables, code, etc.) are never merged.
+    Rules:
+    1. Segments < min_tokens are candidates for merging
+    2. A short paragraph can merge with the following list/table in the same section
+       (intro paragraph + content list/table → single composite segment)
+    3. A short segment can also merge into the previous segment in the same section
+    4. Merged result must not exceed 512 tokens
+    5. Block type priority: table > list > paragraph
+    6. Tables > 300 tokens stay independent
     """
     if not segments:
         return segments
+
+    max_tokens = 512
+    table_min_independent = 300
 
     merged: list[RawSegmentData] = [segments[0]]
 
     for seg in segments[1:]:
         prev = merged[-1]
-        # Only merge small paragraph segments into a previous paragraph in the same section
-        same_section = (
-            seg.section_path == prev.section_path
-            and seg.block_type == "paragraph"
-            and prev.block_type == "paragraph"
+        same_section = seg.section_path == prev.section_path
+
+        if not same_section:
+            merged.append(seg)
+            continue
+
+        # Try merge: short prev-paragraph + current list/table (intro→content pattern)
+        intro_merge = (
+            prev.block_type == "paragraph"
+            and prev.token_count < min_tokens
+            and seg.block_type in ("list", "table", "html_table")
+            and (prev.token_count + seg.token_count) <= max_tokens
+            and not (seg.block_type in ("table", "html_table") and seg.token_count > table_min_independent)
         )
-        if same_section and seg.token_count < min_tokens:
-            # Append text to previous segment
+
+        # Try merge: short current segment into previous (any type)
+        backward_merge = (
+            seg.token_count < min_tokens
+            and (prev.token_count + seg.token_count) <= max_tokens
+            and prev.block_type not in ("table", "html_table", "code")
+        )
+
+        if intro_merge or backward_merge:
             new_text = prev.raw_text + "\n\n" + seg.raw_text
+            # Block type priority: table > list > paragraph
+            new_block_type = _pick_block_type(prev.block_type, seg.block_type)
+            # Structure: merge both
+            new_structure = {**(prev.structure_json or {}), **(seg.structure_json or {})}
             merged[-1] = RawSegmentData(
                 document_key=prev.document_key,
                 segment_index=0,  # re-indexed later
-                block_type=prev.block_type,
+                block_type=new_block_type,
                 semantic_role=prev.semantic_role,
                 section_path=prev.section_path,
                 section_title=prev.section_title,
@@ -177,7 +205,7 @@ def _merge_small_segments(
                 content_hash=content_hash(new_text),
                 normalized_hash=normalized_hash(new_text),
                 token_count=token_count(new_text),
-                structure_json=prev.structure_json,
+                structure_json=new_structure,
                 source_offsets_json=prev.source_offsets_json,
                 entity_refs_json=prev.entity_refs_json,
                 metadata_json=prev.metadata_json,
@@ -186,6 +214,14 @@ def _merge_small_segments(
             merged.append(seg)
 
     return merged
+
+
+def _pick_block_type(a: str, b: str) -> str:
+    """Pick dominant block type: table > list > paragraph."""
+    priority = {"table": 3, "html_table": 3, "list": 2, "paragraph": 1}
+    pa = priority.get(a, 0)
+    pb = priority.get(b, 0)
+    return a if pa >= pb else b
 
 
 def _make_segment(

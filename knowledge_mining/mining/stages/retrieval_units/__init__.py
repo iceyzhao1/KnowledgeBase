@@ -557,7 +557,7 @@ def _is_questionworthy(seg: RawSegmentData) -> bool:
     if seg.block_type == "heading":
         return False
     # Universal: too short to contain meaningful information
-    if seg.token_count is not None and seg.token_count < 10:
+    if seg.token_count is not None and seg.token_count < 50:
         return False
     if len(seg.raw_text.strip()) < 15:
         return False
