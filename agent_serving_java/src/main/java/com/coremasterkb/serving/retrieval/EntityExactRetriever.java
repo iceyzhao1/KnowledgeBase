@@ -15,9 +15,9 @@ import java.util.*;
  * Entity-exact retriever: finds retrieval units whose entity_refs_json
  * contains any element with a "name" field matching one of the query entities.
  *
- * <p>Strategies (in priority order):<br>
- * 1. entity_refs_json JSONB containment via EXISTS + jsonb_array_elements<br>
- * 2. Fallback: keywords as entity-like terms when no entities are present</p>
+ * <p>Uses JSONB {@code @>} containment operator (GIN-indexable) for fast
+ * lookups. Falls back to {@code jsonb_array_elements} when containment
+ * params cannot be built.</p>
  *
  * <p>Fixed score = 0.95 for exact matches (high-confidence).</p>
  */
@@ -61,8 +61,14 @@ public class EntityExactRetriever implements Retriever {
             return Collections.emptyList();
         }
 
+        // Build JSONB containment params for @> operator (GIN-indexable)
+        // Format: [{"name":"SMF"}] — each entity name becomes a containment check
+        List<String> containmentParams = entityNames.stream()
+                .map(name -> "[{\"name\":\"" + escapeJson(name) + "\"}]")
+                .toList();
+
         List<FtsResultRow> rows = retrievalUnitMapper.searchByEntityExact(
-                entityNames, snapshotIds, topK);
+                entityNames, snapshotIds, containmentParams, topK);
 
         return rows.stream()
                 .map(row -> toCandidate(row, EXACT_MATCH_SCORE))
@@ -96,5 +102,14 @@ public class EntityExactRetriever implements Retriever {
         if (val != null) {
             map.put(key, val);
         }
+    }
+
+    /** Minimal JSON string escaping for entity names embedded in containment params. */
+    private static String escapeJson(String s) {
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 }

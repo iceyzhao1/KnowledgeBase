@@ -56,9 +56,12 @@ public interface AssetRetrievalUnitMapper {
     /**
      * Entity-exact search: returns units whose entity_refs_json contains
      * any element with a "name" field matching one of the given entityNames.
+     * When entityContainmentParams is non-empty, uses JSONB @> containment
+     * (GIN-indexable) instead of jsonb_array_elements.
      */
     List<FtsResultRow> searchByEntityExact(
             @Param("entityNames") List<String> entityNames,
             @Param("snapshotIds") List<String> snapshotIds,
+            @Param("entityContainmentParams") List<String> entityContainmentParams,
             @Param("limit") int limit);
 }

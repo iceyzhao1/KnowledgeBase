@@ -274,9 +274,16 @@ CREATE INDEX IF NOT EXISTS idx_asset_ru_source_segment
 -- FTS GIN index (core search index)
 -- Uses 'simple' dictionary (language-agnostic, suitable for English command names and numbers)
 -- After installing pg_jieba, replace 'simple' with 'jieba' and rebuild this index for Chinese segmentation
+-- search_text is NOT NULL, so COALESCE is unnecessary and prevents index-only scan usage.
 CREATE INDEX IF NOT EXISTS idx_asset_ru_fts
     ON asset_retrieval_units
-    USING GIN (to_tsvector('simple', COALESCE(search_text, '')));
+    USING GIN (to_tsvector('simple', search_text));
+
+-- Entity refs GIN index for JSONB @> containment queries
+-- Supports: entity_refs_json::jsonb @> '[{"name":"SMF"}]'
+CREATE INDEX IF NOT EXISTS idx_asset_ru_entity_refs_gin
+    ON asset_retrieval_units
+    USING GIN (entity_refs_json::jsonb);
 
 -- ---- asset_retrieval_embeddings ----
 CREATE INDEX IF NOT EXISTS idx_asset_retrieval_embeddings_unit

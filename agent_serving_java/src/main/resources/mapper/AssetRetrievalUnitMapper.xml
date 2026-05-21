@@ -218,9 +218,11 @@
     </select>
 
     <!--
-        Entity-exact search: finds units whose entity_refs_json (JSONB array)
-        contains any element with a "name" matching one of the given entity names.
-        Score is fixed at 0.95 to mark these as high-confidence exact matches.
+        Entity-exact search using JSONB @> containment (GIN-indexable).
+        entityContainmentParams: pre-built JSON strings like '[{"name":"SMF"}]'.
+        Uses OR-connected @> checks, each of which can use the GIN index
+        on entity_refs_json::jsonb. Falls back to entityNames IN-list when
+        containment params are empty.
     -->
     <select id="searchByEntityExact" resultMap="ftsResultMap">
         SELECT ru.id,
@@ -241,7 +243,15 @@
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
             #{sid}
         </foreach>
-          AND ru.entity_refs_json != '[]'
+          AND ru.entity_refs_json::jsonb != '[]'::jsonb
+          <if test="entityContainmentParams != null and entityContainmentParams.size() > 0">
+          AND (
+          <foreach collection="entityContainmentParams" item="jp" separator=" OR ">
+              ru.entity_refs_json::jsonb @> #{jp}::jsonb
+          </foreach>
+          )
+          </if>
+          <if test="entityContainmentParams == null or entityContainmentParams.size() == 0">
           AND EXISTS (
               SELECT 1
               FROM jsonb_array_elements(ru.entity_refs_json::jsonb) AS e
@@ -250,6 +260,7 @@
                   #{name}
               </foreach>
           )
+          </if>
         ORDER BY ru.weight DESC
         LIMIT #{limit}
     </select>

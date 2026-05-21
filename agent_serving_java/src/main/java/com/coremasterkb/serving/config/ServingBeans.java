@@ -38,6 +38,8 @@ import org.apache.hc.core5.util.Timeout;
 import javax.sql.DataSource;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /**
  * Explicit wiring for plain-Java components that are not annotated with
@@ -109,8 +111,8 @@ public class ServingBeans {
                 .setConnectTimeout(Timeout.ofSeconds(5))
                 .setSocketTimeout(Timeout.ofSeconds(60))
                 .build());
-        connPool.setMaxTotal(20);
-        connPool.setDefaultMaxPerRoute(10);
+        connPool.setMaxTotal(30);
+        connPool.setDefaultMaxPerRoute(15);
 
         CloseableHttpClient httpClient = HttpClients.custom()
                 .setConnectionManager(connPool)
@@ -165,15 +167,21 @@ public class ServingBeans {
     }
 
     @Bean
+    public Executor pipelineExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    @Bean
     public RetrievalOrchestrator retrievalOrchestrator(
             FtsRetriever ftsRetriever,
             DenseVectorRetriever denseVectorRetriever,
-            EntityExactRetriever entityExactRetriever) {
+            EntityExactRetriever entityExactRetriever,
+            Executor pipelineExecutor) {
         Map<String, Retriever> retrievers = new LinkedHashMap<>();
         retrievers.put("lexical_bm25", ftsRetriever);
         retrievers.put("dense_vector", denseVectorRetriever);
         retrievers.put("entity_exact", entityExactRetriever);
-        return new RetrievalOrchestrator(retrievers);
+        return new RetrievalOrchestrator(retrievers, pipelineExecutor);
     }
 
     // -------------------------------------------------------------------------
