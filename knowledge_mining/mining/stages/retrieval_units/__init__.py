@@ -21,17 +21,12 @@ from typing import Any
 from knowledge_mining.mining.contracts.models import RawSegmentData, RetrievalUnitData
 from knowledge_mining.mining.contracts.protocols import QuestionGenerator, Contextualizer
 from knowledge_mining.mining.infra.text_utils import tokenize_for_search
-from knowledge_mining.mining.infra.domain_pack import DomainProfile, get_default_profile
+from knowledge_mining.mining.infra.domain_pack import DomainProfile, RetrievalPolicy, get_default_profile
 
 logger = logging.getLogger(__name__)
 
-# Default values — overridden by DomainProfile.retrieval_policy
-_DEFAULT_MAX_QUESTIONS_PER_SEGMENT = 2
-
-# Semantic roles explicitly NOT eligible for question generation
-_NOT_QUESTIONWORTHY_ROLES = frozenset({
-    "navigation", "toc", "metadata",
-})
+# Default retrieval policy — used when no profile is provided
+_DEFAULT_POLICY = RetrievalPolicy()
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +225,9 @@ def build_retrieval_units(
         profile = get_default_profile()
 
     strong_types = profile.strong_entity_types
-    max_questions = profile.retrieval_policy.max_questions_per_segment
-    max_entity_cards = profile.retrieval_policy.max_entity_cards_per_segment
+    policy = profile.retrieval_policy
+    max_questions = policy.max_questions_per_segment
+    max_entity_cards = policy.max_entity_cards_per_segment
 
     qgen = question_generator
     ctxer = contextualizer
@@ -242,7 +238,7 @@ def build_retrieval_units(
     question_map: dict[str, list[str]] = {}
     qgen_task_ids: dict[str, str] = {}
     if qgen is not None:
-        questionworthy = [s for s in segments if _is_questionworthy(s)]
+        questionworthy = [s for s in segments if _is_questionworthy(s, policy)]
         raw_question_map = qgen.generate_batch(questionworthy)
         # v1.5: prune invalid questions from LLM output
         for seg_key, questions in raw_question_map.items():
@@ -547,17 +543,17 @@ def _build_source_refs(seg: RawSegmentData, source_seg_id: str | None = None) ->
     return refs
 
 
-def _is_questionworthy(seg: RawSegmentData) -> bool:
-    """Minimal universal gate — not configurable, not domain-specific.
+def _is_questionworthy(seg: RawSegmentData, policy: RetrievalPolicy = _DEFAULT_POLICY) -> bool:
+    """Minimal universal gate — configurable via RetrievalPolicy.
 
-    Only skips segments that are universally not worth sending to LLM.
+    Only skips segments that are not worth sending to LLM.
     All content quality decisions are made BY the LLM, not by rules.
     """
     # Universal: headings are structural, not content
     if seg.block_type == "heading":
         return False
-    # Universal: too short to contain meaningful information
-    if seg.token_count is not None and seg.token_count < 50:
+    # Configurable: too short to contain meaningful information
+    if seg.token_count is not None and seg.token_count < policy.min_questionworthy_tokens:
         return False
     if len(seg.raw_text.strip()) < 15:
         return False
@@ -565,8 +561,8 @@ def _is_questionworthy(seg: RawSegmentData) -> bool:
     assessment = seg.metadata_json.get("content_assessment", {})
     if assessment and not assessment.get("is_substantive", True):
         return False
-    # Only exclude explicitly non-questionworthy roles; "unknown" passes through
-    if seg.semantic_role in _NOT_QUESTIONWORTHY_ROLES:
+    # Configurable: exclude non-questionworthy roles; "unknown" passes through
+    if seg.semantic_role in policy.not_questionworthy_roles:
         return False
     return True
 

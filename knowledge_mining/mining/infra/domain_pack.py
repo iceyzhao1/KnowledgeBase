@@ -64,7 +64,10 @@ class ExtractorRule:
 
 @dataclass(frozen=True)
 class RetrievalPolicy:
-    """Retrieval unit generation policy."""
+    """Retrieval unit generation policy.
+
+    Also carries discourse/relation thresholds so they are configurable per-domain.
+    """
     raw_text: str = "primary"
     generated_question: str = "auxiliary"
     entity_card: str = "strong_entities_only"
@@ -72,6 +75,15 @@ class RetrievalPolicy:
     max_questions_per_segment: int = 2
     max_entity_cards_per_segment: int = 3
     contextual_retrieval: str = "on"
+
+    # Discourse / relation thresholds
+    min_confidence: float = 0.5
+    max_distance: int = 5
+    discourse_window_size: int = 15
+
+    # Question-worthiness thresholds
+    min_questionworthy_tokens: int = 50
+    not_questionworthy_roles: frozenset[str] = frozenset({"navigation", "toc", "metadata"})
 
 
 @dataclass(frozen=True)
@@ -109,6 +121,9 @@ class DomainProfile:
 
     # LLM templates (list of dicts, replaces hardcoded llm_templates.py)
     llm_templates: tuple[dict[str, Any], ...]
+
+    # Domain-specific semantic roles (replaces hardcoded VALID_SEMANTIC_ROLES)
+    semantic_roles: frozenset[str]
 
     # Retrieval policy
     retrieval_policy: RetrievalPolicy
@@ -186,6 +201,7 @@ def _parse_role_keyword_rules(
 
 
 def _parse_retrieval_policy(raw: dict[str, Any]) -> RetrievalPolicy:
+    nqr_raw = raw.get("not_questionworthy_roles", ["navigation", "toc", "metadata"])
     return RetrievalPolicy(
         raw_text=raw.get("raw_text", "primary"),
         generated_question=raw.get("generated_question", "auxiliary"),
@@ -194,6 +210,11 @@ def _parse_retrieval_policy(raw: dict[str, Any]) -> RetrievalPolicy:
         max_questions_per_segment=raw.get("max_questions_per_segment", 2),
         max_entity_cards_per_segment=raw.get("max_entity_cards_per_segment", 3),
         contextual_retrieval=raw.get("contextual_retrieval", "on"),
+        min_confidence=raw.get("min_confidence", 0.5),
+        max_distance=raw.get("max_distance", 5),
+        discourse_window_size=raw.get("discourse_window_size", 15),
+        min_questionworthy_tokens=raw.get("min_questionworthy_tokens", 50),
+        not_questionworthy_roles=frozenset(nqr_raw),
     )
 
 
@@ -233,6 +254,7 @@ def _parse_domain_yaml(data: dict[str, Any], domain_id: str) -> DomainProfile:
         llm_templates = mining.get("llm_templates", data.get("llm_templates", []))
         retrieval_policy = mining.get("retrieval_policy", data.get("retrieval_policy", {}))
         eval_questions = mining.get("eval_questions", data.get("eval_questions", []))
+        semantic_roles = mining.get("semantic_roles", [])
     else:
         # Legacy flat structure
         entity_types = data.get("entity_types", [])
@@ -245,6 +267,7 @@ def _parse_domain_yaml(data: dict[str, Any], domain_id: str) -> DomainProfile:
         llm_templates = data.get("llm_templates", [])
         retrieval_policy = data.get("retrieval_policy", {})
         eval_questions = data.get("eval_questions", [])
+        semantic_roles = data.get("semantic_roles", [])
 
     return DomainProfile(
         domain_id=domain_id,
@@ -255,6 +278,7 @@ def _parse_domain_yaml(data: dict[str, Any], domain_id: str) -> DomainProfile:
         heading_role_keywords=_parse_role_keyword_rules(heading_role_keywords),
         extractor_rules=_parse_extractor_rules(extractor_rules),
         llm_templates=tuple(llm_templates),
+        semantic_roles=frozenset(semantic_roles),
         retrieval_policy=_parse_retrieval_policy(retrieval_policy),
         eval_questions=_parse_eval_questions(eval_questions),
     )

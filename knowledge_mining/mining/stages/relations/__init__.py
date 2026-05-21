@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from knowledge_mining.mining.contracts.models import RawSegmentData, SegmentRelationData
+
+if TYPE_CHECKING:
+    from knowledge_mining.mining.infra.domain_pack import DomainProfile
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +55,26 @@ class DiscourseRelationBuilder:
         "SEQUENCES": "sequences",
     }
     _RST_WHITELIST = frozenset(_LLM_TO_DB_RELATION.values())
-    _MIN_CONFIDENCE = 0.5
 
     def __init__(
         self,
         base_url: str = "http://localhost:8900",
         bypass_proxy: bool = False,
-        window_size: int = 15,
+        window_size: int | None = None,
         knowledge_domain: str | None = None,
+        profile: "DomainProfile | None" = None,
     ) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
-        self._window_size = window_size
         self._knowledge_domain = knowledge_domain
+        # Read thresholds from profile when available, else use constructor arg or default
+        rp = profile.retrieval_policy if profile else None
+        self._window_size = (
+            window_size if window_size is not None
+            else (rp.discourse_window_size if rp else 15)
+        )
+        self._min_confidence = rp.min_confidence if rp else 0.5
+        self._max_distance = rp.max_distance if rp else 5
 
     def build(
         self,
@@ -92,7 +102,7 @@ class DiscourseRelationBuilder:
         filtered = [
             r for r in all_relations
             if r.relation_type in self._RST_WHITELIST
-            and (r.confidence is None or r.confidence >= self._MIN_CONFIDENCE)
+            and (r.confidence is None or r.confidence >= self._min_confidence)
         ]
         removed = len(all_relations) - len(filtered)
         if removed > 0:

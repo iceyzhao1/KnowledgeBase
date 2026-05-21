@@ -352,7 +352,7 @@ def _init_llm(
         from knowledge_mining.mining.stages.relations import DiscourseRelationBuilder
         result["discourse_relation_builder"] = DiscourseRelationBuilder(
             base_url=llm_base_url, bypass_proxy=bypass_proxy,
-            knowledge_domain=knowledge_domain,
+            knowledge_domain=knowledge_domain, profile=profile,
         )
     except (ImportError, Exception):
         pass

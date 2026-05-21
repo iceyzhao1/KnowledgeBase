@@ -186,6 +186,10 @@ class TestQuestionGenerationFilter:
 
     def test_normal_segments_pass(self):
         from knowledge_mining.mining.stages.retrieval_units import _is_questionworthy
+        from knowledge_mining.mining.infra.domain_pack import RetrievalPolicy
+
+        # Use a low-token policy so token_count=15 passes the gate
+        low_token_policy = RetrievalPolicy(min_questionworthy_tokens=10)
 
         good_seg = RawSegmentData(
             document_key="doc:/test.md",
@@ -195,9 +199,9 @@ class TestQuestionGenerationFilter:
             token_count=15,
             semantic_role="concept",
         )
-        assert _is_questionworthy(good_seg) is True
+        assert _is_questionworthy(good_seg, low_token_policy) is True
 
-        # unknown role should be filtered out by demo question gate
+        # unknown role should pass through (not in not_questionworthy_roles)
         unknown_seg = RawSegmentData(
             document_key="doc:/test.md",
             segment_index=0,
@@ -205,11 +209,28 @@ class TestQuestionGenerationFilter:
             raw_text="This is a normal paragraph with enough content to be considered question-worthy.",
             token_count=15,
         )
-        assert _is_questionworthy(unknown_seg) is False
+        assert _is_questionworthy(unknown_seg, low_token_policy) is True
 
     def test_filter_in_build_retrieval_units(self):
         """Verify heading segments are not sent to question generator."""
         from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
+        from knowledge_mining.mining.infra.domain_pack import DomainProfile, RetrievalPolicy
+
+        # Use a low-token policy so token_count=15 passes the gate
+        policy = RetrievalPolicy(min_questionworthy_tokens=10)
+        profile = DomainProfile(
+            domain_id="test",
+            display_name="Test",
+            entity_types=frozenset(),
+            strong_entity_types=frozenset(),
+            role_keyword_rules=(),
+            heading_role_keywords=(),
+            extractor_rules=(),
+            llm_templates=(),
+            semantic_roles=frozenset(),
+            retrieval_policy=policy,
+            eval_questions=(),
+        )
 
         segments = [
             RawSegmentData(
@@ -246,6 +267,7 @@ class TestQuestionGenerationFilter:
             segments,
             document_key="doc:/test.md",
             question_generator=MockQGen(),
+            profile=profile,
         )
 
         # Only the paragraph should have received questions
@@ -340,6 +362,7 @@ class TestTableRowUnits:
             entity_types=frozenset(), strong_entity_types=frozenset(),
             role_keyword_rules=(), heading_role_keywords=(),
             extractor_rules=(), llm_templates=(),
+            semantic_roles=frozenset(),
             retrieval_policy=policy, eval_questions=(),
         )
 
@@ -686,6 +709,7 @@ class TestContextualizer:
             entity_types=frozenset(), strong_entity_types=frozenset(),
             role_keyword_rules=(), heading_role_keywords=(),
             extractor_rules=(), llm_templates=(),
+            semantic_roles=frozenset(),
             retrieval_policy=policy, eval_questions=(),
         )
 

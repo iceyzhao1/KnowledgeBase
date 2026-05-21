@@ -33,6 +33,18 @@ ontology:
 # ===========================================================================
 
 mining:
+  # Semantic roles used by enrich stage (LLM output validation)
+  semantic_roles:
+    - concept
+    - parameter
+    - example
+    - note
+    - procedure_step
+    - troubleshooting_step
+    - constraint
+    - alarm
+    - checklist
+
   # Semantic role mapping: section title keywords -> core semantic_role
   role_keyword_rules: []
 
@@ -60,6 +72,16 @@ mining:
     max_questions_per_segment: 1
     max_entity_cards_per_segment: 0
     contextual_retrieval: "off"
+    # Discourse / relation thresholds
+    min_confidence: 0.5
+    max_distance: 5
+    discourse_window_size: 15
+    # Question-worthiness thresholds
+    min_questionworthy_tokens: 50
+    not_questionworthy_roles:
+      - navigation
+      - toc
+      - metadata
 
   # LLM templates
   llm_templates:
