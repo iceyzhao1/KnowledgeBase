@@ -5,26 +5,22 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from main_control_service.config import MainControlSettings
-from main_control_service.service import YamlBackedService
+from main_control_service.service import YamlConfigService
 
 
 def create_app(
     *,
-    repo_root: Path | None = None,
     config_dir: Path | None = None,
     settings: MainControlSettings | None = None,
 ) -> FastAPI:
     cfg = settings or MainControlSettings()
-    effective_repo_root = repo_root or cfg.repo_root
     effective_config_dir = config_dir or cfg.config_dir
-    service = YamlBackedService(repo_root=effective_repo_root, config_dir=effective_config_dir)
+    service = YamlConfigService(config_dir=effective_config_dir)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        service.ensure_ready()
         app.state.main_control = service
         yield
 
@@ -45,10 +41,6 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "mode": "yaml_readonly"}
-
-    @app.post("/api/v1/reload")
-    def reload_config() -> dict:
-        return service.reload()
 
     @app.get("/api/v1/domains")
     def list_domains() -> dict:

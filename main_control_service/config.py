@@ -8,7 +8,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class MainControlSettings(BaseSettings):
     config_dir: Path = Field(default=Path(__file__).resolve().parent / "config")
-    repo_root: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent)
     host: str = "0.0.0.0"
     port: int = 8910
 
