@@ -20,7 +20,7 @@
           ref="fileInput"
           type="file"
           multiple
-          accept=".md,.txt,.pdf,.html,.docx"
+          :accept="acceptedExtensionsStr"
           style="display: none"
           @change="handleFileSelect"
         />
@@ -28,7 +28,10 @@
           <div class="upload-empty">
             <div class="upload-empty__icon">+</div>
             <div class="upload-empty__text">拖拽文件到此处或点击上传</div>
-            <div class="upload-empty__hint">支持 .md, .txt, .pdf, .html, .docx，可多选</div>
+            <div class="upload-empty__hint">
+              支持 {{ acceptedExtensionsStr }}，可多选
+              <br>ZIP 压缩包将自动解压
+            </div>
           </div>
           <el-button @click="(fileInput as HTMLInputElement)?.click()">选择文件</el-button>
         </template>
@@ -73,6 +76,13 @@
           </el-form>
         </div>
 
+        <!-- Upload progress -->
+        <div v-if="uploadProgress > 0" class="config-section">
+          <h4 class="config-section__title">上传进度</h4>
+          <el-progress :percentage="uploadProgress" :status="uploadProgress >= 100 ? 'success' : ''" />
+          <div v-if="extractInfo" class="extract-info">{{ extractInfo }}</div>
+        </div>
+
         <div class="config-actions">
           <el-button @click="$router.push('/mining')">取消</el-button>
           <el-button type="primary" @click="handleCreate" :loading="creating">
@@ -85,13 +95,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
+import type { UploadConfig } from '@/types'
 
 const router = useRouter()
 const domainStore = useDomainStore()
@@ -105,26 +116,82 @@ const phase1Only = ref(false)
 const creating = ref(false)
 const isDragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const uploadProgress = ref(0)
+const extractInfo = ref('')
+
+const uploadConfig = ref<UploadConfig | null>(null)
+
+const acceptedExtensions = computed(() => {
+  if (uploadConfig.value) return uploadConfig.value.accepted_extensions
+  return ['.md', '.txt', '.pdf', '.html', '.htm', '.doc', '.docx', '.zip']
+})
+
+const acceptedExtensionsStr = computed(() => acceptedExtensions.value.join(','))
+
+const archiveExtensions = computed(() => {
+  if (uploadConfig.value) return new Set(uploadConfig.value.archive_extensions)
+  return new Set(['.zip'])
+})
+
+onMounted(async () => {
+  try {
+    uploadConfig.value = await miningApi.getUploadConfig()
+  } catch {
+    // Config fetch failed — use defaults
+  }
+})
+
+function getFileExt(name: string): string {
+  const dotIdx = name.lastIndexOf('.')
+  return dotIdx >= 0 ? name.slice(dotIdx).toLowerCase() : ''
+}
+
+function isArchive(name: string): boolean {
+  return archiveExtensions.value.has(getFileExt(name))
+}
+
+function sizeLimitFor(name: string): number {
+  if (!uploadConfig.value) return 100 * 1024 * 1024
+  return isArchive(name) ? uploadConfig.value.max_archive_size : uploadConfig.value.max_file_size
+}
+
+function sizeLimitMbFor(name: string): number {
+  if (!uploadConfig.value) return 100
+  return isArchive(name) ? uploadConfig.value.max_archive_size_mb : uploadConfig.value.max_file_size_mb
+}
+
+function validateFiles(newFiles: File[]): File[] {
+  const valid: File[] = []
+  for (const f of newFiles) {
+    const ext = getFileExt(f.name)
+    if (!acceptedExtensions.value.includes(ext)) {
+      ElMessage.warning(`不支持的文件格式: ${f.name}`)
+      continue
+    }
+    const limit = sizeLimitFor(f.name)
+    if (f.size > limit) {
+      ElMessage.warning(`${f.name} 超过 ${sizeLimitMbFor(f.name)}MB 限制`)
+      continue
+    }
+    valid.push(f)
+  }
+  return valid
+}
 
 function handleDrop(e: DragEvent) {
   isDragOver.value = false
   const dropped = e.dataTransfer?.files
   if (!dropped) return
-  const allowed = ['.md', '.txt', '.pdf', '.html', '.docx']
-  const newFiles = Array.from(dropped).filter(f =>
-    allowed.some(ext => f.name.toLowerCase().endsWith(ext))
-  )
-  if (newFiles.length === 0) {
-    ElMessage.warning('不支持的文件格式')
-    return
-  }
-  files.value = [...files.value, ...newFiles]
+  const valid = validateFiles(Array.from(dropped))
+  if (valid.length === 0) return
+  files.value = [...files.value, ...valid]
 }
 
 function handleFileSelect(e: Event) {
   const target = e.target as HTMLInputElement
   if (!target.files) return
-  files.value = [...files.value, ...Array.from(target.files)]
+  const valid = validateFiles(Array.from(target.files))
+  files.value = [...files.value, ...valid]
   target.value = ''
 }
 
@@ -140,12 +207,30 @@ function formatFileSize(bytes: number) {
 
 async function handleCreate() {
   creating.value = true
+  uploadProgress.value = 0
+  extractInfo.value = ''
   try {
     let path = inputPath.value
 
     if (files.value.length > 0) {
-      const result = await miningApi.uploadFiles(domainStore.currentDomain, files.value)
+      const result = await miningApi.uploadFiles(
+        domainStore.currentDomain,
+        files.value,
+        (e) => { uploadProgress.value = e.progress },
+      )
       path = result.storage_path
+
+      // Show extraction info
+      if (result.extracted_archives?.length) {
+        const parts = result.extracted_archives
+          .filter(a => a.error === null)
+          .map(a => `${a.archive} → ${a.file_count} 个文件`)
+        if (parts.length) extractInfo.value = `已解压: ${parts.join(', ')}`
+        const errors = result.extracted_archives.filter(a => a.error !== null)
+        for (const e of errors) {
+          ElMessage.warning(`解压失败 ${e.archive}: ${e.error}`)
+        }
+      }
     }
 
     if (!path) {
@@ -245,6 +330,8 @@ async function handleCreate() {
 .upload-empty__hint {
   font-size: 12px;
   color: var(--kb-text-tertiary);
+  text-align: center;
+  line-height: 1.6;
 }
 
 .upload-file-list {
@@ -283,6 +370,12 @@ async function handleCreate() {
 .upload-actions {
   display: flex;
   gap: 8px;
+}
+
+.extract-info {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--kb-text-secondary);
 }
 
 /* Config */

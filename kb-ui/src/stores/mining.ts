@@ -59,9 +59,8 @@ export const useMiningStore = defineStore('mining', () => {
 
   async function createRun(config: Record<string, unknown>) {
     try {
-      const run = await miningApi.createRun(config)
-      runs.value = [run, ...runs.value]
-      return run
+      await miningApi.createRun(config)
+      await fetchRuns()
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : 'Failed to create run'
       throw e

@@ -48,15 +48,16 @@ const stages: PipelineStage[] = [
   { key: 'parse', label: '解析', backendKeys: ['parse'] },
   { key: 'segment', label: '分段', backendKeys: ['segment'] },
   { key: 'enrich', label: '增强', backendKeys: ['enrich'] },
-  { key: 'discourse', label: '语篇分析', backendKeys: ['discourse', 'build_relations'] },
-  { key: 'retrieval_units', label: '检索单元', backendKeys: ['retrieval_units', 'build_retrieval_units'] },
-  { key: 'commit', label: '数据提交', backendKeys: ['select_snapshot', 'commit_segments'] },
+  { key: 'discourse', label: '语篇分析', backendKeys: ['discourse'] },
+  { key: 'retrieval_units', label: '检索单元', backendKeys: ['retrieval_units'] },
+  { key: 'embedding', label: '向量化', backendKeys: ['embedding'] },
+  { key: 'db_write', label: '数据写入', backendKeys: ['db_write'] },
   { key: 'build', label: '构建&发布', backendKeys: ['assemble_build', 'validate_build', 'publish_release'] },
 ]
 
 const stageIcons: Record<string, string> = {
   parse: '🔍', segment: '✂️', enrich: '🧠', discourse: '💬',
-  retrieval_units: '🔎', commit: '💾', build: '📦',
+  retrieval_units: '🔎', embedding: '🔢', db_write: '💾', build: '📦',
 }
 
 function findStageEvents(stage: PipelineStage): MiningRunStage[] {

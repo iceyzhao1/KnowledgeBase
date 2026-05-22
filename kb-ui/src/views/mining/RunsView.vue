@@ -79,14 +79,16 @@
         </el-table-column>
         <el-table-column label="创建时间" min-width="160">
           <template #default="{ row }">
-            {{ formatTime(row.created_at) }}
+            {{ formatTime(row.started_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
+            <router-link v-if="['running','completed','failed'].includes(row.status)" :to="`/mining/${row.id}`">
+              <el-button type="primary" size="small" text>详情</el-button>
+            </router-link>
             <el-button v-if="row.status === 'running'" type="warning" size="small" text @click="miningStore.cancelRun(row.id)">取消</el-button>
-            <el-button v-if="row.status === 'completed' && !row.build_id" type="success" size="small" text @click="miningStore.publishRun(row.id)">发布</el-button>
-            <el-button v-if="row.status === 'failed'" type="primary" size="small" text>重试</el-button>
+            <el-button v-if="row.status === 'completed' && !row.build_id && row.committed_count > 0" type="success" size="small" text @click="miningStore.publishRun(row.id)">发布</el-button>
           </template>
         </el-table-column>
       </el-table>

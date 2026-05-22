@@ -35,8 +35,8 @@
             <span class="metric__label">耗时</span>
           </div>
           <div class="metric">
-            <span class="metric__value">{{ formatTime(miningStore.currentRun.created_at) }}</span>
-            <span class="metric__label">创建时间</span>
+            <span class="metric__value">{{ formatTime(miningStore.currentRun.started_at) }}</span>
+            <span class="metric__label">开始时间</span>
           </div>
         </div>
       </div>
@@ -178,7 +178,8 @@ function actionLabel(action: string) {
 function stageLabel(stage: string) {
   const map: Record<string, string> = {
     parse: '解析', segment: '分段', enrich: '增强', discourse: '语篇分析',
-    retrieval_units: '检索单元构建', commit_segments: '写入分段',
+    retrieval_units: '检索单元构建', embedding: '向量化',
+    db_write: '数据写入', commit_segments: '写入分段',
     build_relations: '写入关系', build_retrieval_units: '写入检索单元',
     select_snapshot: '快照选择', assemble_build: '构建组装', validate_build: '构建校验',
     publish_release: '发布',

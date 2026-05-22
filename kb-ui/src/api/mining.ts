@@ -2,6 +2,7 @@ import axios from 'axios'
 import type {
   MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
   KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation,
+  UploadConfig, UploadResult,
 } from '@/types'
 import type { PaginatedResponse } from '@/types'
 import { useDomainStore } from '@/stores/domain'
@@ -130,19 +131,28 @@ export function useMiningApi() {
     },
 
     // Upload
-    async uploadFiles(domain: string, files: File[]): Promise<{
-      upload_batch_id: string
-      domain: string
-      file_count: number
-      files: string[]
-      storage_path: string
-    }> {
+    async getUploadConfig(): Promise<UploadConfig> {
+      const { data } = await client.get('/api/uploads/config')
+      return data
+    },
+
+    async uploadFiles(
+      domain: string,
+      files: File[],
+      onUploadProgress?: (progressEvent: { loaded: number; total: number; progress: number }) => void,
+    ): Promise<UploadResult> {
       const form = new FormData()
       form.append('domain', domain)
       for (const f of files) {
         form.append('files', f)
       }
-      const { data } = await client.post('/api/uploads', form)
+      const { data } = await client.post('/api/uploads', form, {
+        onUploadProgress(e) {
+          if (onUploadProgress && e.total) {
+            onUploadProgress({ loaded: e.loaded, total: e.total, progress: Math.round((e.loaded / e.total) * 100) })
+          }
+        },
+      })
       return data
     },
 

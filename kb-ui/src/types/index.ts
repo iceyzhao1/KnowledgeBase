@@ -7,6 +7,129 @@ export interface DomainConfig {
 
 export type DomainMap = Record<string, DomainConfig>
 
+export interface ControlPlaneCapability {
+  domain_id: string
+  service_name: 'mining' | 'serving' | 'llm' | 'ui'
+  enabled: boolean
+  rollout_state: string
+  notes?: string | null
+}
+
+export interface ControlPlaneServiceInstance {
+  instance_id: string
+  service_name: 'mining' | 'serving' | 'llm' | 'ui'
+  display_name: string
+  base_url: string
+  healthcheck_url?: string | null
+  environment: string
+  enabled: boolean
+  metadata_json?: Record<string, unknown>
+}
+
+export interface ControlPlaneServiceBinding {
+  domain_id: string
+  service_name: 'mining' | 'serving' | 'llm' | 'ui'
+  instance_id: string
+  binding_mode: 'shared' | 'exclusive'
+  priority: number
+  notes?: string | null
+}
+
+export interface ControlPlaneDatabaseBinding {
+  binding_id: string
+  domain_id: string
+  usage_type: 'asset_core' | 'mining_runtime' | 'llm_runtime' | 'shared'
+  secret_ref: string
+  driver: string
+  database_name?: string | null
+  schema_name?: string | null
+  readonly: boolean
+  notes?: string | null
+}
+
+export interface ControlPlaneRuntimeOverride {
+  override_id: string
+  domain_id: string
+  service_name: 'mining' | 'serving' | 'llm' | 'ui'
+  config_scope: string
+  config_json: Record<string, unknown>
+  version_tag?: string | null
+}
+
+export interface ControlPlaneDomainSummary {
+  domain_id: string
+  display_name: string
+  enabled: boolean
+  default_channel: string
+  scenario_pack_ref: string
+  description?: string | null
+  owner_team?: string | null
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  capabilities: ControlPlaneCapability[]
+}
+
+export interface ControlPlaneDomainDetail extends ControlPlaneDomainSummary {
+  service_bindings: ControlPlaneServiceBinding[]
+  database_bindings: ControlPlaneDatabaseBinding[]
+  overrides: ControlPlaneRuntimeOverride[]
+}
+
+export interface ControlPlaneObservationPayload {
+  domain: string
+  runtime_mode: string
+  knowledge_mining: Record<string, unknown>
+  agent_serving_java: Record<string, unknown>
+  llm_service: Record<string, unknown>
+  kb_ui: Record<string, unknown>
+  scenario_pack_exists: boolean
+}
+
+export interface ControlPlaneDiffItem {
+  field: string
+  control_plane_value: unknown
+  observed_value: unknown
+  status: 'match' | 'mismatch'
+}
+
+export interface ControlPlaneRuntimePayload {
+  domain: string
+  display_name: string
+  enabled: boolean
+  default_channel: string
+  scenario_pack: { ref: string; version: string }
+  capabilities: Record<string, boolean>
+  service_bindings: Record<string, {
+    instance_id: string
+    binding_mode: string
+    priority: number
+    base_url?: string | null
+    healthcheck_url?: string | null
+  }>
+  database_bindings: Record<string, {
+    binding_id: string
+    secret_ref: string
+    driver: string
+    database_name?: string | null
+    schema_name?: string | null
+    readonly: boolean
+  }>
+  overrides: Record<string, Record<string, Record<string, unknown>>>
+  control_plane_mode: string
+}
+
+export interface ControlPlaneAuditLog {
+  audit_id: string
+  actor: string
+  action: string
+  resource_type: string
+  resource_id: string
+  before_json?: unknown
+  after_json?: unknown
+  created_at: string
+}
+
 export interface HealthStatus {
   status: string
   message?: string
@@ -36,7 +159,6 @@ export interface MiningRun {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   input_path?: string
   domain?: string
-  created_at: string
   started_at?: string
   finished_at?: string
   total_documents: number
@@ -263,6 +385,32 @@ export interface LlmTaskDetail extends LlmTask {
   latency_ms?: number
   raw_response?: Record<string, unknown>
   parsed_output?: Record<string, unknown>
+}
+
+// ─── Upload Config ───
+
+export interface UploadConfig {
+  max_file_size: number
+  max_archive_size: number
+  max_files_per_request: number
+  max_file_size_mb: number
+  max_archive_size_mb: number
+  accepted_extensions: string[]
+  archive_extensions: string[]
+}
+
+export interface UploadResult {
+  upload_batch_id: string
+  domain: string
+  file_count: number
+  files: string[]
+  storage_path: string
+  extracted_archives: Array<{
+    archive: string
+    error: string | null
+    file_count: number
+    files: string[]
+  }>
 }
 
 // ─── Paginated Response ───

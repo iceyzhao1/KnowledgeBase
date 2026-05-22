@@ -6,21 +6,21 @@ const STORAGE_KEY = 'kb-ui-domains'
 
 const DEFAULT_DOMAINS: DomainMap = {
   cloud_core_network: {
-    miningApi: 'http://localhost:8901',
-    servingApi: 'http://localhost:8081',
-    llmApi: 'http://localhost:8900',
+    miningApi: '/api/mining',
+    servingApi: '/api/serving',
+    llmApi: '/api/llm',
     active: true,
   },
   ip_network: {
-    miningApi: 'http://localhost:8902',
-    servingApi: 'http://localhost:8082',
-    llmApi: 'http://localhost:8900',
+    miningApi: '/api/mining',
+    servingApi: '/api/serving',
+    llmApi: '/api/llm',
     active: true,
   },
   generic: {
-    miningApi: 'http://localhost:8903',
-    servingApi: 'http://localhost:8083',
-    llmApi: 'http://localhost:8900',
+    miningApi: '/api/mining',
+    servingApi: '/api/serving',
+    llmApi: '/api/llm',
     active: false,
   },
 }

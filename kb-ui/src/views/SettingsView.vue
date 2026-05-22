@@ -1,126 +1,182 @@
 <template>
   <div class="settings-view">
-    <!-- Header -->
     <div class="settings-view__header">
-      <h2 class="settings-view__title">系统设置</h2>
+      <div class="settings-view__title-wrap">
+        <h2 class="settings-view__title">配置管理中台</h2>
+        <span class="settings-view__scope">当前知识域：{{ domainStore.currentDomain }}</span>
+      </div>
+      <div class="settings-view__actions">
+        <el-button type="primary" :loading="controlPlane.bootstrapping" @click="handleBootstrap">
+          导入现状
+        </el-button>
+        <el-button :loading="controlPlane.loading" @click="handleRefresh">
+          <el-icon><Refresh /></el-icon>
+        </el-button>
+      </div>
     </div>
 
-    <!-- Service Health -->
-    <div class="settings-view__section">
-      <h3 class="section-heading">服务状态</h3>
-      <div class="settings-view__health-grid">
-        <div class="health-tile" v-for="svc in serviceList" :key="svc.name">
-          <div class="health-tile__top" :class="`health-tile__top--${svc.status}`" />
-          <div class="health-tile__body">
-            <span class="health-tile__name">{{ svc.name }}</span>
-            <span class="health-tile__url text-mono">{{ svc.url }}</span>
-          </div>
-          <div class="health-tile__status">
-            <span class="health-dot" :class="`health-dot--${svc.status}`" />
-            <span class="health-label">{{ healthLabel(svc.status) }}</span>
+    <div v-if="controlPlane.error" class="settings-view__alert settings-view__alert--danger">
+      {{ controlPlane.error }}
+    </div>
+
+    <div class="settings-view__layout">
+      <DomainSidebar
+        :domains="controlPlane.domains"
+        :selected-domain-id="controlPlane.selectedDomainId"
+        @select="controlPlane.loadDomain"
+      />
+
+      <div class="settings-view__main">
+        <div v-if="!controlPlane.selectedDomain" class="settings-card">
+          <div class="settings-empty">
+            先导入现状，再选择一个 Domain 开始管理。
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- Domain Config -->
-    <div class="settings-view__section">
-      <h3 class="section-heading">Domain 配置</h3>
-      <div class="settings-view__table-wrap">
-        <el-table :data="domainRows" class="kb-table" :header-cell-style="{ background: 'transparent' }">
-          <el-table-column prop="name" label="Domain" width="180">
-            <template #default="{ row }">
-              <span class="domain-name" :class="{ 'domain-name--active': row.name === domainStore.currentDomain }">
-                {{ row.name }}
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="miningApi" label="挖掘服务" min-width="200">
-            <template #default="{ row }">
-              <span class="text-mono">{{ row.miningApi }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="servingApi" label="检索服务" min-width="200">
-            <template #default="{ row }">
-              <span class="text-mono">{{ row.servingApi }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="llmApi" label="LLM服务" min-width="200">
-            <template #default="{ row }">
-              <span class="text-mono">{{ row.llmApi }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="active" label="启用" width="80" align="center">
-            <template #default="{ row }">
-              <el-switch v-model="row.active" @change="handleToggle(row)" />
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-    </div>
+        <template v-else>
+          <DomainOverview
+            :domain="controlPlane.selectedDomain"
+            :bindings="controlPlane.selectedDomain.service_bindings"
+            :diff-items="controlPlane.diffItems"
+          />
 
-    <!-- Edit Current Domain -->
-    <div class="settings-view__section">
-      <h3 class="section-heading">编辑当前 Domain</h3>
-      <p class="settings-view__hint">当前: <strong>{{ domainStore.currentDomain }}</strong></p>
-      <el-form label-width="120px" class="settings-view__form">
-        <el-form-item label="挖掘服务">
-          <el-input v-model="editConfig.miningApi" />
-        </el-form-item>
-        <el-form-item label="检索服务">
-          <el-input v-model="editConfig.servingApi" />
-        </el-form-item>
-        <el-form-item label="LLM服务">
-          <el-input v-model="editConfig.llmApi" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="handleSave">保存配置</el-button>
-        </el-form-item>
-      </el-form>
+          <el-tabs v-model="activeTab" class="settings-view__tabs">
+            <el-tab-pane name="domain">
+              <template #label>Domain</template>
+              <DomainConfigTab
+                :domain="controlPlane.selectedDomain"
+                @save-domain="handleSaveDomain"
+                @save-capabilities="handleSaveCapabilities"
+              />
+            </el-tab-pane>
+
+            <el-tab-pane name="bindings">
+              <template #label>Bindings</template>
+              <BindingsTab
+                :domain="controlPlane.selectedDomain"
+                :service-instances="controlPlane.serviceInstances"
+                @save-service-bindings="handleSaveBindings"
+                @save-database-bindings="handleSaveDatabaseBindings"
+              />
+            </el-tab-pane>
+
+            <el-tab-pane name="overrides">
+              <template #label>Overrides</template>
+              <OverridesTab
+                :domain="controlPlane.selectedDomain"
+                @save-overrides="handleSaveOverrides"
+              />
+            </el-tab-pane>
+
+            <el-tab-pane name="runtime">
+              <template #label>运行态</template>
+              <RuntimeTab
+                ref="runtimeTabRef"
+                :observations="controlPlane.observations"
+                :diff-items="controlPlane.diffItems"
+                :current-config="domainStore.currentConfig"
+                @check-health="checkHealth"
+              />
+            </el-tab-pane>
+
+            <el-tab-pane name="legacy">
+              <template #label>本地兼容</template>
+              <LegacyTab />
+            </el-tab-pane>
+          </el-tabs>
+        </template>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
+import { useControlPlaneStore } from '@/stores/controlPlane'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningApi } from '@/api/mining'
 import { useServingApi } from '@/api/serving'
 import { useLlmApi } from '@/api/llm'
-import type { DomainConfig } from '@/types'
+import type {
+  ControlPlaneCapability,
+  ControlPlaneDatabaseBinding,
+  ControlPlaneDomainDetail,
+  ControlPlaneRuntimeOverride,
+  ControlPlaneServiceBinding,
+} from '@/types'
 
+import DomainSidebar from '@/components/settings/DomainSidebar.vue'
+import DomainOverview from '@/components/settings/DomainOverview.vue'
+import DomainConfigTab from '@/components/settings/DomainConfigTab.vue'
+import BindingsTab from '@/components/settings/BindingsTab.vue'
+import OverridesTab from '@/components/settings/OverridesTab.vue'
+import RuntimeTab from '@/components/settings/RuntimeTab.vue'
+import LegacyTab from '@/components/settings/LegacyTab.vue'
+
+const activeTab = ref('domain')
+const controlPlane = useControlPlaneStore()
 const domainStore = useDomainStore()
+const runtimeTabRef = ref<InstanceType<typeof RuntimeTab> | null>(null)
 
-const domainRows = computed(() =>
-  Object.entries(domainStore.domains).map(([name, cfg]) => ({ name, ...cfg }))
-)
+async function handleBootstrap() {
+  try {
+    await controlPlane.bootstrapImport()
+    ElMessage.success('已导入当前现状')
+  } catch {
+    ElMessage.error('导入失败')
+  }
+}
 
-const editConfig = ref<DomainConfig>({ ...domainStore.currentConfig })
+async function handleRefresh() {
+  await controlPlane.loadDomains()
+  await checkHealth()
+}
 
-watch(() => domainStore.currentDomain, () => {
-  editConfig.value = { ...domainStore.currentConfig }
-})
+async function handleSaveDomain(payload: Partial<ControlPlaneDomainDetail>) {
+  try {
+    await controlPlane.saveDomainPatch(payload)
+    ElMessage.success('已保存')
+  } catch {
+    ElMessage.error('保存失败')
+  }
+}
 
-// Service health
-type ServiceStatus = 'up' | 'down' | 'checking'
+async function handleSaveCapabilities(capabilities: ControlPlaneCapability[]) {
+  try {
+    await controlPlane.saveCapabilities(capabilities)
+    ElMessage.success('已保存')
+  } catch {
+    ElMessage.error('保存失败')
+  }
+}
 
-const services = ref([
-  { name: '挖掘服务', key: 'miningApi', status: 'checking' as ServiceStatus },
-  { name: '检索服务', key: 'servingApi', status: 'checking' as ServiceStatus },
-  { name: 'LLM服务', key: 'llmApi', status: 'checking' as ServiceStatus },
-])
+async function handleSaveBindings(bindings: ControlPlaneServiceBinding[]) {
+  try {
+    await controlPlane.saveServiceBindings(bindings)
+    ElMessage.success('已保存')
+  } catch {
+    ElMessage.error('保存失败')
+  }
+}
 
-const serviceList = computed(() =>
-  services.value.map(s => ({
-    ...s,
-    url: domainStore.currentConfig[s.key as keyof DomainConfig] as string,
-  }))
-)
+async function handleSaveDatabaseBindings(bindings: ControlPlaneDatabaseBinding[]) {
+  try {
+    await controlPlane.saveDatabaseBindings(bindings)
+    ElMessage.success('已保存')
+  } catch {
+    ElMessage.error('保存失败')
+  }
+}
 
-function healthLabel(s: ServiceStatus) {
-  if (s === 'up') return '正常'
-  if (s === 'down') return '不可用'
-  return '检测中...'
+async function handleSaveOverrides(overrides: ControlPlaneRuntimeOverride[]) {
+  try {
+    await controlPlane.saveOverrides(overrides)
+    ElMessage.success('已保存')
+  } catch {
+    ElMessage.error('Overrides JSON 非法或保存失败')
+  }
 }
 
 async function checkHealth() {
@@ -128,33 +184,19 @@ async function checkHealth() {
   const servingApi = useServingApi()
   const llmApi = useLlmApi()
 
-  const checks = [
-    miningApi.getHealth().then(() => 'up').catch(() => 'down'),
-    servingApi.getHealth().then(() => 'up').catch(() => 'down'),
-    llmApi.getHealth().then(() => 'up').catch(() => 'down'),
-  ]
+  const results = await Promise.all([
+    miningApi.getHealth().then(() => 'up' as const).catch(() => 'down' as const),
+    servingApi.getHealth().then(() => 'up' as const).catch(() => 'down' as const),
+    llmApi.getHealth().then(() => 'up' as const).catch(() => 'down' as const),
+  ])
 
-  const results = await Promise.all(checks)
-  services.value[0].status = results[0] as ServiceStatus
-  services.value[1].status = results[1] as ServiceStatus
-  services.value[2].status = results[2] as ServiceStatus
+  runtimeTabRef.value?.updateHealthStatus(results)
 }
 
-function handleToggle(row: { name: string; active: boolean } & DomainConfig) {
-  domainStore.updateDomain(row.name, {
-    miningApi: row.miningApi,
-    servingApi: row.servingApi,
-    llmApi: row.llmApi,
-    active: row.active,
-  })
-}
-
-function handleSave() {
-  domainStore.updateDomain(domainStore.currentDomain, { ...editConfig.value })
-}
-
-onMounted(checkHealth)
-watch(() => domainStore.currentDomain, checkHealth)
+onMounted(async () => {
+  await controlPlane.loadDomains()
+  await checkHealth()
+})
 </script>
 
 <style scoped>
@@ -167,133 +209,103 @@ watch(() => domainStore.currentDomain, checkHealth)
 .settings-view__header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+}
+
+.settings-view__title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .settings-view__title {
+  margin: 0;
   font-size: 16px;
   font-weight: 650;
   color: var(--kb-text-primary);
-  margin: 0;
   letter-spacing: -0.2px;
 }
 
-.settings-view__section {
-  background: var(--kb-bg-card);
-  border: 1px solid var(--kb-border-light);
-  border-radius: var(--kb-radius);
-  padding: 20px 22px;
-}
-
-.section-heading {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--kb-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin: 0 0 16px;
-}
-
-/* Health tiles */
-.settings-view__health-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-
-.health-tile {
-  background: var(--kb-bg-base);
-  border: 1px solid var(--kb-border-light);
-  border-radius: var(--kb-radius-sm);
-  overflow: hidden;
-}
-
-.health-tile__top {
-  height: 3px;
-}
-
-.health-tile__top--up { background: var(--kb-success); }
-.health-tile__top--down { background: var(--kb-danger); }
-.health-tile__top--checking { background: var(--kb-warning); }
-
-.health-tile__body {
-  padding: 12px 14px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.health-tile__name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--kb-text-primary);
-}
-
-.health-tile__url {
-  font-size: 11px;
+.settings-view__scope {
+  font-size: 12px;
   color: var(--kb-text-tertiary);
 }
 
-.health-tile__status {
-  padding: 6px 14px 12px;
+.settings-view__actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
-.health-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.health-dot--up { background: var(--kb-success); }
-.health-dot--down { background: var(--kb-danger); }
-.health-dot--checking { background: var(--kb-warning); animation: pulse 1.5s infinite; }
-
-.health-label {
-  font-size: 12px;
-  color: var(--kb-text-secondary);
-}
-
-/* Domain table */
-.settings-view__table-wrap {
-  overflow: hidden;
-}
-
-.domain-name {
+.settings-view__alert {
+  border-radius: var(--kb-radius);
+  padding: 12px 14px;
   font-size: 13px;
-  font-weight: 500;
-  color: var(--kb-text-primary);
+  border: 1px solid transparent;
 }
 
-.domain-name--active {
-  color: var(--kb-accent);
-  font-weight: 600;
+.settings-view__alert--danger {
+  background: rgba(239, 68, 68, 0.06);
+  border-color: rgba(239, 68, 68, 0.15);
+  color: var(--kb-danger);
 }
 
-.text-mono {
-  font-family: 'SF Mono', 'Cascadia Code', monospace;
-  font-size: 12px;
-  color: var(--kb-text-secondary);
+.settings-view__layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
 }
 
-/* Form */
-.settings-view__hint {
-  font-size: 13px;
-  color: var(--kb-text-secondary);
-  margin: 0 0 16px;
+.settings-view__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.settings-view__hint strong {
-  color: var(--kb-accent);
+.settings-card {
+  background: var(--kb-bg-card);
+  border-radius: var(--kb-radius);
+  border: 1px solid var(--kb-border-light);
+  box-shadow: var(--kb-shadow-card);
+  padding: 20px 22px;
 }
 
-.settings-view__form {
-  max-width: 520px;
+.settings-empty {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--kb-text-tertiary);
+  font-size: 14px;
+  text-align: center;
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+.settings-view__tabs {
+  background: var(--kb-bg-card);
+  border: 1px solid var(--kb-border-light);
+  border-radius: var(--kb-radius);
+  box-shadow: var(--kb-shadow-card);
+  padding: 0 20px 20px;
+}
+
+.settings-view__tabs :deep(.el-tabs__header) {
+  margin-bottom: 14px;
+}
+
+@media (max-width: 960px) {
+  .settings-view__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-view__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-view__actions {
+    justify-content: flex-end;
+  }
 }
 </style>
