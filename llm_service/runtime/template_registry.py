@@ -17,6 +17,10 @@ _ALLOWED_UPDATE_COLUMNS = frozenset({
 class TemplateRegistry:
     def __init__(self, db: LlmRuntimeDB):
         self._db = db
+        # In-memory template cache: (template_key, knowledge_domain) → tpl dict
+        self._cache: dict[tuple[str, str | None], dict] = {}
+        self._cache_ts: dict[tuple[str, str | None], float] = {}
+        self._cache_ttl = 300.0  # 5 minutes
 
     async def create(
         self,
@@ -66,8 +70,14 @@ class TemplateRegistry:
         return await self._db.fetchone("SELECT * FROM agent_llm_prompt_templates WHERE id = %s", (tpl_id,))
 
     async def get_by_key(self, template_key: str, knowledge_domain: str | None = None) -> dict | None:
+        import time as _time
+        cache_key = (template_key, knowledge_domain)
+        now = _time.monotonic()
+        if cache_key in self._cache and (now - self._cache_ts.get(cache_key, 0)) < self._cache_ttl:
+            return self._cache[cache_key]
+
         if knowledge_domain:
-            return await self._db.fetchone(
+            row = await self._db.fetchone(
                 """SELECT * FROM agent_llm_prompt_templates
                    WHERE template_key = %s
                      AND status = 'active'
@@ -78,15 +88,21 @@ class TemplateRegistry:
                    LIMIT 1""",
                 (template_key, knowledge_domain, knowledge_domain),
             )
-        return await self._db.fetchone(
-            """SELECT * FROM agent_llm_prompt_templates
-               WHERE template_key = %s
-                 AND status = 'active'
-                 AND knowledge_domain IS NULL
-               ORDER BY created_at DESC
-               LIMIT 1""",
-            (template_key,),
-        )
+        else:
+            row = await self._db.fetchone(
+                """SELECT * FROM agent_llm_prompt_templates
+                   WHERE template_key = %s
+                     AND status = 'active'
+                     AND knowledge_domain IS NULL
+                   ORDER BY created_at DESC
+                   LIMIT 1""",
+                (template_key,),
+            )
+        # Update cache
+        if row:
+            self._cache[cache_key] = row
+            self._cache_ts[cache_key] = _time.monotonic()
+        return row
 
     async def list_all(self, knowledge_domain: str | None = None) -> list[dict]:
         if knowledge_domain:
@@ -118,6 +134,7 @@ class TemplateRegistry:
             f"UPDATE agent_llm_prompt_templates SET {', '.join(sets)} WHERE id = %s",
             tuple(values),
         )
+        self._cache.clear()
 
     async def archive(self, tpl_id: str) -> None:
         await self.update(tpl_id, status="archived")

@@ -444,7 +444,7 @@ class LLMService:
         )
 
     # ------------------------------------------------------------------
-    # Execute (sync)
+    # Execute (sync) — optimized fast path
     # ------------------------------------------------------------------
 
     async def execute(
@@ -465,25 +465,12 @@ class LLMService:
         priority: int = 100,
         timeout: int | None = None,
     ) -> dict:
-        """Sync execute: submit with high priority, then run immediately, return result."""
-        # Boost priority so Worker's claim (ORDER BY priority DESC) prefers sync tasks
-        effective_priority = max(priority, 999)
-        task_id = await self.submit(
-            caller_service, knowledge_domain, pipeline_stage,
-            template_key=template_key, input=input, messages=messages,
-            params=params, expected_output_type=expected_output_type,
-            output_schema=output_schema,
-            idempotency_key=idempotency_key,
-            metadata=metadata,
-            max_attempts=max_attempts, priority=effective_priority,
-        )
+        """Sync execute: resolve template → call LLM → return immediately.
 
-        # Idempotency: already-succeeded task -> return cached result
-        row = await self._db.fetchone("SELECT status FROM agent_llm_tasks WHERE id = %s", (task_id,))
-        if row["status"] == "succeeded":
-            return await self._build_execute_response(task_id)
-
-        # Resolve messages for execution (template may have expanded them)
+        ALL DB writes are fire-and-forget background tasks.
+        This is a relay service — the caller should see near-zero overhead beyond the LLM call itself.
+        """
+        # ---- Phase 1: Resolve template (cached → 0 DB after warm-up) ----
         resolved = await self._resolve_template(
             template_key, knowledge_domain, input, messages, expected_output_type, output_schema,
         )
@@ -491,73 +478,161 @@ class LLMService:
         actual_expected_type = resolved["expected_output_type"] or "json_object"
         actual_schema = resolved["output_schema"]
 
-        # Atomically claim: only succeed if task is still 'queued' (not grabbed by Worker)
-        now_iso = datetime.now(timezone.utc).isoformat()
-        lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._config.lease_duration)
-        claimed = await self._db.fetchone(
-            """UPDATE agent_llm_tasks
-               SET status = 'running', started_at = %s, lease_expires_at = %s, updated_at = %s
-               WHERE id = %s AND status = 'queued'
-               RETURNING id""",
-            (now_iso, lease_dt.isoformat(), now_iso, task_id),
+        # ---- Phase 2: Call LLM (the only blocking work) ----
+        start = time.monotonic()
+        response_format = (
+            {"type": "json_object"}
+            if actual_expected_type in ("json_object", "json_array")
+            else None
         )
 
-        if not claimed:
-            # Worker already claimed this task — poll until it finishes
-            logger.info("Task %s already claimed by worker, polling for result", task_id[:8])
-            effective_timeout = timeout or self._config.execute_timeout
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + effective_timeout
-            while loop.time() < deadline:
-                await asyncio.sleep(0.5)
-                t = await self._db.fetchone("SELECT status FROM agent_llm_tasks WHERE id = %s", (task_id,))
-                if t and t["status"] in ("succeeded", "failed", "dead_letter", "cancelled"):
-                    return await self._build_execute_response(task_id)
-            return await self._build_execute_response(task_id)
+        try:
+            resp = await self._provider.complete(
+                messages=actual_messages, params=params or {},
+                response_format=response_format,
+            )
+        except Exception as e:
+            latency = int((time.monotonic() - start) * 1000)
+            error_type = getattr(e, "error_type", "unexpected_error")
+            error_msg = str(e)
+            return {
+                "task_id": None,
+                "status": "failed",
+                "attempts": 0,
+                "total_tokens": None,
+                "latency_ms": latency,
+                "result": None,
+                "error": {"error_type": error_type, "error_message": error_msg},
+            }
 
-        effective_timeout = timeout or self._config.execute_timeout
-        # Get request_id for the shared attempt method
-        req_row = await self._db.fetchone("SELECT id FROM agent_llm_requests WHERE task_id = %s", (task_id,))
-        request_id = req_row["id"] if req_row else ""
+        latency = int((time.monotonic() - start) * 1000)
+        parse_result = parse_output(resp.output_text, actual_expected_type, actual_schema)
+        parse_ok = parse_result.parse_status == "succeeded"
 
-        # Retry loop: execute_chat_attempt may re-queue (queued) on parse failure,
-        # we re-claim and retry until terminal state or timeout
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + effective_timeout
-        while loop.time() < deadline:
+        # ---- Phase 3: Fire-and-forget all DB writes ----
+        task_id = str(uuid.uuid4())
+        request_id = str(uuid.uuid4())
+        attempt_id = str(uuid.uuid4())
+        result_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._config.lease_duration)
+        effective_priority = max(priority, 999)
+        final_status = "succeeded" if parse_ok else "failed"
+
+        async def _persist():
+            """Background task: write all bookkeeping rows to DB."""
             try:
-                await asyncio.wait_for(
-                    self.execute_chat_attempt(
-                        task_id, request_id, actual_messages, params or {},
-                        actual_expected_type, actual_schema,
-                    ),
-                    timeout=max(1, deadline - loop.time()),
-                )
-                # execute_chat_attempt succeeded (parse_status=succeeded) → task is completed
-                break
-            except asyncio.TimeoutError:
-                await self._bus.emit(task_id, "failed", f"execute timed out after {effective_timeout}s")
-                break
+                async with self._db.pool.connection() as conn:
+                    async with conn.transaction():
+                        # task row
+                        await conn.execute(
+                            """INSERT INTO agent_llm_tasks
+                               (id, caller_service, knowledge_domain, pipeline_stage, task_type,
+                                idempotency_key, status, priority, available_at, attempt_count, max_attempts,
+                                created_at, updated_at, started_at, finished_at, lease_expires_at, metadata_json)
+                               VALUES (%s, %s, %s, %s, 'chat', %s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s, %s)""",
+                            (
+                                task_id, caller_service, knowledge_domain, pipeline_stage,
+                                idempotency_key, final_status, effective_priority, now, max_attempts,
+                                now, now, now, now, lease_dt.isoformat(), json.dumps(metadata or {}),
+                            ),
+                        )
+                        # request row
+                        await conn.execute(
+                            """INSERT INTO agent_llm_requests
+                               (id, task_id, provider, model, prompt_template_key, messages_json, input_json,
+                                params_json, expected_output_type, output_schema_json, created_at)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (
+                                request_id, task_id, self._provider_name, self._default_model, template_key,
+                                json.dumps(actual_messages), json.dumps(input or {}),
+                                json.dumps(params or {}), actual_expected_type,
+                                json.dumps(actual_schema or {}), now,
+                            ),
+                        )
+                        # attempt row (final state directly)
+                        if parse_ok:
+                            await conn.execute(
+                                """INSERT INTO agent_llm_attempts
+                                   (id, task_id, request_id, attempt_no, status, started_at, finished_at,
+                                    raw_output_text, prompt_tokens, completion_tokens, total_tokens,
+                                    latency_ms, raw_response_json)
+                                   VALUES (%s, %s, %s, 1, 'succeeded', %s, %s, %s, %s, %s, %s, %s, %s)""",
+                                (
+                                    attempt_id, task_id, request_id, now, now,
+                                    resp.output_text, resp.prompt_tokens, resp.completion_tokens,
+                                    resp.total_tokens, latency, json.dumps(resp.raw_response or {}),
+                                ),
+                            )
+                        else:
+                            await conn.execute(
+                                """INSERT INTO agent_llm_attempts
+                                   (id, task_id, request_id, attempt_no, status, started_at, finished_at,
+                                    raw_output_text, prompt_tokens, completion_tokens, total_tokens,
+                                    latency_ms, raw_response_json, error_type, error_message)
+                                   VALUES (%s, %s, %s, 1, 'failed', %s, %s, %s, %s, %s, %s, %s, %s,
+                                    'parse_failed', %s)""",
+                                (
+                                    attempt_id, task_id, request_id, now, now,
+                                    resp.output_text, resp.prompt_tokens, resp.completion_tokens,
+                                    resp.total_tokens, latency, json.dumps(resp.raw_response or {}),
+                                    parse_result.parse_error or f"parse_status={parse_result.parse_status}",
+                                ),
+                            )
+                        # result row
+                        await conn.execute(
+                            """INSERT INTO agent_llm_results
+                               (id, task_id, attempt_id, parse_status, parsed_output_json, text_output,
+                                parse_error, validation_errors_json, created_at)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (
+                                result_id, task_id, attempt_id, parse_result.parse_status,
+                                json.dumps(parse_result.parsed_output if parse_result.parsed_output is not None else {}),
+                                parse_result.text_output, parse_result.parse_error,
+                                json.dumps(parse_result.validation_errors), now,
+                            ),
+                        )
+                # Emit event (fire-and-forget within fire-and-forget)
+                asyncio.ensure_future(self._bus.emit(task_id, final_status, "task completed"))
             except Exception:
-                # execute_chat_attempt already called _mgr.fail()
-                # Check if task was re-queued (retryable) or dead_lettered (exhausted)
-                t = await self._db.fetchone("SELECT status FROM agent_llm_tasks WHERE id = %s", (task_id,))
-                if not t or t["status"] in ("dead_letter", "failed", "cancelled"):
-                    break
-                # Task was re-queued → reclaim and retry
-                now_iso = datetime.now(timezone.utc).isoformat()
-                lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._config.lease_duration)
-                reclaimed = await self._db.fetchone(
-                    """UPDATE agent_llm_tasks
-                       SET status = 'running', lease_expires_at = %s, updated_at = %s
-                       WHERE id = %s AND status = 'queued'
-                       RETURNING id""",
-                    (lease_dt.isoformat(), now_iso, task_id),
-                )
-                if not reclaimed:
-                    break  # Worker claimed it, fall through to poll
+                logger.exception("Background persist failed for task %s", task_id[:8])
 
-        return await self._build_execute_response(task_id)
+        asyncio.ensure_future(_persist())
+
+        # ---- Phase 4: Return immediately from memory ----
+        if parse_ok:
+            return {
+                "task_id": task_id,
+                "status": "succeeded",
+                "attempts": 1,
+                "total_tokens": resp.total_tokens,
+                "latency_ms": latency,
+                "result": {
+                    "parse_status": parse_result.parse_status,
+                    "parsed_output": parse_result.parsed_output if parse_result.parsed_output else None,
+                    "text_output": parse_result.text_output,
+                    "validation_errors": parse_result.validation_errors,
+                },
+                "error": None,
+            }
+        else:
+            return {
+                "task_id": task_id,
+                "status": "failed",
+                "attempts": 1,
+                "total_tokens": resp.total_tokens,
+                "latency_ms": latency,
+                "result": {
+                    "parse_status": parse_result.parse_status,
+                    "parsed_output": None,
+                    "text_output": parse_result.text_output,
+                    "validation_errors": parse_result.validation_errors,
+                },
+                "error": {
+                    "error_type": "parse_failed",
+                    "error_message": parse_result.parse_error or parse_result.parse_status,
+                },
+            }
 
     # ------------------------------------------------------------------
     # Query helpers

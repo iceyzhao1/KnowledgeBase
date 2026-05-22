@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -143,7 +144,8 @@ class ModelService:
             token_usage = usage.get("total_tokens") or usage.get("prompt_tokens")
 
             text_output = "\n".join(texts)
-            await self._record_sync_task(
+            # Fire-and-forget DB recording
+            asyncio.ensure_future(self._record_sync_task(
                 task_type="embedding", model=model,
                 caller_service=body.caller_service or "model",
                 knowledge_domain=body.knowledge_domain,
@@ -151,7 +153,7 @@ class ModelService:
                 status="succeeded",
                 latency_ms=latency, total_tokens=token_usage,
                 input_json=input_json, raw_response=raw, text_output=text_output,
-            )
+            ))
 
             data = sorted(raw.get("data", []), key=lambda item: item.get("index") or 0)
             return EmbeddingResponse(
@@ -168,7 +170,7 @@ class ModelService:
         except Exception as e:
             latency = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
             error_type = getattr(e, "error_type", "unexpected_error")
-            await self._record_sync_task(
+            asyncio.ensure_future(self._record_sync_task(
                 task_type="embedding", model=model,
                 caller_service=body.caller_service or "model",
                 knowledge_domain=body.knowledge_domain,
@@ -177,7 +179,7 @@ class ModelService:
                 latency_ms=latency, total_tokens=None,
                 input_json=input_json,
                 error_type=error_type, error_message=str(e)[:500],
-            )
+            ))
             raise
 
     async def rerank(self, body: RerankRequest) -> RerankResponse:
@@ -207,7 +209,8 @@ class ModelService:
                 lines.append(f"  [{r.get('index', '?')}] score={score:.4f}: {doc}")
             text_output = "\n".join(lines)
 
-            await self._record_sync_task(
+            # Fire-and-forget DB recording
+            asyncio.ensure_future(self._record_sync_task(
                 task_type="rerank", model=model,
                 caller_service=body.caller_service or "model",
                 knowledge_domain=body.knowledge_domain,
@@ -215,7 +218,7 @@ class ModelService:
                 status="succeeded",
                 latency_ms=latency, total_tokens=token_usage,
                 input_json=input_json, raw_response=raw, text_output=text_output,
-            )
+            ))
 
             return RerankResponse(
                 model=raw.get("model") or model or "",
@@ -231,7 +234,7 @@ class ModelService:
         except Exception as e:
             latency = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
             error_type = getattr(e, "error_type", "unexpected_error")
-            await self._record_sync_task(
+            asyncio.ensure_future(self._record_sync_task(
                 task_type="rerank", model=model,
                 caller_service=body.caller_service or "model",
                 knowledge_domain=body.knowledge_domain,
@@ -240,5 +243,5 @@ class ModelService:
                 latency_ms=latency, total_tokens=None,
                 input_json=input_json,
                 error_type=error_type, error_message=str(e)[:500],
-            )
+            ))
             raise
