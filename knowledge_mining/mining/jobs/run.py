@@ -1,14 +1,14 @@
-"""v3.0 Mining pipeline orchestrator — PostgreSQL backend.
+"""v3.1 Mining pipeline orchestrator — PostgreSQL backend.
 
 Two entry points:
 - run(input_path, phase1_only=False): full or phase1-only pipeline
 - publish(run_id): publish a completed run's build
 
-Pipeline stages per document:
-  ingest -> parse -> segment -> enrich -> discourse_relations -> build_retrieval_units
+StreamingPipeline stages per document:
+  parse -> segment -> enrich -> discourse -> retrieval_units -> embedding -> db_write
 
 Global stages:
-  select_snapshot -> assemble_build -> [publish_release]
+  assemble_build -> validate_build -> publish_release
 """
 from __future__ import annotations
 
@@ -49,22 +49,19 @@ from knowledge_mining.mining.contracts.models import (
     DocumentProfile,
     MiningRunData,
     MiningRunDocumentData,
-    RawSegmentData,
-    SegmentRelationData,
-    RetrievalUnitData,
 )
 from knowledge_mining.mining.runtime import RuntimeTracker
 from knowledge_mining.mining.ingestion import ingest_directory
 from knowledge_mining.mining.stages.parse import create_parser
 from knowledge_mining.mining.stages.segment import DefaultSegmenter
-from knowledge_mining.mining.snapshot import select_or_create_snapshot
 from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, demo_quality_summary, publish_release
 from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack, resolve_domain
 from knowledge_mining.mining.pipeline import (
-    DocumentContext, PipelineConfig, MiningPipeline,
+    DocumentContext, PipelineConfig,
     StreamingPipeline,
     parse_stage, segment_stage, enrich_stage,
     discourse_stage, retrieval_units_stage,
+    embedding_stage, db_write_stage,
 )
 
 
@@ -466,6 +463,10 @@ def _run_pipeline(
         discourse_relation_builder=llm.get("discourse_relation_builder"),
         contextualizer=llm.get("contextualizer"),
         domain_profile=profile,
+        asset_db=asset_db,
+        runtime_db=runtime_db,
+        tracker=tracker,
+        batch_id=batch_id,
     )
 
     committed_count = 0
@@ -529,6 +530,8 @@ def _run_pipeline(
                 continue
 
         # Queue for streaming pipeline
+        tracker.start_document(rd_id)
+        runtime_db.commit()
         doc_profile = DocumentProfile(
             document_key=doc_key,
             source_type=doc.source_type or params.default_source_type,
@@ -537,7 +540,10 @@ def _run_pipeline(
             tags_json=doc.tags_json,
             title=doc.title,
         )
-        ctx = DocumentContext(raw_file=doc, profile=doc_profile, run_document_id=rd_id)
+        ctx = DocumentContext(
+            raw_file=doc, profile=doc_profile, run_document_id=rd_id,
+            action=action, existing_doc=existing_doc,
+        )
         work_items.append({
             "doc": doc,
             "rd_id": rd_id,
@@ -550,195 +556,43 @@ def _run_pipeline(
 
     # -- Phase 1b: Run streaming pipeline (all non-SKIP docs concurrently) --
     _check_cancelled(runtime_db, run_id)
+    ctxs: list[DocumentContext] = []
     if work_items:
         config = pipeline_config
         stages = [
-            ("parse",           lambda ctx: parse_stage(ctx, config),           1),
-            ("segment",         lambda ctx: segment_stage(ctx, config),         1),
-            ("enrich",          lambda ctx: enrich_stage(ctx, config),          max_workers),
-            ("discourse",       lambda ctx: discourse_stage(ctx, config),       min(max_workers, 2)),
-            ("retrieval_units", lambda ctx: retrieval_units_stage(ctx, config), max_workers),
+            ("parse",            lambda ctx: parse_stage(ctx, config),           1),
+            ("segment",          lambda ctx: segment_stage(ctx, config),         1),
+            ("enrich",           lambda ctx: enrich_stage(ctx, config),          max_workers),
+            ("discourse",        lambda ctx: discourse_stage(ctx, config),       min(max_workers, 2)),
+            ("retrieval_units",  lambda ctx: retrieval_units_stage(ctx, config), max_workers),
+            ("embedding",        lambda ctx: embedding_stage(ctx, config),       max_workers),
+            ("db_write",         lambda ctx: db_write_stage(ctx, config),        1),
         ]
 
         pipeline = StreamingPipeline(stages, run_id=run_id, tracker=tracker)
         ctxs = pipeline.process_all([item["ctx"] for item in work_items])
 
-    # -- Phase 1c: Write results to DB (main thread, serial, no concurrency issues) --
-    for i, item in enumerate(work_items):
-        ctx = ctxs[i]
-        doc = item["doc"]
-        rd_id = item["rd_id"]
-        doc_key = item["doc_key"]
-        action = item["action"]
-        existing_doc = item["existing_doc"]
-        doc_profile = item["doc_profile"]
+    # -- Aggregate results from pipeline (Phase 1c is now inside db_write_stage) --
+    for ctx in ctxs:
+        action = ctx.action or "NEW"
+        rd_id = ctx.run_document_id
+        doc_key = ctx.profile.document_key if ctx.profile else ""
 
-        # Pipeline error
         if ctx.error:
-            tracker.fail_document(rd_id, ctx.error)
             failed_count += 1
-            runtime_db.commit()
-            continue
-
-        # Parse produced no tree
-        if ctx.tree is None:
-            tracker.skip_document(rd_id)
-            skipped_count += 1
-            runtime_db.commit()
-            continue
-
-        try:
-            segments = list(ctx.segments)
-            relations = list(ctx.relations)
-            seg_id_map = ctx.seg_ids
-            retrieval_units = list(ctx.retrieval_units)
-
-            # Stage 6: Select/create snapshot
-            evt = tracker.start_stage(run_id, "select_snapshot", rd_id)
-            document_id, snapshot_id, link_id = select_or_create_snapshot(
-                asset_db, doc, doc_profile, batch_id=batch_id,
-            )
-            tracker.end_stage(evt, run_id, "select_snapshot")
-            asset_db.commit()
-
-            # v1.2 UPDATE cleanup: remove old snapshot data before writing new
-            if action == "UPDATE" and existing_doc is not None:
-                old_links = asset_db._fetchall(
-                    "SELECT document_snapshot_id FROM asset_document_snapshot_links "
-                    "WHERE document_id = %s ORDER BY linked_at DESC",
-                    (existing_doc["id"],),
-                )
-                for old_link in old_links[1:] if len(old_links) > 1 else []:
-                    old_snap_id = old_link["document_snapshot_id"]
-                    asset_db.delete_retrieval_units_by_snapshot(old_snap_id)
-                    asset_db.delete_relations_by_snapshot(old_snap_id)
-                    asset_db.delete_segments_by_snapshot(old_snap_id)
-                asset_db.commit()
-
-            # Write segments to DB (track at commit time since pipeline ran in streaming)
-            evt_seg = tracker.start_stage(run_id, "commit_segments", rd_id)
-            for seg in segments:
-                seg_key = f"{seg.document_key}#{seg.segment_index}"
-                seg_id = seg_id_map.get(seg_key, uuid.uuid4().hex)
-                asset_db.insert_raw_segment(
-                    segment_id=seg_id,
-                    document_snapshot_id=snapshot_id,
-                    segment_key=seg_key,
-                    segment_index=seg.segment_index,
-                    block_type=seg.block_type,
-                    semantic_role=seg.semantic_role,
-                    section_path=seg.section_path,
-                    section_title=seg.section_title,
-                    raw_text=seg.raw_text,
-                    normalized_text=seg.normalized_text,
-                    content_hash=seg.content_hash,
-                    normalized_hash=seg.normalized_hash,
-                    token_count=seg.token_count,
-                    structure_json=seg.structure_json,
-                    source_offsets_json=seg.source_offsets_json,
-                    entity_refs_json=seg.entity_refs_json,
-                    metadata_json=seg.metadata_json,
-                )
-
-            tracker.end_stage(evt_seg, run_id, "commit_segments",
-                              output_summary=f"{len(segments)} segments")
-
-            # Write relations to DB
-            evt_rel = tracker.start_stage(run_id, "build_relations", rd_id)
-            for rel in relations:
-                src_id = seg_id_map.get(rel.source_segment_key, "")
-                tgt_id = seg_id_map.get(rel.target_segment_key, "")
-                if src_id and tgt_id:
-                    asset_db.insert_segment_relation(
-                        relation_id=uuid.uuid4().hex,
-                        document_snapshot_id=snapshot_id,
-                        source_segment_id=src_id,
-                        target_segment_id=tgt_id,
-                        relation_type=rel.relation_type,
-                        weight=rel.weight,
-                        confidence=rel.confidence,
-                        distance=rel.distance,
-                        metadata_json=rel.metadata_json,
-                    )
-            tracker.end_stage(evt_rel, run_id, "build_relations",
-                              output_summary=f"{len(relations)} relations")
-
-            # Write retrieval units to DB
-            evt_ru = tracker.start_stage(run_id, "build_retrieval_units", rd_id)
-            ru_id_map: dict[str, str] = {}
-            for ru in retrieval_units:
-                unit_id = uuid.uuid4().hex
-                ru_id_map[ru.unit_key] = unit_id
-                asset_db.insert_retrieval_unit(
-                    unit_id=unit_id,
-                    document_snapshot_id=snapshot_id,
-                    unit_key=ru.unit_key,
-                    unit_type=ru.unit_type,
-                    target_type=ru.target_type,
-                    target_ref_json=ru.target_ref_json,
-                    title=ru.title,
-                    text=ru.text,
-                    search_text=ru.search_text,
-                    block_type=ru.block_type,
-                    semantic_role=ru.semantic_role,
-                    facets_json=ru.facets_json,
-                    entity_refs_json=ru.entity_refs_json,
-                    source_refs_json=ru.source_refs_json,
-                    llm_result_refs_json=ru.llm_result_refs_json,
-                    source_segment_id=ru.source_segment_id,
-                    weight=ru.weight,
-                    metadata_json=ru.metadata_json,
-                )
-
-            asset_db.commit()
-            tracker.end_stage(evt_ru, run_id, "build_retrieval_units",
-                              output_summary=f"{len(retrieval_units)} units")
-
-            # Generate embeddings for retrieval units (if embedding_generator configured)
-            if embedding_generator is not None and retrieval_units:
-                try:
-                    texts_to_embed = [ru.text for ru in retrieval_units if ru.text]
-                    unit_keys_with_text = [ru.unit_key for ru in retrieval_units if ru.text]
-                    if texts_to_embed:
-                        embeddings = embedding_generator.embed_batch(texts_to_embed)
-                        if embeddings and len(embeddings) == len(texts_to_embed):
-                            import json as _json
-                            for unit_key, text, embedding_vec in zip(unit_keys_with_text, texts_to_embed, embeddings):
-                                if embedding_vec and unit_key in ru_id_map:
-                                    asset_db.insert_retrieval_embedding(
-                                        embedding_id=uuid.uuid4().hex,
-                                        retrieval_unit_id=ru_id_map[unit_key],
-                                        embedding_model=embedding_generator.model_name,
-                                        embedding_provider="zhipu",
-                                        text_kind="full",
-                                        embedding_dim=len(embedding_vec),
-                                        embedding_vector=_json.dumps(embedding_vec),
-                                        content_hash="",
-                                    )
-                            asset_db.commit()
-                except Exception as e:
-                    logger.warning("Embedding generation failed for document %s: %s", doc_key, e)
-
-            # Commit document
-            tracker.commit_document(rd_id, document_id, snapshot_id)
+        elif ctx.document_id and ctx.snapshot_id:
             committed_count += 1
             if action == "NEW":
                 new_count += 1
             elif action == "UPDATE":
                 updated_count += 1
-
             snapshot_decisions.append({
-                "document_id": document_id,
-                "document_snapshot_id": snapshot_id,
+                "document_id": ctx.document_id,
+                "document_snapshot_id": ctx.snapshot_id,
                 "document_key": doc_key,
             })
-
-            runtime_db.commit()
-
-        except Exception as e:
-            tracker.fail_document(rd_id, str(e)[:500])
-            failed_count += 1
-            runtime_db.commit()
+        else:
+            skipped_count += 1
 
     # Phase 2: Build & Publish (unless phase1_only)
     build_id = None

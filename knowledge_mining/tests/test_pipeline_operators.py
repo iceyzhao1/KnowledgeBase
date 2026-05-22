@@ -954,7 +954,124 @@ class TestRstRelationTypes:
     def test_discourse_relations_stage_name(self):
         from knowledge_mining.mining.contracts.models import VALID_STAGE_NAMES
 
+        assert "discourse" in VALID_STAGE_NAMES
         assert "discourse_relations" in VALID_STAGE_NAMES
+
+    def test_new_stage_names_present(self):
+        from knowledge_mining.mining.contracts.models import VALID_STAGE_NAMES
+
+        for name in ("embedding", "commit_segments", "db_write", "retrieval_units"):
+            assert name in VALID_STAGE_NAMES, f"{name} missing from VALID_STAGE_NAMES"
+
+
+# ===================================================================
+# Wave 1-3: embedding_stage + db_write_stage tests
+# ===================================================================
+
+class TestEmbeddingStage:
+    """embedding_stage should generate embeddings from retrieval units."""
+
+    def test_no_embedding_generator(self):
+        from knowledge_mining.mining.pipeline import embedding_stage, DocumentContext, PipelineConfig
+
+        cfg = PipelineConfig(embedding_generator=None)
+        ctx = DocumentContext()
+        result = embedding_stage(ctx, cfg)
+        assert result.embeddings == ()
+
+    def test_no_retrieval_units(self):
+        from knowledge_mining.mining.pipeline import embedding_stage, DocumentContext, PipelineConfig
+
+        class MockGen:
+            model_name = "test"
+
+        cfg = PipelineConfig(embedding_generator=MockGen())
+        ctx = DocumentContext()
+        result = embedding_stage(ctx, cfg)
+        assert result.embeddings == ()
+
+    def test_embedding_success(self):
+        from unittest.mock import MagicMock
+        from knowledge_mining.mining.pipeline import embedding_stage, DocumentContext, PipelineConfig
+        from knowledge_mining.mining.contracts.models import RetrievalUnitData
+
+        gen = MagicMock()
+        gen.embed_batch.return_value = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+        cfg = PipelineConfig(embedding_generator=gen)
+
+        units = (
+            RetrievalUnitData(
+                segment_key="doc#0", unit_key="ru:doc#0:raw_text", unit_type="raw_text",
+                target_type="raw_segment", target_ref_json={}, title=None,
+                text="hello", search_text="hello", block_type="paragraph",
+                semantic_role="concept", facets_json={}, entity_refs_json=[],
+                source_refs_json={}, llm_result_refs_json={}, source_segment_id="s1",
+                weight=1.0, metadata_json={},
+            ),
+            RetrievalUnitData(
+                segment_key="doc#1", unit_key="ru:doc#1:raw_text", unit_type="raw_text",
+                target_type="raw_segment", target_ref_json={}, title=None,
+                text="world", search_text="world", block_type="paragraph",
+                semantic_role="concept", facets_json={}, entity_refs_json=[],
+                source_refs_json={}, llm_result_refs_json={}, source_segment_id="s2",
+                weight=1.0, metadata_json={},
+            ),
+        )
+        ctx = DocumentContext(retrieval_units=units)
+        result = embedding_stage(ctx, cfg)
+        assert len(result.embeddings) == 2
+        assert result.embeddings[0]["unit_key"] == "ru:doc#0:raw_text"
+        assert result.embeddings[1]["unit_key"] == "ru:doc#1:raw_text"
+
+    def test_embedding_failure_graceful(self):
+        from unittest.mock import MagicMock
+        from knowledge_mining.mining.pipeline import embedding_stage, DocumentContext, PipelineConfig
+        from knowledge_mining.mining.contracts.models import RetrievalUnitData
+
+        gen = MagicMock()
+        gen.embed_batch.side_effect = RuntimeError("API down")
+        cfg = PipelineConfig(embedding_generator=gen)
+
+        units = (
+            RetrievalUnitData(
+                segment_key="doc#0", unit_key="ru:doc#0:raw_text", unit_type="raw_text",
+                target_type="raw_segment", target_ref_json={}, title=None,
+                text="hello", search_text="hello", block_type="paragraph",
+                semantic_role="concept", facets_json={}, entity_refs_json=[],
+                source_refs_json={}, llm_result_refs_json={}, source_segment_id="s1",
+                weight=1.0, metadata_json={},
+            ),
+        )
+        ctx = DocumentContext(retrieval_units=units)
+        result = embedding_stage(ctx, cfg)
+        assert result.embeddings == ()
+        assert result.error is None  # embedding failure is non-fatal
+
+
+class TestDbWriteStageSkip:
+    """db_write_stage should skip errored and treeless contexts."""
+
+    def test_skip_error_context(self):
+        from unittest.mock import MagicMock
+        from knowledge_mining.mining.pipeline import db_write_stage, DocumentContext, PipelineConfig
+
+        tracker = MagicMock()
+        cfg = PipelineConfig(tracker=tracker, runtime_db=MagicMock())
+        ctx = DocumentContext(error="upstream failed", run_document_id="rd1")
+        result = db_write_stage(ctx, cfg)
+        assert result.error == "upstream failed"
+        tracker.fail_document.assert_called_once()
+
+    def test_skip_treeless_context(self):
+        from unittest.mock import MagicMock
+        from knowledge_mining.mining.pipeline import db_write_stage, DocumentContext, PipelineConfig
+
+        tracker = MagicMock()
+        cfg = PipelineConfig(tracker=tracker, runtime_db=MagicMock())
+        ctx = DocumentContext(run_document_id="rd1")
+        result = db_write_stage(ctx, cfg)
+        assert result.error is None
+        tracker.skip_document.assert_called_once()
 
 
 # ===================================================================
