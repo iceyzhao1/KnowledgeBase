@@ -8,7 +8,14 @@
 
 services:
   app:
-    image: coremasterkb-app:latest
+    # ── 镜像来源（二选一）──────────────────────────────────
+    # 本地开发：用 build 从源码构建
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    # 服务器部署：用 image 直接加载（注释掉上面的 build，取消注释下面这行）
+    # image: coremasterkb-app:latest
+
     container_name: cmkb
     ports:
       - "80:80"       # nginx (kb-ui)
@@ -20,7 +27,9 @@ services:
     volumes:
       - uploads:/app/uploads
       - control_data:/app/data
-      # 挂载代码和配置，修改宿主机文件后 supervisorctl restart 即可生效
+      # ── 挂载代码和配置（服务器部署用）──────────────────────
+      # 本地开发可以注释掉下面这些，直接用镜像内置代码
+      # 服务器上取消注释，修改宿主机文件后 supervisorctl restart 即可生效
       - ./.env:/app/.env
       - ./domain_registry.yaml:/app/domain_registry.yaml
       - ./scenario_packs:/app/scenario_packs
@@ -29,8 +38,6 @@ services:
       - ./main_control_service:/app/main_control_service
       - ./mcp_server:/app/mcp_server
       - ./databases:/app/databases
-    # .env 文件已打包进镜像，如需运行时覆盖可取消注释：
-    # env_file: .env
     stdin_open: true
     tty: true
     restart: unless-stopped

@@ -33,7 +33,12 @@ bash deploy-build.sh
 - `docker-compose.yml`
 - `deploy-server.sh`
 
-**docker-compose.yml 注意**：服务器上需将 `build` 替换为 `image: coremasterkb-app:latest`。
+**docker-compose.yml 注意**：服务器上需要切换两处配置：
+
+1. **镜像来源**：注释掉 `build` 块，取消注释 `image: coremasterkb-app:latest`
+2. **volume 挂载**：取消注释代码和配置挂载（本地开发可保持注释，直接用镜像内置代码）
+
+yml 文件内有详细注释标注哪几行是本地、哪几行是服务器。
 
 **执行部署**：
 
