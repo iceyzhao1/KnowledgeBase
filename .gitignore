@@ -30,15 +30,20 @@
 !agent_serving_zdy/**
 !kb-ui/
 !kb-ui/**
+!docker/
+!docker/**
 
 # === Allowlisted root files ===
 !.env.example
+!.env.docker
 !.gitignore
+!.dockerignore
 !README.md
 !domain_registry.yaml
-
-# === Generated config (re-initialized from source) ===
-main_control_service/config/
+!docker-compose.yml
+!pyproject.toml
+!deploy-build.sh
+!deploy-server.sh
 
 # === But still exclude these within allowlisted dirs ===
 *.sqlite
@@ -69,3 +74,6 @@ agent_serving_zdy/target/
 .settings/
 .project
 .classpath
+
+# === Docker build artifacts ===
+cmkb.tar
