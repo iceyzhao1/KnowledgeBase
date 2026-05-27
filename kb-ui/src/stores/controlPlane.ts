@@ -1,150 +1,182 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useControlPlaneApi } from '@/api/controlPlane'
-import { useDomainStore } from '@/stores/domain'
-import type {
-  ControlPlaneAuditLog,
-  ControlPlaneCapability,
-  ControlPlaneDatabaseBinding,
-  ControlPlaneDiffItem,
-  ControlPlaneDomainDetail,
-  ControlPlaneDomainSummary,
-  ControlPlaneObservationPayload,
-  ControlPlaneRuntimeOverride,
-  ControlPlaneRuntimePayload,
-  ControlPlaneServiceBinding,
-  ControlPlaneServiceInstance,
-} from '@/types'
 
 export const useControlPlaneStore = defineStore('control-plane', () => {
   const api = useControlPlaneApi()
-  const legacyDomainStore = useDomainStore()
 
-  const domains = ref<ControlPlaneDomainSummary[]>([])
-  const selectedDomainId = ref<string>('')
-  const selectedDomain = ref<ControlPlaneDomainDetail | null>(null)
-  const runtime = ref<ControlPlaneRuntimePayload | null>(null)
-  const observations = ref<ControlPlaneObservationPayload | null>(null)
-  const diffItems = ref<ControlPlaneDiffItem[]>([])
-  const serviceInstances = ref<ControlPlaneServiceInstance[]>([])
-  const auditLogs = ref<ControlPlaneAuditLog[]>([])
+  // ── System config ──
+  const systemConfigNames = ref<string[]>([])
+  const selectedSystemConfigName = ref('')
+  const systemConfigText = ref('')
+  const systemConfigOriginal = ref('')
+
+  // ── Domains ──
+  const domains = ref<{ domain_id: string; display_name: string; enabled: boolean }[]>([])
+  const selectedDomainId = ref('')
+  const domainYamlText = ref('')
+  const domainYamlOriginal = ref('')
+
+  // ── Scenario ──
+  const scenarioYamlText = ref('')
+  const scenarioYamlOriginal = ref('')
+
+  // ── Shared ──
   const loading = ref(false)
-  const bootstrapping = ref(false)
-  const error = ref<string>('')
+  const saving = ref(false)
+  const error = ref('')
 
-  const selectedSummary = computed(() =>
-    domains.value.find(item => item.domain_id === selectedDomainId.value) || null
+  const systemConfigDirty = computed(() => systemConfigText.value !== systemConfigOriginal.value)
+  const domainYamlDirty = computed(() => domainYamlText.value !== domainYamlOriginal.value)
+  const scenarioDirty = computed(() => scenarioYamlText.value !== scenarioYamlOriginal.value)
+
+  const selectedDomainSummary = computed(() =>
+    domains.value.find(d => d.domain_id === selectedDomainId.value) ?? null
   )
 
+  // ── System config actions ──
+  async function loadSystemConfigs() {
+    loading.value = true
+    error.value = ''
+    try {
+      systemConfigNames.value = await api.listSystemConfigs()
+      if (!selectedSystemConfigName.value && systemConfigNames.value.length > 0) {
+        await selectSystemConfig(systemConfigNames.value[0])
+      }
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Failed to load system configs'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function selectSystemConfig(name: string) {
+    selectedSystemConfigName.value = name
+    loading.value = true
+    try {
+      const text = await api.getSystemConfigRaw(name)
+      systemConfigText.value = text
+      systemConfigOriginal.value = text
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Failed to load config'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function saveSystemConfig() {
+    if (!selectedSystemConfigName.value) return
+    saving.value = true
+    try {
+      await api.updateSystemConfigRaw(selectedSystemConfigName.value, systemConfigText.value)
+      systemConfigOriginal.value = systemConfigText.value
+    } finally {
+      saving.value = false
+    }
+  }
+
+  // ── Domain actions ──
   async function loadDomains() {
     loading.value = true
     error.value = ''
     try {
       domains.value = await api.getDomains()
-      serviceInstances.value = await api.listServiceInstances()
-      if (!selectedDomainId.value) {
-        const preferred = domains.value.find(item => item.domain_id === legacyDomainStore.currentDomain)
-        selectedDomainId.value = preferred?.domain_id || domains.value[0]?.domain_id || ''
-      }
-      if (selectedDomainId.value) {
-        await loadDomain(selectedDomainId.value)
+      if (!selectedDomainId.value && domains.value.length > 0) {
+        await selectDomain(domains.value[0].domain_id)
       }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load control plane'
+      error.value = err instanceof Error ? err.message : 'Failed to load domains'
     } finally {
       loading.value = false
     }
   }
 
-  async function loadDomain(domainId: string) {
-    if (!domainId) return
-    loading.value = true
-    error.value = ''
+  async function selectDomain(domainId: string) {
     selectedDomainId.value = domainId
+    loading.value = true
     try {
-      const [domain, runtimeData, observationData, diffData, audits] = await Promise.all([
-        api.getDomain(domainId),
-        api.getRuntime(domainId),
-        api.getObservations(domainId),
-        api.getDiff(domainId),
-        api.listAuditLogs(),
+      const [domainText, scenarioText] = await Promise.all([
+        api.getDomainRaw(domainId),
+        api.getScenarioRaw(domainId),
       ])
-      selectedDomain.value = domain
-      runtime.value = runtimeData
-      observations.value = observationData
-      diffItems.value = diffData.items
-      auditLogs.value = audits
+      domainYamlText.value = domainText
+      domainYamlOriginal.value = domainText
+      scenarioYamlText.value = scenarioText
+      scenarioYamlOriginal.value = scenarioText
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to load control-plane detail'
+      error.value = err instanceof Error ? err.message : 'Failed to load domain'
     } finally {
       loading.value = false
     }
   }
 
-  async function bootstrapImport() {
-    bootstrapping.value = true
-    error.value = ''
+  async function createDomain(domainId: string) {
+    await api.createDomain(domainId)
+    await loadDomains()
+    await selectDomain(domainId)
+  }
+
+  async function saveDomainYaml() {
+    if (!selectedDomainId.value) return
+    saving.value = true
     try {
-      await api.bootstrapImport()
-      await loadDomains()
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to bootstrap control plane'
-      throw err
+      await api.updateDomainRaw(selectedDomainId.value, domainYamlText.value)
+      domainYamlOriginal.value = domainYamlText.value
     } finally {
-      bootstrapping.value = false
+      saving.value = false
     }
   }
 
-  async function saveDomainPatch(payload: Partial<ControlPlaneDomainDetail>) {
-    if (!selectedDomainId.value) return
-    await api.patchDomain(selectedDomainId.value, payload)
-    await loadDomain(selectedDomainId.value)
+  async function deleteDomain(domainId: string) {
+    await api.deleteDomain(domainId)
+    if (selectedDomainId.value === domainId) {
+      selectedDomainId.value = ''
+      domainYamlText.value = ''
+      domainYamlOriginal.value = ''
+      scenarioYamlText.value = ''
+      scenarioYamlOriginal.value = ''
+    }
+    await loadDomains()
   }
 
-  async function saveCapabilities(capabilities: ControlPlaneCapability[]) {
+  // ── Scenario actions ──
+  async function saveScenarioYaml() {
     if (!selectedDomainId.value) return
-    await api.replaceCapabilities(selectedDomainId.value, capabilities)
-    await loadDomain(selectedDomainId.value)
-  }
-
-  async function saveServiceBindings(bindings: ControlPlaneServiceBinding[]) {
-    if (!selectedDomainId.value) return
-    await api.replaceServiceBindings(selectedDomainId.value, bindings)
-    await loadDomain(selectedDomainId.value)
-  }
-
-  async function saveDatabaseBindings(bindings: ControlPlaneDatabaseBinding[]) {
-    if (!selectedDomainId.value) return
-    await api.replaceDatabaseBindings(selectedDomainId.value, bindings)
-    await loadDomain(selectedDomainId.value)
-  }
-
-  async function saveOverrides(overrides: ControlPlaneRuntimeOverride[]) {
-    if (!selectedDomainId.value) return
-    await api.replaceOverrides(selectedDomainId.value, overrides)
-    await loadDomain(selectedDomainId.value)
+    saving.value = true
+    try {
+      await api.updateScenarioRaw(selectedDomainId.value, scenarioYamlText.value)
+      scenarioYamlOriginal.value = scenarioYamlText.value
+    } finally {
+      saving.value = false
+    }
   }
 
   return {
+    systemConfigNames,
+    selectedSystemConfigName,
+    systemConfigText,
+    systemConfigOriginal,
     domains,
     selectedDomainId,
-    selectedDomain,
-    selectedSummary,
-    runtime,
-    observations,
-    diffItems,
-    serviceInstances,
-    auditLogs,
+    selectedDomainSummary,
+    domainYamlText,
+    domainYamlOriginal,
+    scenarioYamlText,
+    scenarioYamlOriginal,
     loading,
-    bootstrapping,
+    saving,
     error,
+    systemConfigDirty,
+    domainYamlDirty,
+    scenarioDirty,
+    loadSystemConfigs,
+    selectSystemConfig,
+    saveSystemConfig,
     loadDomains,
-    loadDomain,
-    bootstrapImport,
-    saveDomainPatch,
-    saveCapabilities,
-    saveServiceBindings,
-    saveDatabaseBindings,
-    saveOverrides,
+    selectDomain,
+    createDomain,
+    saveDomainYaml,
+    deleteDomain,
+    saveScenarioYaml,
   }
 })
