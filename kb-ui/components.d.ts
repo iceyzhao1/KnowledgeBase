@@ -50,6 +50,7 @@ declare module 'vue' {
     StatsCard: typeof import('./src/components/common/StatsCard.vue')['default']
     StatusBadge: typeof import('./src/components/common/StatusBadge.vue')['default']
     SystemConfigTab: typeof import('./src/components/settings/SystemConfigTab.vue')['default']
+    YamlEditor: typeof import('./src/components/common/YamlEditor.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

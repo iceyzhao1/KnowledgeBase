@@ -18,11 +18,9 @@
           保存
         </el-button>
       </div>
-      <textarea
-        v-model="store.scenarioYamlText"
-        class="domain-detail-tab__editor"
-        spellcheck="false"
-      />
+      <div class="domain-detail-tab__editor-wrap">
+        <YamlEditor v-model="store.scenarioYamlText" />
+      </div>
     </template>
   </div>
 </template>
@@ -30,6 +28,7 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { useControlPlaneStore } from '@/stores/controlPlane'
+import YamlEditor from '@/components/common/YamlEditor.vue'
 
 const store = useControlPlaneStore()
 
@@ -44,6 +43,13 @@ async function handleSave() {
 </script>
 
 <style scoped>
+.domain-detail-tab {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 220px);
+  min-height: 400px;
+}
+
 .domain-detail-tab__header {
   display: flex;
   align-items: center;
@@ -51,6 +57,7 @@ async function handleSave() {
   padding: 8px 0;
   margin-bottom: 8px;
   border-bottom: 1px solid var(--kb-border-light);
+  flex-shrink: 0;
 }
 
 .domain-detail-tab__label {
@@ -59,19 +66,10 @@ async function handleSave() {
   color: var(--kb-text-primary);
 }
 
-.domain-detail-tab__editor {
-  width: 100%;
-  min-height: 450px;
-  border: none;
-  outline: none;
-  resize: vertical;
-  padding: 12px 0;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--kb-text-primary);
-  background: transparent;
-  tab-size: 2;
+.domain-detail-tab__editor-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .domain-detail-tab__empty {

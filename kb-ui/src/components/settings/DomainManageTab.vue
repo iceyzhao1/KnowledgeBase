@@ -34,25 +34,16 @@
               >
                 保存
               </el-button>
-              <el-button
-                size="small"
-                type="danger"
-                @click="handleDelete"
-              >
-                删除
-              </el-button>
+              <el-button size="small" type="danger" @click="handleDelete">删除</el-button>
             </div>
           </div>
-          <textarea
-            v-model="store.domainYamlText"
-            class="domain-manage-tab__editor"
-            spellcheck="false"
-          />
+          <div class="domain-manage-tab__editor-wrap">
+            <YamlEditor v-model="store.domainYamlText" />
+          </div>
         </template>
       </div>
     </div>
 
-    <!-- Create dialog -->
     <el-dialog v-model="showCreateDialog" title="新增域" width="400px" @close="newDomainId = ''">
       <el-input v-model="newDomainId" placeholder="domain_id (snake_case)" />
       <template #footer>
@@ -67,6 +58,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useControlPlaneStore } from '@/stores/controlPlane'
+import YamlEditor from '@/components/common/YamlEditor.vue'
 
 const store = useControlPlaneStore()
 const showCreateDialog = ref(false)
@@ -92,7 +84,7 @@ async function handleDelete() {
     await store.deleteDomain(store.selectedDomainId)
     ElMessage.success('已删除')
   } catch {
-    // cancelled or error
+    // cancelled
   }
 }
 
@@ -117,6 +109,7 @@ onMounted(() => store.loadDomains())
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
   gap: 0;
+  height: calc(100vh - 220px);
   min-height: 400px;
 }
 
@@ -132,6 +125,7 @@ onMounted(() => store.loadDomains())
   justify-content: space-between;
   padding: 8px 12px;
   border-bottom: 1px solid var(--kb-border-light);
+  flex-shrink: 0;
 }
 
 .domain-manage-tab__sidebar-title {
@@ -179,6 +173,7 @@ onMounted(() => store.loadDomains())
   justify-content: space-between;
   padding: 8px 16px;
   border-bottom: 1px solid var(--kb-border-light);
+  flex-shrink: 0;
 }
 
 .domain-manage-tab__domain-label {
@@ -192,19 +187,10 @@ onMounted(() => store.loadDomains())
   gap: 8px;
 }
 
-.domain-manage-tab__editor {
+.domain-manage-tab__editor-wrap {
   flex: 1;
-  width: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-  padding: 12px 16px;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--kb-text-primary);
-  background: transparent;
-  tab-size: 2;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .domain-manage-tab__empty {

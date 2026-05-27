@@ -29,11 +29,9 @@
               保存
             </el-button>
           </div>
-          <textarea
-            v-model="store.systemConfigText"
-            class="system-config-tab__editor"
-            spellcheck="false"
-          />
+          <div class="system-config-tab__editor-wrap">
+            <YamlEditor v-model="store.systemConfigText" />
+          </div>
         </template>
       </div>
     </div>
@@ -44,6 +42,7 @@
 import { onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useControlPlaneStore } from '@/stores/controlPlane'
+import YamlEditor from '@/components/common/YamlEditor.vue'
 
 const store = useControlPlaneStore()
 
@@ -64,12 +63,14 @@ onMounted(() => store.loadSystemConfigs())
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
   gap: 0;
+  height: calc(100vh - 220px);
   min-height: 400px;
 }
 
 .system-config-tab__sidebar {
   border-right: 1px solid var(--kb-border-light);
   padding: 8px 0;
+  overflow-y: auto;
 }
 
 .system-config-tab__item {
@@ -102,6 +103,7 @@ onMounted(() => store.loadSystemConfigs())
   justify-content: space-between;
   padding: 8px 16px;
   border-bottom: 1px solid var(--kb-border-light);
+  flex-shrink: 0;
 }
 
 .system-config-tab__filename {
@@ -110,19 +112,10 @@ onMounted(() => store.loadSystemConfigs())
   color: var(--kb-text-primary);
 }
 
-.system-config-tab__editor {
+.system-config-tab__editor-wrap {
   flex: 1;
-  width: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-  padding: 12px 16px;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--kb-text-primary);
-  background: transparent;
-  tab-size: 2;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .system-config-tab__empty {
