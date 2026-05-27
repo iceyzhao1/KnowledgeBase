@@ -55,6 +55,7 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "jsonschema>=4.21" \
     "httpx>=0.27" \
     "psycopg[binary,pool]>=3.1" \
+    "pdfminer.six>=20231228" \
     "fastmcp>=2.0"
 
 # ── 从构建阶段复制产物 ──
