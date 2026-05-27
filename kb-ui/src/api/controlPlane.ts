@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const baseURL = import.meta.env.VITE_CONTROL_PLANE_API_BASE || 'http://localhost:8910'
+const baseURL = import.meta.env.VITE_CONTROL_PLANE_API_BASE || '/api/control-plane'
 const client = axios.create({ baseURL })
 
 export function useControlPlaneApi() {
