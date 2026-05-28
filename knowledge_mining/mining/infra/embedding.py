@@ -84,7 +84,7 @@ class ZhipuEmbeddingGenerator:
                 "Content-Type": "application/json",
             }
 
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=self._timeout, proxy=None) as client:
                 resp = client.post(
                     f"{self._base_url}/embeddings",
                     json=payload,
@@ -155,7 +155,7 @@ class LLMServiceEmbeddingGenerator:
             "pipeline_stage": "embedding",
         }
         try:
-            with httpx.Client(base_url=self._base_url, timeout=self._timeout) as client:
+            with httpx.Client(base_url=self._base_url, timeout=self._timeout, proxy=None) as client:
                 resp = client.post("/api/v1/models/embeddings", json=payload)
                 resp.raise_for_status()
                 data = resp.json()
