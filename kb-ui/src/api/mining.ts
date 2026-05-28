@@ -35,7 +35,7 @@ export function useMiningApi() {
 
     async getRunStages(runId: string): Promise<MiningRunStage[]> {
       const { data } = await client.get(`/api/runs/${runId}/stages`)
-      return extractItems<MiningRunStage>(data)
+      return extractItems<MiningRunStage>(data, ['stages'])
     },
 
     async getRunDocuments(runId: string, params?: {
@@ -75,7 +75,7 @@ export function useMiningApi() {
 
     async getRunDocumentStages(runId: string, docId: string): Promise<MiningRunStage[]> {
       const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/stages`)
-      return extractItems<MiningRunStage>(data)
+      return extractItems<MiningRunStage>(data, ['stages'])
     },
 
     async getRunDocumentArtifacts(runId: string, docId: string): Promise<{
