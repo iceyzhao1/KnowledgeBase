@@ -128,30 +128,21 @@ class ZhipuEmbeddingGenerator:
 
 
 class LLMServiceEmbeddingGenerator:
-    """Embedding client backed by llm_service model endpoint."""
+    """Embedding client backed by llm_service model endpoint.
+
+    Model name and dimensions are managed by llm_service — caller only sends text.
+    """
 
     def __init__(
         self,
         *,
         base_url: str = "http://localhost:8900",
-        model: str = "embedding-3",
-        dimensions: int | None = None,
         timeout: int = 60,
         knowledge_domain: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._model = model
-        self._dimensions = dimensions
         self._timeout = timeout
         self._knowledge_domain = knowledge_domain
-
-    @property
-    def model_name(self) -> str:
-        return self._model
-
-    @property
-    def dimensions(self) -> int | None:
-        return self._dimensions
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -159,13 +150,10 @@ class LLMServiceEmbeddingGenerator:
 
         payload: dict[str, Any] = {
             "input": texts,
-            "model": self._model,
             "caller_service": "mining",
             "knowledge_domain": self._knowledge_domain or "unknown",
             "pipeline_stage": "embedding",
         }
-        if self._dimensions is not None:
-            payload["dimensions"] = self._dimensions
         try:
             with httpx.Client(base_url=self._base_url, timeout=self._timeout) as client:
                 resp = client.post("/api/v1/models/embeddings", json=payload)

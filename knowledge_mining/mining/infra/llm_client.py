@@ -31,17 +31,15 @@ class LlmClient:
     overhead during high-frequency polling (poll_all).
     """
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: int = 60, bypass_proxy: bool = False) -> None:
+    def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: int = 60) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
-        self._bypass_proxy = bypass_proxy
         self._client: httpx.Client | None = None
 
     def _get_client(self, timeout: int | None = None) -> httpx.Client:
         """Get or create a reusable httpx.Client."""
         if self._client is None or self._client.is_closed:
-            transport = httpx.HTTPTransport() if self._bypass_proxy else None
-            self._client = httpx.Client(transport=transport, timeout=timeout or self._timeout)
+            self._client = httpx.Client(timeout=timeout or self._timeout)
         return self._client
 
     def close(self) -> None:

@@ -7,7 +7,7 @@ from typing import Callable
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from llm_service.config import load_llm_config, dig
+from llm_service.config import load_llm_config, dig, resolve_active_model_config
 from llm_service.db import LlmRuntimeDB
 from llm_service.pg_config import load_db_config
 from llm_service.pg_schema import ensure_schema
@@ -74,13 +74,15 @@ def create_app(
         )
 
         # Providers — all params from config dict, no defaults
+        # Resolve multi-model: if provider.models exists, merge active_model overrides
+        active_provider = resolve_active_model_config(cfg)
         provider = _factory() if _factory else OpenAICompatibleProvider(
-            base_url=dig(cfg, "provider", "base_url"),
-            api_key=dig(cfg, "provider", "api_key"),
-            model=dig(cfg, "provider", "model"),
-            headers={**(dig(cfg, "provider", "headers") or {}), **(dig(cfg, "model", "extra_headers") or {})},
-            timeout=dig(cfg, "provider", "timeout"),
-            bypass_proxy=dig(cfg, "provider", "bypass_proxy"),
+            base_url=active_provider["base_url"],
+            api_key=active_provider["api_key"],
+            model=active_provider.get("model", active_provider.get("active_model", "")),
+            headers=active_provider.get("headers") or {},
+            timeout=active_provider.get("timeout", 30),
+            bypass_proxy=active_provider.get("bypass_proxy", False),
         )
         model_provider = (
             model_provider_factory()
@@ -92,9 +94,9 @@ def create_app(
                 rerank_api_key=dig(cfg, "rerank", "api_key"),
                 rerank_url=dig(cfg, "rerank", "base_url"),
                 rerank_model=dig(cfg, "rerank", "model"),
-                timeout=dig(cfg, "model", "timeout"),
-                bypass_proxy=dig(cfg, "model", "bypass_proxy"),
-                extra_headers=dig(cfg, "model", "extra_headers") or {},
+                timeout=dig(cfg, "embedding", "timeout"),
+                bypass_proxy=dig(cfg, "embedding", "bypass_proxy"),
+                extra_headers=dig(cfg, "embedding", "headers") or {},
             )
         )
 
@@ -102,11 +104,15 @@ def create_app(
         from llm_service.runtime.template_registry import TemplateRegistry
         templates = TemplateRegistry(db=db, cache_ttl=dig(cfg, "template", "cache_ttl"))
 
+        # Embedding dimensions: optional in YAML, None means don't pass to provider
+        _embedding_dimensions = cfg.get("embedding", {}).get("dimensions")
+
         svc = LLMService(db=db, provider=provider, config=cfg, model_provider=model_provider, templates=templates)
         model_svc = ModelService(
             model_provider, db=db,
             default_embedding_model=dig(cfg, "embedding", "model"),
             default_rerank_model=dig(cfg, "rerank", "model"),
+            default_embedding_dimensions=_embedding_dimensions,
         )
         app.state.llm_service = svc
         app.state.model_service = model_svc

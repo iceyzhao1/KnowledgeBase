@@ -47,7 +47,8 @@ class LLMService:
         self._model_provider = model_provider
         self._provider = provider
         self._provider_name = getattr(provider, 'provider_name', 'unknown')
-        self._default_model = getattr(provider, 'default_model', dig(config, "provider", "model"))
+        # For multi-model: use provider.default_model (resolved at construction)
+        self._default_model = getattr(provider, 'default_model', config.get("provider", {}).get("model", ""))
 
     # ------------------------------------------------------------------
     # Template resolution

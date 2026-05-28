@@ -115,11 +115,8 @@ def run(
     phase1_only: bool = False,
     publish_on_partial_failure: bool = False,
     llm_base_url: str | None = None,
-    llm_bypass_proxy: bool | None = None,
     embedding_api_key: str | None = None,
-    embedding_model: str | None = None,
     embedding_base_url: str | None = None,
-    embedding_dimensions: int | None = None,
     max_workers: int | None = None,
     domain: str | None = None,
     domain_pack: str | None = None,
@@ -134,11 +131,8 @@ def run(
         phase1_only: If True, stop after document-level processing (no build/publish)
         publish_on_partial_failure: If True, publish even when some docs failed.
         llm_base_url: LLM service URL (e.g. "http://localhost:8900"). None = from env.
-        llm_bypass_proxy: If True, bypass system proxy for LLM calls. None = from env.
         embedding_api_key: Embedding API key (only for direct Zhipu fallback).
-        embedding_model: Embedding model name. None = from env.
         embedding_base_url: Direct embedding API base URL (fallback). None = from env.
-        embedding_dimensions: Embedding vector dimensions. None = from env.
         domain: Domain ID to load from registry. None = from env.
         domain_pack: (Deprecated) Use domain instead.
         channel: Release channel. None = from registry default_channel.
@@ -163,10 +157,6 @@ def run(
 
     # Resolve all None params from config (explicit args take precedence)
     llm_base_url = llm_base_url or cfg.llm_service_url
-    llm_bypass_proxy = llm_bypass_proxy if llm_bypass_proxy is not None else cfg.mining_llm_bypass_proxy
-    embedding_model = embedding_model or cfg.embedding_model
-    embedding_base_url = embedding_base_url or ""
-    embedding_dimensions = embedding_dimensions or cfg.embedding_dimensions
     max_workers = max_workers or cfg.max_workers
     domain = domain or cfg.domain
 
@@ -198,11 +188,11 @@ def run(
     run_id = uuid.uuid4().hex
 
     # LLM integration: create question generator if URL provided
-    llm_services = _init_llm(llm_base_url, llm_bypass_proxy, profile, knowledge_domain=profile.domain_id)
+    llm_services = _init_llm(llm_base_url, profile, knowledge_domain=profile.domain_id)
 
     # Embedding integration: prefer llm_service, fallback to direct Zhipu
     embedding_generator = _init_embedding(
-        llm_base_url, embedding_api_key, embedding_model, embedding_base_url, embedding_dimensions,
+        llm_base_url, embedding_api_key, embedding_base_url,
         knowledge_domain=profile.domain_id,
     )
 
@@ -295,7 +285,6 @@ def publish(
 
 def _init_llm(
     llm_base_url: str | None,
-    bypass_proxy: bool = False,
     profile: DomainProfile | None = None,
     *,
     knowledge_domain: str | None = None,
@@ -312,7 +301,7 @@ def _init_llm(
     from knowledge_mining.mining.infra.llm_templates import build_templates_from_profile
     from knowledge_mining.mining.stages.retrieval_units import LlmQuestionGenerator
 
-    client = LlmClient(base_url=llm_base_url, bypass_proxy=bypass_proxy)
+    client = LlmClient(base_url=llm_base_url)
     if not client.health_check():
         logger.warning("LLM service at %s unreachable, proceeding without LLM", llm_base_url)
         return None
@@ -327,7 +316,7 @@ def _init_llm(
 
     result: dict[str, Any] = {
         "question_generator": LlmQuestionGenerator(
-            base_url=llm_base_url, bypass_proxy=bypass_proxy, profile=profile,
+            base_url=llm_base_url, profile=profile,
             knowledge_domain=knowledge_domain,
         ),
     }
@@ -337,7 +326,6 @@ def _init_llm(
         from knowledge_mining.mining.stages.enrich import LlmEnricher
         result["enricher"] = LlmEnricher(
             base_url=llm_base_url,
-            bypass_proxy=bypass_proxy,
             profile=profile,
             knowledge_domain=knowledge_domain,
         )
@@ -348,7 +336,7 @@ def _init_llm(
     try:
         from knowledge_mining.mining.stages.relations import DiscourseRelationBuilder
         result["discourse_relation_builder"] = DiscourseRelationBuilder(
-            base_url=llm_base_url, bypass_proxy=bypass_proxy,
+            base_url=llm_base_url,
             knowledge_domain=knowledge_domain, profile=profile,
         )
     except (ImportError, Exception):
@@ -359,7 +347,7 @@ def _init_llm(
         try:
             from knowledge_mining.mining.stages.retrieval_units import LLMContextualizer
             result["contextualizer"] = LLMContextualizer(
-                base_url=llm_base_url, bypass_proxy=bypass_proxy,
+                base_url=llm_base_url,
                 knowledge_domain=knowledge_domain,
             )
         except (ImportError, Exception):
@@ -371,23 +359,19 @@ def _init_llm(
 def _init_embedding(
     llm_base_url: str | None,
     api_key: str | None,
-    model: str,
     base_url: str,
-    dimensions: int | None,
     *,
     knowledge_domain: str | None = None,
 ) -> Any | None:
     """Prefer shared llm_service embedding endpoint, fallback to direct Zhipu client.
 
-    All params are resolved by the caller (run()) from MiningConfig — no defaults here.
+    Model name and dimensions are managed by llm_service — caller does not pass them.
     """
     if llm_base_url:
         from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
 
         return LLMServiceEmbeddingGenerator(
             base_url=llm_base_url,
-            model=model,
-            dimensions=dimensions,
             knowledge_domain=knowledge_domain,
         )
 
@@ -397,9 +381,7 @@ def _init_embedding(
     from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
     return ZhipuEmbeddingGenerator(
         api_key=api_key,
-        model=model,
         base_url=base_url,
-        dimensions=dimensions,
     )
 
 

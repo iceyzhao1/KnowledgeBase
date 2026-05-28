@@ -29,12 +29,14 @@ class ModelService:
     """Synchronous-style model facade exposed over HTTP for mining/serving."""
 
     def __init__(self, provider: ModelProviderProtocol, db: LlmRuntimeDB | None = None, *,
-                 default_embedding_model: str = "embedding-3",
-                 default_rerank_model: str = ""):
+                 default_embedding_model: str = "",
+                 default_rerank_model: str = "",
+                 default_embedding_dimensions: int | None = None):
         self._provider = provider
         self._db = db
         self._default_embedding_model = default_embedding_model
         self._default_rerank_model = default_rerank_model
+        self._default_embedding_dimensions = default_embedding_dimensions
 
     async def _record_sync_task(
         self,
@@ -131,13 +133,15 @@ class ModelService:
     async def embed(self, body: EmbeddingRequest) -> EmbeddingResponse:
         t0 = datetime.now(timezone.utc)
         model = body.model or self._default_embedding_model
+        # Caller doesn't pass → use YAML config; YAML doesn't configure → don't pass to provider
+        dimensions = body.dimensions or self._default_embedding_dimensions  # may be None
         texts = body.input
-        input_json = {"texts": texts, "model": model, "dimensions": body.dimensions}
+        input_json = {"texts": texts, "model": model, "dimensions": dimensions}
         try:
             raw = await self._provider.embed(
                 texts,
                 model=model,
-                dimensions=body.dimensions,
+                dimensions=dimensions,
             )
             latency = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
             usage = raw.get("usage") or {}

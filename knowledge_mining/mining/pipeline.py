@@ -584,8 +584,8 @@ def db_write_stage(ctx: DocumentContext, cfg: PipelineConfig) -> DocumentContext
                     asset_db.insert_retrieval_embedding(
                         embedding_id=uuid.uuid4().hex,
                         retrieval_unit_id=ru_id_map[unit_key],
-                        embedding_model=cfg.embedding_generator.model_name,
-                        embedding_provider="zhipu",
+                        embedding_model="managed",
+                        embedding_provider="llm_service",
                         text_kind="full",
                         embedding_dim=len(embedding_vec),
                         embedding_vector=_json.dumps(embedding_vec),

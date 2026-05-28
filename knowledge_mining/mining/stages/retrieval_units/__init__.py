@@ -40,9 +40,9 @@ class LlmQuestionGenerator:
     Results are capped at MAX_QUESTIONS_PER_SEGMENT.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, profile: DomainProfile | None = None, knowledge_domain: str | None = None) -> None:
+    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, profile: DomainProfile | None = None, knowledge_domain: str | None = None) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
-        self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
+        self._client = LlmClient(base_url=base_url)
         self._timeout = timeout
         self._last_task_ids: dict[str, str] = {}
         self._profile = profile
@@ -128,9 +128,9 @@ class LLMContextualizer:
     In v1.3, the context is folded into raw_text.search_text, NOT a separate unit.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, knowledge_domain: str | None = None) -> None:
+    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, knowledge_domain: str | None = None) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
-        self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
+        self._client = LlmClient(base_url=base_url)
         self._timeout = timeout
         self._last_task_ids: dict[str, str] = {}
         self._knowledge_domain = knowledge_domain

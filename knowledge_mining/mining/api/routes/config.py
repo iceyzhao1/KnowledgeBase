@@ -17,8 +17,6 @@ async def get_config(request: Request) -> dict:
     return {
         "domain_pack": mining_cfg.domain_pack,
         "max_workers": mining_cfg.max_workers,
-        "embedding_model": mining_cfg.embedding_model,
-        "embedding_dimensions": mining_cfg.embedding_dimensions,
         "llm_service_url": mining_cfg.llm_service_url,
         "database": {
             "host": cfg.pg_host,

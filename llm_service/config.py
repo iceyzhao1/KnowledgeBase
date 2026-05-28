@@ -33,13 +33,15 @@ _REQUIRED_PATHS: list[tuple[str, ...]] = [
     ("embedding", "base_url"),
     ("embedding", "api_key"),
     ("embedding", "model"),
-    ("embedding", "dimensions"),
+    ("embedding", "timeout"),
+    ("embedding", "bypass_proxy"),
+    ("embedding", "headers"),
     ("rerank", "base_url"),
     ("rerank", "api_key"),
     ("rerank", "model"),
-    ("model", "timeout"),
-    ("model", "bypass_proxy"),
-    ("model", "extra_headers"),
+    ("rerank", "timeout"),
+    ("rerank", "bypass_proxy"),
+    ("rerank", "headers"),
     ("worker", "concurrency"),
     ("worker", "poll_interval"),
     ("task", "default_max_attempts"),
@@ -60,6 +62,42 @@ def dig(data: dict, *keys: str) -> Any:
             raise ValueError(f"Missing config field: {'.'.join(keys)}")
         node = node[k]
     return node
+
+
+def dig_optional(data: dict, *keys: str, default: Any = None) -> Any:
+    """Walk nested dict by *keys*; return *default* on miss."""
+    node: Any = data
+    for k in keys:
+        if not isinstance(node, dict) or k not in node:
+            return default
+        node = node[k]
+    return node
+
+
+def resolve_active_model_config(cfg: dict) -> dict:
+    """Resolve the effective provider config considering multi-model setup.
+
+    If ``provider.models`` exists and ``provider.active_model`` is set,
+    merge the active model's overrides into the base provider config.
+    Otherwise return the provider config as-is (single-model mode).
+    """
+    provider_cfg = cfg.get("provider", {})
+    models = provider_cfg.get("models")
+    active = provider_cfg.get("active_model")
+
+    if not models or not active:
+        # Single-model mode — provider.model is the only model
+        return dict(provider_cfg)
+
+    model_cfg = models.get(active)
+    if not model_cfg:
+        logger.warning("active_model '%s' not found in provider.models, using base config", active)
+        return dict(provider_cfg)
+
+    # Merge: model_cfg overrides base provider_cfg
+    merged = dict(provider_cfg)
+    merged.update(model_cfg)
+    return merged
 
 
 def _validate_required(data: dict) -> None:

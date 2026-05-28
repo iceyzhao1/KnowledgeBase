@@ -46,13 +46,12 @@ class DiscourseRelationBuilder:
     def __init__(
         self,
         base_url: str = "http://localhost:8900",
-        bypass_proxy: bool = False,
         window_size: int | None = None,
         knowledge_domain: str | None = None,
         profile: "DomainProfile | None" = None,
     ) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
-        self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
+        self._client = LlmClient(base_url=base_url)
         self._knowledge_domain = knowledge_domain
         # Read thresholds from profile when available, else use constructor arg or default
         rp = profile.retrieval_policy if profile else None

@@ -62,7 +62,7 @@ class Worker:
         provider: ProviderProtocol,
         model_provider: ModelProviderProtocol | None = None,
         templates: TemplateRegistry | None = None,
-        concurrency: int = 4,
+        concurrency: int = 2,
         poll_interval: float = 1.0,
         llm_service: LLMService | None = None,
     ):

@@ -20,21 +20,16 @@ class MiningConfig(BaseSettings):
 
     Env vars:
         LLM_SERVICE_URL:        llm_service address (default: http://localhost:8900)
-        EMBEDDING_MODEL:        model name sent to llm_service embedding endpoint
-        EMBEDDING_DIMENSIONS:   embedding vector dimensions
-        MINING_LLM_BYPASS_PROXY: bypass system proxy for LLM calls
         DOMAIN:                 default domain ID
         DOMAIN_PACK:            (Deprecated) use DOMAIN instead
         MAX_WORKERS:            max concurrent workers for streaming pipeline
+
+    Model-level params (embedding_model, embedding_dimensions, bypass_proxy)
+    are managed by llm_service. Mining no longer configures them.
     """
 
     # LLM Service
     llm_service_url: str = "http://localhost:8900"
-    mining_llm_bypass_proxy: bool = False
-
-    # Embedding (via llm_service)
-    embedding_model: str = "embedding-3"
-    embedding_dimensions: int | None = None
 
     # Pipeline defaults
     domain: str = "cloud_core_network"

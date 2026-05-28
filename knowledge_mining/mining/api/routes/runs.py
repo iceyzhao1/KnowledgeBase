@@ -29,8 +29,6 @@ class CreateRunRequest(BaseModel):
     publish_on_partial_failure: bool = False
     llm_base_url: str | None = None
     embedding_api_key: str | None = None
-    embedding_model: str | None = None
-    embedding_dimensions: int | None = None
 
 
 class RunResponse(BaseModel):
@@ -75,8 +73,6 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
                 publish_on_partial_failure=body.publish_on_partial_failure,
                 llm_base_url=llm_base_url,
                 embedding_api_key=embedding_api_key,
-                embedding_model=body.embedding_model,
-                embedding_dimensions=body.embedding_dimensions,
                 max_workers=body.max_workers,
                 domain=resolved_domain,
             )
