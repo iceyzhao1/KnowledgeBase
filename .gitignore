@@ -44,6 +44,7 @@
 !pyproject.toml
 !deploy-build.sh
 !deploy-server.sh
+!reset_db.py
 
 # === But still exclude these within allowlisted dirs ===
 *.sqlite

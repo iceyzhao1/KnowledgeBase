@@ -1,0 +1,164 @@
+"""
+CoreMasterKB 数据库重置脚本
+- 读取 .env 中的 PG 连接信息
+- DROP 所有业务表、索引、触发器、函数
+- 按 databases/ 下的 SQL 文件重新建表
+
+用法：python reset_db.py
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+# ── 加载 .env ──────────────────────────────────────────────
+REPO_ROOT = Path(__file__).resolve().parent
+ENV_FILE = REPO_ROOT / ".env"
+
+if not ENV_FILE.exists():
+    print(f"[ERROR] .env not found: {ENV_FILE}")
+    sys.exit(1)
+
+# 手动解析 .env（不依赖 pydantic-settings，减少依赖）
+_env = {}
+for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line or line.startswith("#"):
+        continue
+    if "=" in line:
+        k, v = line.split("=", 1)
+        _env[k.strip()] = v.strip()
+
+PG_HOST = _env.get("PG_HOST", "")
+PG_PORT = _env.get("PG_PORT", "5432")
+PG_DBNAME = _env.get("PG_DBNAME", "")
+PG_USER = _env.get("PG_USER", "")
+PG_PASSWORD = _env.get("PG_PASSWORD", "")
+PG_SSLMODE = _env.get("PG_SSLMODE", "disable")
+PG_GSSENCMODE = _env.get("PG_GSSENCMODE", "disable")
+
+if not all([PG_HOST, PG_DBNAME, PG_USER]):
+    print("[ERROR] PG_HOST / PG_DBNAME / PG_USER must be set in .env")
+    sys.exit(1)
+
+CONNINFO = (
+    f"host={PG_HOST} port={PG_PORT} dbname={PG_DBNAME} "
+    f"user={PG_USER} password={PG_PASSWORD} "
+    f"sslmode={PG_SSLMODE} gssencmode={PG_GSSENCMODE}"
+)
+
+# ── 所有要 DROP 的表（按依赖顺序，子表先删） ─────────────────
+ALL_TABLES = [
+    # agent_llm_runtime（LLM 服务）
+    "agent_llm_events",
+    "agent_llm_results",
+    "agent_llm_attempts",
+    "agent_llm_requests",
+    "agent_llm_tasks",
+    "agent_llm_prompt_templates",
+    "agent_llm_model_calls",
+    # mining_runtime（挖掘服务）
+    "mining_run_stage_events",
+    "mining_run_documents",
+    "mining_runs",
+    # asset_core（资产核心）
+    "asset_retrieval_embeddings",
+    "asset_retrieval_units",
+    "asset_raw_segment_relations",
+    "asset_raw_segments",
+    "asset_build_document_snapshots",
+    "asset_publish_releases",
+    "asset_builds",
+    "asset_document_snapshot_links",
+    "asset_document_snapshots",
+    "asset_documents",
+    "asset_source_batches",
+]
+
+# 要 DROP 的触发器函数
+ALL_FUNCTIONS = [
+    "asset_retrieval_units_search_vector_update()",
+    "populate_embedding_vector_vec()",
+]
+
+# 要 DROP 的触发器
+ALL_TRIGGERS = [
+    ("asset_retrieval_units", "trg_asset_retrieval_units_search_vector"),
+    ("asset_retrieval_embeddings", "trg_populate_embedding_vector"),
+]
+
+# ── 要执行的建表 SQL 文件（按顺序） ─────────────────────────
+SCHEMA_FILES = [
+    REPO_ROOT / "databases" / "agent_llm_runtime" / "schemas" / "002_agent_llm_runtime_postgresql.sql",
+    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "002_mining_runtime_postgresql.sql",
+    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "003_mining_runtime_domain.sql",
+    REPO_ROOT / "databases" / "asset_core" / "schemas" / "002_asset_core_postgresql.sql",
+]
+
+
+def drop_all(cur):
+    """删除所有触发器、表、函数"""
+    print("\n=== Step 1: DROP existing objects ===")
+
+    # 1. DROP triggers
+    for table, trigger in ALL_TRIGGERS:
+        cur.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
+        print(f"  DROP TRIGGER {trigger} ON {table}")
+
+    # 2. DROP tables（CASCADE 会连带删索引）
+    for t in ALL_TABLES:
+        cur.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
+        print(f"  DROP TABLE {t}")
+
+    # 3. DROP functions
+    for fn in ALL_FUNCTIONS:
+        cur.execute(f"DROP FUNCTION IF EXISTS {fn} CASCADE")
+        print(f"  DROP FUNCTION {fn}")
+
+    # 4. DROP extensions if needed (vector is usually kept)
+    # Uncomment if you want a full clean:
+    # cur.execute("DROP EXTENSION IF EXISTS vector CASCADE")
+    # cur.execute("DROP EXTENSION IF EXISTS pg_trgm CASCADE")
+
+    print("  Done.")
+
+
+def create_all(cur):
+    """按顺序执行 schema SQL 文件"""
+    print("\n=== Step 2: CREATE tables from schema files ===")
+    for sql_file in SCHEMA_FILES:
+        if not sql_file.exists():
+            print(f"  [WARN] File not found, skipping: {sql_file}")
+            continue
+        sql = sql_file.read_text(encoding="utf-8")
+        cur.execute(sql)
+        print(f"  Executed: {sql_file.name}")
+    print("  Done.")
+
+
+def main():
+    try:
+        import psycopg
+    except ImportError:
+        print("[ERROR] psycopg is required. Install with: pip install psycopg[binary]")
+        sys.exit(1)
+
+    print(f"Connecting to: {PG_HOST}:{PG_PORT}/{PG_DBNAME} (user={PG_USER})")
+    print("WARNING: This will DELETE ALL DATA in the tables listed above!")
+    confirm = input("Type 'YES' to proceed: ")
+    if confirm != "YES":
+        print("Aborted.")
+        sys.exit(0)
+
+    with psycopg.connect(CONNINFO, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            drop_all(cur)
+            create_all(cur)
+
+    print("\n=== Database reset complete ===")
+    print("All tables dropped and recreated from latest schema files.")
+
+
+if __name__ == "__main__":
+    main()
