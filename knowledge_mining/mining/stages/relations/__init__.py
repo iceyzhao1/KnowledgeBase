@@ -31,10 +31,10 @@ class DiscourseRelationBuilder:
     """LLM-driven discourse relation builder using RST analysis.
 
     Strategy (EVO-18 Method C):
-    1. Pre-filter candidate pairs using structural relations (same_section, adjacent)
-    2. Sliding window of 10-20 segments sent to LLM for batch analysis
+    1. Filter out heading-only segments
+    2. Sliding window of N segments sent to LLM for batch analysis
     3. LLM outputs relation_type + confidence for each pair
-    4. Results merged into the same asset_raw_segment_relations table
+    4. Results filtered by RST whitelist and min_confidence threshold
     """
 
     stage_name = "discourse_relations"
