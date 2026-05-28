@@ -1,0 +1,25 @@
+domains:
+  cloud_core_network:
+    display_name: Cloud Core Network
+    enabled: true
+    default_channel: prod
+    scenario_pack: cloud_core_network
+    database:
+      host: 121.89.90.178
+      port: 5432
+      dbname: coremasterkb
+      user: kb_user
+      password: nis123qwe
+      sslmode: disable
+      gssencmode: disable
+      pool_min: 2
+      pool_max: 10
+    services:
+      mining_url: http://localhost:8901
+      serving_url: http://localhost:8081
+      llm_url: http://localhost:8900
+  generic:
+    display_name: Generic
+    enabled: true
+    default_channel: prod
+    scenario_pack: generic

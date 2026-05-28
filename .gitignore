@@ -79,5 +79,4 @@ agent_serving_zdy/target/
 # === Docker build artifacts ===
 cmkb.tar
 
-# === Main control service config (runtime data, not tracked) ===
-main_control_service/config/
+# === Main control service config ===
