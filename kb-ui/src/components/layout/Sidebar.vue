@@ -24,7 +24,7 @@
     <div class="sidebar__footer">
       <div class="sidebar__domain">
         <span class="sidebar__domain-dot" />
-        <span class="sidebar__domain-name">{{ domainStore.currentDomain }}</span>
+        <span class="sidebar__domain-name">{{ domainStore.currentDomainInfo?.display_name || domainStore.currentDomain }}</span>
       </div>
     </div>
   </aside>

@@ -1,85 +1,81 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { DomainConfig, DomainMap } from '@/types'
+import type { DomainInfo } from '@/types'
+import { useControlPlaneApi } from '@/api/controlPlane'
 
-const STORAGE_KEY = 'kb-ui-domains'
-
-const DEFAULT_DOMAINS: DomainMap = {
-  cloud_core_network: {
-    miningApi: '/api/mining',
-    servingApi: '/api/serving',
-    llmApi: '/api/llm',
-    active: true,
-  },
-  ip_network: {
-    miningApi: '/api/mining',
-    servingApi: '/api/serving',
-    llmApi: '/api/llm',
-    active: true,
-  },
-  generic: {
-    miningApi: '/api/mining',
-    servingApi: '/api/serving',
-    llmApi: '/api/llm',
-    active: false,
-  },
-}
-
-function loadDomains(): DomainMap {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) return JSON.parse(stored)
-  } catch { /* ignore */ }
-  return { ...DEFAULT_DOMAINS }
-}
+const STORAGE_KEY = 'kb-ui-current-domain'
 
 export const useDomainStore = defineStore('domain', () => {
-  const domains = ref<DomainMap>(loadDomains())
+  const domains = ref<DomainInfo[]>([])
   const currentDomain = ref<string>(
-    Object.keys(domains.value).find(k => domains.value[k].active) || Object.keys(domains.value)[0]
+    localStorage.getItem(STORAGE_KEY) || ''
+  )
+  const loading = ref(false)
+  const loaded = ref(false)
+  const error = ref('')
+
+  const currentDomainInfo = computed<DomainInfo | undefined>(() =>
+    domains.value.find(d => d.domain_id === currentDomain.value)
   )
 
-  const currentConfig = computed<DomainConfig>(() => domains.value[currentDomain.value])
-  const activeDomains = computed(() =>
-    Object.entries(domains.value)
-      .filter(([, cfg]) => cfg.active)
-      .map(([name]) => name)
+  const activeDomains = computed<string[]>(() =>
+    domains.value.filter(d => d.enabled).map(d => d.domain_id)
   )
 
-  function switchDomain(domain: string) {
-    if (domains.value[domain]) {
-      currentDomain.value = domain
+  const enabledDomains = computed<DomainInfo[]>(() =>
+    domains.value.filter(d => d.enabled)
+  )
+
+  async function fetchDomains() {
+    if (loaded.value) return
+    loading.value = true
+    error.value = ''
+    try {
+      const api = useControlPlaneApi()
+      domains.value = await api.getDomains()
+      loaded.value = true
+
+      // Auto-select first enabled domain if current is invalid
+      const isValid = domains.value.some(
+        d => d.domain_id === currentDomain.value && d.enabled
+      )
+      if (!isValid) {
+        const first = enabledDomains.value[0]
+        if (first) {
+          currentDomain.value = first.domain_id
+          localStorage.setItem(STORAGE_KEY, first.domain_id)
+        }
+      }
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Failed to load domains'
+    } finally {
+      loading.value = false
     }
   }
 
-  function updateDomain(name: string, config: DomainConfig) {
-    domains.value = { ...domains.value, [name]: config }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(domains.value))
-  }
-
-  function addDomain(name: string, config: DomainConfig) {
-    domains.value = { ...domains.value, [name]: config }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(domains.value))
-  }
-
-  function removeDomain(name: string) {
-    const updated = { ...domains.value }
-    delete updated[name]
-    domains.value = updated
-    if (currentDomain.value === name) {
-      currentDomain.value = Object.keys(updated)[0] || ''
+  function switchDomain(domainId: string) {
+    if (domains.value.some(d => d.domain_id === domainId)) {
+      currentDomain.value = domainId
+      localStorage.setItem(STORAGE_KEY, domainId)
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(domains.value))
+  }
+
+  async function refreshDomains() {
+    loaded.value = false
+    await fetchDomains()
   }
 
   return {
     domains,
     currentDomain,
-    currentConfig,
+    currentDomainInfo,
     activeDomains,
+    enabledDomains,
+    loading,
+    loaded,
+    error,
+    fetchDomains,
     switchDomain,
-    updateDomain,
-    addDomain,
-    removeDomain,
+    refreshDomains,
   }
 })

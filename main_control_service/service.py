@@ -111,6 +111,17 @@ class YamlConfigService:
             **{k: v for k, v in entry.items() if k not in ("display_name", "enabled", "default_channel", "scenario_pack")},
         }
 
+    def get_domain_services(self, domain_id: str) -> dict[str, Any]:
+        """Return the services dict for a domain (for proxy routing)."""
+        registry = self._load_domain_registry()
+        entry = registry.get(domain_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="domain_not_found")
+        services = entry.get("services")
+        if not services:
+            raise HTTPException(status_code=502, detail=f"No services configured for domain {domain_id}")
+        return services
+
     def get_domain_yaml(self, domain_id: str) -> str:
         """Return raw YAML text for a single domain entry from the registry."""
         registry = self._load_domain_registry()

@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useDomainStore } from '@/stores/domain'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -74,6 +75,16 @@ const router = createRouter({
       ],
     },
   ],
+})
+
+// Load domain list from main_control_service before first navigation
+let domainsInitialized = false
+router.beforeEach(async () => {
+  if (!domainsInitialized) {
+    domainsInitialized = true
+    const domainStore = useDomainStore()
+    await domainStore.fetchDomains()
+  }
 })
 
 export default router

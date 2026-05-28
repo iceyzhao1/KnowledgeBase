@@ -1,11 +1,10 @@
-export interface DomainConfig {
-  miningApi: string
-  servingApi: string
-  llmApi: string
-  active: boolean
+export interface DomainInfo {
+  domain_id: string
+  display_name: string
+  enabled: boolean
+  default_channel: string
+  scenario_pack_ref: string
 }
-
-export type DomainMap = Record<string, DomainConfig>
 
 
 export interface HealthStatus {

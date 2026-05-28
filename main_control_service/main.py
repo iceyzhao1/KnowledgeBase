@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from main_control_service.config import MainControlSettings
+from main_control_service.proxy import create_proxy_client, shutdown_proxy_client, proxy_request
 from main_control_service.service import YamlConfigService
 
 
@@ -23,7 +24,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.main_control = service
-        yield
+        # Proxy client — shared across all reverse-proxy requests
+        client = create_proxy_client()
+        try:
+            yield
+        finally:
+            await shutdown_proxy_client()
 
     app = FastAPI(
         title="Main Control Service",
@@ -125,6 +131,19 @@ def create_app(
         text = body.decode("utf-8")
         service.update_scenario_yaml(domain_id, text)
         return {"ok": True}
+
+    # ------------------------------------------------------------------
+    # Reverse proxy — domain-aware routing to backend services
+    # ------------------------------------------------------------------
+
+    @app.api_route(
+        "/api/v1/proxy/{domain_id}/{service}/{path:path}",
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    )
+    async def reverse_proxy(domain_id: str, service: str, path: str, request: Request) -> Response:
+        svc: YamlConfigService = request.app.state.main_control  # type: ignore[attr-defined]
+        domain_services = svc.get_domain_services(domain_id)
+        return await proxy_request(request, domain_id, service, path, domain_services)
 
     return app
 

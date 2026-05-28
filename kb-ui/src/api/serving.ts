@@ -4,7 +4,9 @@ import { useDomainStore } from '@/stores/domain'
 
 export function useServingApi() {
   const domain = useDomainStore()
-  const client = axios.create({ baseURL: domain.currentConfig.servingApi })
+  const client = axios.create({
+    baseURL: `/api/control-plane/api/v1/proxy/${domain.currentDomain}/serving`,
+  })
 
   return {
     async getHealth(): Promise<HealthStatus> {

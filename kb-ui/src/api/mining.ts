@@ -22,7 +22,9 @@ function extractOne<T>(data: unknown): T {
 
 export function useMiningApi() {
   const domain = useDomainStore()
-  const client = axios.create({ baseURL: domain.currentConfig.miningApi })
+  const client = axios.create({
+    baseURL: `/api/control-plane/api/v1/proxy/${domain.currentDomain}/mining`,
+  })
 
   return {
     // Health

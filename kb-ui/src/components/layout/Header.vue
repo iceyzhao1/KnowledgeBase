@@ -14,10 +14,10 @@
         @change="onDomainChange"
       >
         <el-option
-          v-for="name in domainStore.activeDomains"
-          :key="name"
-          :label="name"
-          :value="name"
+          v-for="d in domainStore.enabledDomains"
+          :key="d.domain_id"
+          :label="d.display_name"
+          :value="d.domain_id"
         />
       </el-select>
 

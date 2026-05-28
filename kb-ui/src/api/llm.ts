@@ -12,7 +12,10 @@ function extractItems<T>(data: unknown): T[] {
 
 export function useLlmApi() {
   const domain = useDomainStore()
-  const client = axios.create({ baseURL: domain.currentConfig.llmApi })
+  // All requests go through main_control_service reverse proxy
+  const client = axios.create({
+    baseURL: `/api/control-plane/api/v1/proxy/${domain.currentDomain}/llm`,
+  })
 
   return {
     async getHealth(): Promise<HealthStatus> {
@@ -22,7 +25,6 @@ export function useLlmApi() {
 
     async getStats(params?: { domain?: string; service?: string }): Promise<LlmTaskStats> {
       const { data } = await client.get('/api/v1/stats', { params })
-      // API returns { success: true, data: { ... } }
       const resp = data as Record<string, unknown>
       return (resp.data ?? resp) as LlmTaskStats
     },

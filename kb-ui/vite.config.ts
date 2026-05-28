@@ -23,17 +23,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api/mining': {
-        target: 'http://localhost:8901',
-        rewrite: (path) => path.replace(/^\/api\/mining/, ''),
-      },
-      '/api/serving': {
-        target: 'http://localhost:8081',
-        rewrite: (path) => path.replace(/^\/api\/serving/, ''),
-      },
-      '/api/llm': {
-        target: 'http://localhost:8900',
-        rewrite: (path) => path.replace(/^\/api\/llm/, ''),
+      '/api/control-plane': {
+        target: 'http://localhost:8910',
+        rewrite: (path) => path.replace(/^\/api\/control-plane/, ''),
       },
     },
   },
