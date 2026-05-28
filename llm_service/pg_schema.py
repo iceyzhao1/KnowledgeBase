@@ -25,12 +25,12 @@ def ensure_database(cfg: LlmDbConfig) -> None:
     conn = psycopg.connect(cfg.maintenance_conninfo, autocommit=True)
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (cfg.pg_dbname,))
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (cfg.dbname,))
             if cur.fetchone() is None:
-                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(cfg.pg_dbname)))
-                logger.info("Created database %s", cfg.pg_dbname)
+                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(cfg.dbname)))
+                logger.info("Created database %s", cfg.dbname)
             else:
-                logger.info("Database %s already exists", cfg.pg_dbname)
+                logger.info("Database %s already exists", cfg.dbname)
     finally:
         conn.close()
 

@@ -175,6 +175,7 @@ def create_app(
         allow_headers=["*"],
     )
 
+    from llm_service.api.admin import router as admin_router
     from llm_service.api.health import router as health_router
     from llm_service.api.model_api import router as model_api_router
     from llm_service.api.results import router as results_router
@@ -182,6 +183,7 @@ def create_app(
     from llm_service.api.tasks import router as tasks_router
     from llm_service.api.templates import router as templates_router
 
+    app.include_router(admin_router)
     app.include_router(health_router)
     app.include_router(model_api_router)
     app.include_router(tasks_router)
