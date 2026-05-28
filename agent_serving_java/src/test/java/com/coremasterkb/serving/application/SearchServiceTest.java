@@ -64,7 +64,7 @@ class SearchServiceTest {
                 assembler, domainPackReader, domainRegistry, domainPoolManager,
                 embeddingClient, assetRepo,
                 mock(LlmClient.class),
-                new ServingProperties(null, null, "cloud_core_network", null, null, null));
+                new ServingProperties(null, null, "cloud_core_network", null));
     }
 
     @Nested

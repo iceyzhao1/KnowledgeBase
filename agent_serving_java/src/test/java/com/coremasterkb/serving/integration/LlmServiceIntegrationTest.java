@@ -204,9 +204,7 @@ class LlmServiceIntegrationTest {
     @DisplayName("POST /api/v1/models/embeddings returns valid embeddings")
     void embeddings_returnsValidResult() {
         Map<String, Object> payload = Map.of(
-                "input", List.of("SMF是什么网元"),
-                "model", "embedding-3",
-                "dimensions", 1024
+                "input", List.of("SMF是什么网元")
         );
 
         ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
@@ -225,7 +223,7 @@ class LlmServiceIntegrationTest {
 
         @SuppressWarnings("unchecked")
         List<Number> embedding = (List<Number>) data.get(0).get("embedding");
-        assertThat(embedding).hasSize(1024);
+        assertThat(embedding).isNotEmpty();
 
         System.out.println("Embedding OK: dim=" + embedding.size());
     }
@@ -245,7 +243,6 @@ class LlmServiceIntegrationTest {
                         "UPF是用户面功能，负责数据转发",
                         "AMF是接入和移动性管理功能"
                 ),
-                "model", "rerank-pro",
                 "top_n", 3
         );
 

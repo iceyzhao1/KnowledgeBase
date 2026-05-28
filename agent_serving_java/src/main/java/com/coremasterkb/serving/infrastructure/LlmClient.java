@@ -80,11 +80,13 @@ public class LlmClient {
     // Embeddings
     // =========================================================================
 
-    public Map<String, Object> embed(List<String> texts, String model, Integer dimensions) {
+    /**
+     * Call the embedding endpoint.
+     * Model and dimensions are managed by llm_service — callers only provide texts.
+     */
+    public Map<String, Object> embed(List<String> texts) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("input", texts);
-        if (model != null) payload.put("model", model);
-        if (dimensions != null) payload.put("dimensions", dimensions);
         payload.put("caller_service", "serving");
         if (knowledgeDomain != null && !knowledgeDomain.isBlank()) {
             payload.put("knowledge_domain", knowledgeDomain);
@@ -102,11 +104,14 @@ public class LlmClient {
     // Rerank
     // =========================================================================
 
-    public Map<String, Object> rerank(String query, List<String> documents, String model, Integer topN) {
+    /**
+     * Call the rerank endpoint.
+     * Model is managed by llm_service — callers only provide query, documents, and optional topN.
+     */
+    public Map<String, Object> rerank(String query, List<String> documents, Integer topN) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("query", query);
         payload.put("documents", documents);
-        if (model != null) payload.put("model", model);
         if (topN != null) payload.put("top_n", topN);
         payload.put("caller_service", "serving");
         if (knowledgeDomain != null && !knowledgeDomain.isBlank()) {

@@ -287,7 +287,7 @@ class QueryUnderstandingLatencyTest {
     void level4_parallelVsSequential() {
         LlmClient llmClient = new LlmClient(restTemplate, BASE_URL);
         QueryUnderstandingEngine engine = new QueryUnderstandingEngine(llmClient);
-        EmbeddingClient embeddingClient = new EmbeddingClient(llmClient, "embedding-3", 1024);
+        EmbeddingClient embeddingClient = new EmbeddingClient(llmClient);
 
         // Warm up
         engine.understand(TEST_QUERY, null);
@@ -326,13 +326,13 @@ class QueryUnderstandingLatencyTest {
     void level5_fullPipelineStages() {
         LlmClient llmClient = new LlmClient(restTemplate, BASE_URL);
         QueryUnderstandingEngine engine = new QueryUnderstandingEngine(llmClient);
-        EmbeddingClient embeddingClient = new EmbeddingClient(llmClient, "embedding-3", 1024);
+        EmbeddingClient embeddingClient = new EmbeddingClient(llmClient);
 
         // Warm up all stages
         engine.understand(TEST_QUERY, null);
         embeddingClient.embed(TEST_QUERY);
         // Warm up rerank
-        llmClient.rerank(TEST_QUERY, List.of("SMF是会话管理功能", "UPF是用户面功能"), "rerank-pro", 2);
+        llmClient.rerank(TEST_QUERY, List.of("SMF是会话管理功能", "UPF是用户面功能"), 2);
 
         System.out.println("=== Level 5: Full Pipeline Stages (5 iterations) ===");
 
@@ -358,7 +358,7 @@ class QueryUnderstandingLatencyTest {
                     "AMF是接入和移动性管理功能"
             );
             t3 = System.nanoTime();
-            Map<String, Object> rerankResult = llmClient.rerank(TEST_QUERY, docs, "rerank-pro", 3);
+            Map<String, Object> rerankResult = llmClient.rerank(TEST_QUERY, docs, 3);
             t4 = System.nanoTime();
             long rerankMs = (t4 - t3) / 1_000_000;
 

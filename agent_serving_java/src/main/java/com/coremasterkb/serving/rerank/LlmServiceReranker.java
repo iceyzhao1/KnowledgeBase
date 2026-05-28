@@ -11,11 +11,12 @@ import java.util.*;
 /**
  * Model reranker backed by llm_service {@code /api/v1/models/rerank}.
  *
- * <p>Ports Python's {@code LLMServiceReranker}: sends query + candidate documents
- * to the shared LLM service rerank endpoint, returns candidates reordered by
- * relevance score. Returns {@code null} on any failure to signal fallback.
+ * <p>Sends query + candidate documents to the shared LLM service rerank endpoint,
+ * returns candidates reordered by relevance score.
+ * Model is managed by llm_service — callers only provide query, documents, and top_n.
+ * Returns {@code null} on any failure to signal fallback.
  *
- * @see LlmClient#rerank(String, List, String, Integer)
+ * @see LlmClient#rerank(String, List, Integer)
  */
 public class LlmServiceReranker implements Reranker {
 
@@ -24,20 +25,14 @@ public class LlmServiceReranker implements Reranker {
     private static final int MAX_DOC_CHARS = 1000;
 
     private final LlmClient llmClient;
-    private final String model;
     private final int topN;
 
     public LlmServiceReranker(LlmClient llmClient) {
-        this(llmClient, "rerank-pro", MAX_RERANK_DOCS);
+        this(llmClient, MAX_RERANK_DOCS);
     }
 
-    public LlmServiceReranker(LlmClient llmClient, String model) {
-        this(llmClient, model, MAX_RERANK_DOCS);
-    }
-
-    public LlmServiceReranker(LlmClient llmClient, String model, int topN) {
+    public LlmServiceReranker(LlmClient llmClient, int topN) {
         this.llmClient = llmClient;
-        this.model = model;
         this.topN = topN;
     }
 
@@ -96,7 +91,7 @@ public class LlmServiceReranker implements Reranker {
 
         Map<String, Object> response;
         try {
-            response = llmClient.rerank(query, documents, model, candidates.size());
+            response = llmClient.rerank(query, documents, candidates.size());
         } catch (Exception e) {
             log.warn("LLM service rerank call failed: {}", e.getMessage());
             return null;

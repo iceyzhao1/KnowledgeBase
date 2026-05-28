@@ -24,8 +24,3 @@ serving:
   default-domain: ${COREMASTERKB_DOMAIN:${DEFAULT_DOMAIN:cloud_core_network}}
   llm:
     base-url: ${LLM_SERVICE_URL:http://localhost:8900}
-  embedding:
-    model: ${EMBEDDING_MODEL:embedding-3}
-    dimensions: ${EMBEDDING_DIMENSIONS:1024}
-  rerank:
-    model: ${RERANK_MODEL:rerank-pro}

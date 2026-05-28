@@ -136,8 +136,8 @@ public class ServingBeans {
     }
 
     @Bean
-    public EmbeddingClient embeddingClient(LlmClient llmClient, ServingProperties properties) {
-        return new EmbeddingClient(llmClient, properties.embedding().model(), properties.embedding().dimensions());
+    public EmbeddingClient embeddingClient(LlmClient llmClient) {
+        return new EmbeddingClient(llmClient);
     }
 
     // -------------------------------------------------------------------------
@@ -199,8 +199,8 @@ public class ServingBeans {
     }
 
     @Bean
-    public LlmServiceReranker llmServiceReranker(LlmClient llmClient, ServingProperties properties) {
-        return new LlmServiceReranker(llmClient, properties.rerank().model());
+    public LlmServiceReranker llmServiceReranker(LlmClient llmClient) {
+        return new LlmServiceReranker(llmClient);
     }
 
     @Bean

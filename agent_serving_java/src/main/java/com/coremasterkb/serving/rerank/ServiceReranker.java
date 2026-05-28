@@ -6,14 +6,14 @@ import com.coremasterkb.serving.infrastructure.LlmClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.*;
-import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
 
 /**
  * Reranker backed by the shared LLM service rerank endpoint.
  *
- * <p>Calls the LLM service's dedicated rerank API (similar schema to Zhipu rerank).
+ * <p>Calls the LLM service's dedicated rerank API.
+ * Model is managed by llm_service — callers only provide query, documents, and top_n.
  * Returns {@code null} on any failure to signal fallback.
  */
 public class ServiceReranker implements Reranker {
@@ -24,18 +24,14 @@ public class ServiceReranker implements Reranker {
     private static final int DEFAULT_TOP_N = 100;
 
     private final LlmClient llmClient;
-    private final RestTemplate restTemplate;
-    private final String model;
     private final int topN;
 
     public ServiceReranker(LlmClient llmClient) {
-        this(llmClient, null, "rerank", DEFAULT_TOP_N);
+        this(llmClient, DEFAULT_TOP_N);
     }
 
-    public ServiceReranker(LlmClient llmClient, RestTemplate restTemplate, String model, int topN) {
+    public ServiceReranker(LlmClient llmClient, int topN) {
         this.llmClient = llmClient;
-        this.restTemplate = restTemplate;
-        this.model = model;
         this.topN = topN;
     }
 
@@ -110,7 +106,6 @@ public class ServiceReranker implements Reranker {
         Map<String, Object> input = new HashMap<>();
         input.put("query", query);
         input.put("documents", documents);
-        input.put("model", model);
         input.put("top_n", documents.size());
 
         Map<String, Object> response = llmClient.execute("reranker", "service-rerank", input);
