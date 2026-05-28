@@ -3,21 +3,9 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.asyncio
+from llm_service.tests.conftest import TEST_CFG as _CFG
 
-_CFG = {
-    "host": "0.0.0.0", "port": 8900,
-    "provider": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "test",
-                  "headers": {}, "timeout": 30, "bypass_proxy": False},
-    "embedding": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "emb",
-                  "dimensions": 1024},
-    "rerank": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "rerank"},
-    "model": {"timeout": 60, "bypass_proxy": False, "extra_headers": {}},
-    "worker": {"concurrency": 4, "poll_interval": 1.0},
-    "task": {"default_max_attempts": 3, "retry_backoff_base": 2.0, "retry_backoff_max": 60.0,
-             "execute_timeout": 60, "lease_duration": 300, "lease_recovery_interval": 30.0},
-    "template": {"cache_ttl": 300.0},
-}
+pytestmark = pytest.mark.asyncio
 
 
 # ---- Lease Recovery ----

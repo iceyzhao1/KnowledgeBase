@@ -2,6 +2,9 @@
 
 ALL config comes from main_control_service/config/system/llm_service.yaml.
 No defaults, no env fallbacks. Missing required fields = hard error.
+
+Exception: CONTROL_PLANE_BASE_URL is the single bootstrap parameter that
+tells this service where to find its config. It may be set via env var.
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+# Bootstrap: the one URL needed before we can fetch everything else.
 CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8910")
 
 # ── All required field paths — missing = fatal ──

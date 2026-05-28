@@ -21,11 +21,21 @@ from llm_service.runtime.worker import LeaseRecovery, Worker
 
 logger = logging.getLogger(__name__)
 
+# Module-level config set by __main__ before uvicorn forks workers.
+_STARTUP_CONFIG: dict | None = None
 
-def create_app_with_config() -> FastAPI:
-    """Factory for uvicorn — loads config once and passes to create_app."""
-    cfg = load_llm_config()
-    return create_app(config=cfg)
+
+def set_startup_config(cfg: dict) -> None:
+    """Store config from __main__ so the uvicorn factory can reuse it."""
+    global _STARTUP_CONFIG
+    _STARTUP_CONFIG = cfg
+
+
+def create_app_from_startup_config() -> FastAPI:
+    """Uvicorn factory — reuses config loaded by __main__ (no double-fetch)."""
+    if _STARTUP_CONFIG is None:
+        raise RuntimeError("set_startup_config() must be called before create_app_from_startup_config()")
+    return create_app(config=_STARTUP_CONFIG)
 
 
 def create_app(

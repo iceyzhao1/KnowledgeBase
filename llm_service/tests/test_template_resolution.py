@@ -3,16 +3,9 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.asyncio
+from llm_service.tests.conftest import TEST_CFG as _CFG
 
-_CFG = {
-    "task": {"default_max_attempts": 3, "retry_backoff_base": 2.0, "retry_backoff_max": 60.0,
-             "execute_timeout": 60, "lease_duration": 300, "lease_recovery_interval": 30.0},
-    "provider": {"model": "test-model"},
-    "embedding": {"model": "embedding-3"},
-    "rerank": {"model": "rerank-pro"},
-    "template": {"cache_ttl": 300.0},
-}
+pytestmark = pytest.mark.asyncio
 
 
 async def test_resolve_template_expands_messages(db):

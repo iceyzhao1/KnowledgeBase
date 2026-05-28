@@ -10,10 +10,13 @@ if sys.platform == "win32":
 import uvicorn  # noqa: E402
 
 from llm_service.config import load_llm_config, dig  # noqa: E402
+from llm_service.main import set_startup_config  # noqa: E402
 
 cfg = load_llm_config()
+set_startup_config(cfg)
+
 uvicorn.run(
-    "llm_service.main:create_app_with_config",
+    "llm_service.main:create_app_from_startup_config",
     host=dig(cfg, "host"),
     port=dig(cfg, "port"),
     factory=True,
