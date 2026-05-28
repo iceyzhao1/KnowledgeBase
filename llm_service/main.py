@@ -22,6 +22,12 @@ from llm_service.runtime.worker import LeaseRecovery, Worker
 logger = logging.getLogger(__name__)
 
 
+def create_app_with_config() -> FastAPI:
+    """Factory for uvicorn — loads config once and passes to create_app."""
+    cfg = load_llm_config()
+    return create_app(config=cfg)
+
+
 def create_app(
     config: dict | None = None,
     provider_factory: Callable[[], ProviderProtocol] | None = None,

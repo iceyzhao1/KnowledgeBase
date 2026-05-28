@@ -5,16 +5,14 @@ No defaults, no env fallbacks. Missing required fields = hard error.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
-from typing import Any
 
 import httpx
 import yaml
 
-logger = logging.getLogger(__name__)
+from llm_service.config import CONTROL_PLANE_BASE_URL
 
-CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8910")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

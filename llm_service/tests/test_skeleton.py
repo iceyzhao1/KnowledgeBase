@@ -28,19 +28,37 @@ async def test_tasks_table_has_task_type(db):
     assert "task_type" in columns
 
 
-async def test_config_defaults():
-    from llm_service.config import LLMServiceConfig
+async def test_config_from_control_plane():
+    """Config should be a dict loaded from control plane with required fields."""
+    from llm_service.config import dig
 
-    cfg = LLMServiceConfig()
-    assert cfg.port == 8900
-    assert cfg.default_max_attempts == 3
-    assert cfg.retry_backoff_base == 2.0
+    cfg = {
+        "host": "0.0.0.0", "port": 8900,
+        "task": {"default_max_attempts": 3, "retry_backoff_base": 2.0, "retry_backoff_max": 60.0,
+                 "execute_timeout": 60, "lease_duration": 300, "lease_recovery_interval": 30.0},
+    }
+    assert dig(cfg, "port") == 8900
+    assert dig(cfg, "task", "default_max_attempts") == 3
+    assert dig(cfg, "task", "retry_backoff_base") == 2.0
 
 
 async def test_fastapi_app_creates():
     from llm_service.main import create_app
 
-    app = create_app(start_worker=False)
+    cfg = {
+        "host": "0.0.0.0", "port": 8900,
+        "provider": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "test",
+                      "headers": {}, "timeout": 30, "bypass_proxy": False},
+        "embedding": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "emb",
+                      "dimensions": 1024},
+        "rerank": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "rerank"},
+        "model": {"timeout": 60, "bypass_proxy": False, "extra_headers": {}},
+        "worker": {"concurrency": 4, "poll_interval": 1.0},
+        "task": {"default_max_attempts": 3, "retry_backoff_base": 2.0, "retry_backoff_max": 60.0,
+                 "execute_timeout": 60, "lease_duration": 300, "lease_recovery_interval": 30.0},
+        "template": {"cache_ttl": 300.0},
+    }
+    app = create_app(config=cfg, start_worker=False)
     assert app.title == "LLM Service"
 
 

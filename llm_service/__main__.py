@@ -13,7 +13,7 @@ from llm_service.config import load_llm_config, dig  # noqa: E402
 
 cfg = load_llm_config()
 uvicorn.run(
-    "llm_service.main:create_app",
+    "llm_service.main:create_app_with_config",
     host=dig(cfg, "host"),
     port=dig(cfg, "port"),
     factory=True,

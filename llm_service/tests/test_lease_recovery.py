@@ -5,6 +5,20 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
+_CFG = {
+    "host": "0.0.0.0", "port": 8900,
+    "provider": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "test",
+                  "headers": {}, "timeout": 30, "bypass_proxy": False},
+    "embedding": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "emb",
+                  "dimensions": 1024},
+    "rerank": {"base_url": "http://localhost:11434/v1", "api_key": "test", "model": "rerank"},
+    "model": {"timeout": 60, "bypass_proxy": False, "extra_headers": {}},
+    "worker": {"concurrency": 4, "poll_interval": 1.0},
+    "task": {"default_max_attempts": 3, "retry_backoff_base": 2.0, "retry_backoff_max": 60.0,
+             "execute_timeout": 60, "lease_duration": 300, "lease_recovery_interval": 30.0},
+    "template": {"cache_ttl": 300.0},
+}
+
 
 # ---- Lease Recovery ----
 
@@ -12,14 +26,11 @@ async def test_lease_recovery_requeues_expired_task(db):
     """Expired running task gets re-queued by LeaseRecovery."""
     from datetime import datetime, timedelta, timezone
 
-    from llm_service.config import LLMServiceConfig
-    from llm_service.providers.mock import MockProvider
     from llm_service.runtime.event_bus import EventBus
     from llm_service.runtime.task_manager import TaskManager
     from llm_service.runtime.worker import LeaseRecovery
 
     bus = EventBus(db)
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     mgr = TaskManager(db, bus)
 
     # Submit and manually set to running with expired lease
@@ -44,14 +55,11 @@ async def test_lease_recovery_dead_letters_exhausted(db):
     """Expired running task with exhausted attempts gets dead_lettered."""
     from datetime import datetime, timedelta, timezone
 
-    from llm_service.config import LLMServiceConfig
-    from llm_service.providers.mock import MockProvider
     from llm_service.runtime.event_bus import EventBus
     from llm_service.runtime.task_manager import TaskManager
     from llm_service.runtime.worker import LeaseRecovery
 
     bus = EventBus(db)
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     mgr = TaskManager(db, bus)
 
     task_id = await mgr.submit("mining", "test", max_attempts=1)
@@ -147,28 +155,18 @@ async def test_template_api_resolves_global_fallback(api_client):
 
 # ---- Startup validation ----
 
-async def test_startup_without_api_key_raises():
-    """create_app with no API key and no provider factory should raise."""
-    from llm_service.config import LLMServiceConfig
+async def test_startup_with_config_dict_ok():
+    """create_app with a valid config dict should succeed."""
     from llm_service.main import create_app
 
-    cfg = LLMServiceConfig(
-        db_path=":memory:",
-        provider_api_key="",
-    )
-    with pytest.raises(ValueError, match="PROVIDER_API_KEY"):
-        create_app(config=cfg, start_worker=False)
+    app = create_app(config=_CFG, start_worker=False)
+    assert app.title == "LLM Service"
 
 
 async def test_startup_with_provider_factory_ok():
-    """create_app with provider factory should not require API key."""
-    from llm_service.config import LLMServiceConfig
+    """create_app with provider factory should succeed."""
     from llm_service.main import create_app
     from llm_service.providers.mock import MockProvider
 
-    cfg = LLMServiceConfig(
-        db_path=":memory:",
-        provider_api_key="",
-    )
-    app = create_app(config=cfg, provider_factory=lambda: MockProvider(), start_worker=False)
+    app = create_app(config=_CFG, provider_factory=lambda: MockProvider(), start_worker=False)
     assert app.title == "LLM Service"

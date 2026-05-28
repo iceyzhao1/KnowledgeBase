@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from main_control_service.config import MainControlSettings
 from main_control_service.service import YamlConfigService
@@ -59,8 +60,8 @@ def create_app(
         return service.get_system_config(service_name)
 
     @app.get("/api/v1/system/{service_name}/raw")
-    def get_system_config_raw(service_name: str) -> str:
-        return service.get_system_config_yaml(service_name)
+    def get_system_config_raw(service_name: str) -> Response:
+        return Response(content=service.get_system_config_yaml(service_name), media_type="text/yaml")
 
     @app.put("/api/v1/system/{service_name}/raw")
     async def update_system_config_raw(service_name: str, request: Request) -> dict:
@@ -82,8 +83,8 @@ def create_app(
         return service.get_domain(domain_id)
 
     @app.get("/api/v1/domains/{domain_id}/raw")
-    def get_domain_raw(domain_id: str) -> str:
-        return service.get_domain_yaml(domain_id)
+    def get_domain_raw(domain_id: str) -> Response:
+        return Response(content=service.get_domain_yaml(domain_id), media_type="text/yaml")
 
     @app.post("/api/v1/domains")
     async def create_domain(request: Request) -> dict:
@@ -115,8 +116,8 @@ def create_app(
         return service.get_scenario(domain_id, section)
 
     @app.get("/api/v1/domains/{domain_id}/scenario/raw")
-    def get_scenario_raw(domain_id: str) -> str:
-        return service.get_scenario_yaml(domain_id)
+    def get_scenario_raw(domain_id: str) -> Response:
+        return Response(content=service.get_scenario_yaml(domain_id), media_type="text/yaml")
 
     @app.put("/api/v1/domains/{domain_id}/scenario/raw")
     async def update_scenario_raw(domain_id: str, request: Request) -> dict:

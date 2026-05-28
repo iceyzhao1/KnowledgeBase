@@ -15,7 +15,7 @@ _ALLOWED_UPDATE_COLUMNS = frozenset({
 
 
 class TemplateRegistry:
-    def __init__(self, db: LlmRuntimeDB, cache_ttl: float = 300.0):
+    def __init__(self, db: LlmRuntimeDB, cache_ttl: float):
         self._db = db
         # In-memory template cache: (template_key, knowledge_domain) → tpl dict
         self._cache: dict[tuple[str, str | None], dict] = {}

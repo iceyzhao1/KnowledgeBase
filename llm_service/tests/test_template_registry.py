@@ -6,7 +6,7 @@ pytestmark = pytest.mark.asyncio
 async def test_create_template(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     tpl_id = await reg.create(
         template_key="summarize",
         template_version="v1",
@@ -30,7 +30,7 @@ async def test_create_template(db):
 async def test_get_template(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     tpl_id = await reg.create(
         template_key="extract",
         template_version="v1",
@@ -47,7 +47,7 @@ async def test_get_template(db):
 async def test_get_by_key(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     await reg.create(
         template_key="qa",
         template_version="v1",
@@ -64,7 +64,7 @@ async def test_get_by_key(db):
 async def test_get_by_key_prefers_domain_specific_template(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     await reg.create(
         template_key="qa",
         template_version="v1",
@@ -90,7 +90,7 @@ async def test_get_by_key_prefers_domain_specific_template(db):
 async def test_list_templates(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     await reg.create(template_key="a", template_version="v1", purpose="A", user_prompt_template="A", expected_output_type="text")
     await reg.create(
         template_key="b",
@@ -108,7 +108,7 @@ async def test_list_templates(db):
 async def test_list_templates_filters_to_requested_domain(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     await reg.create(
         template_key="generic-only",
         template_version="v1",
@@ -133,7 +133,7 @@ async def test_list_templates_filters_to_requested_domain(db):
 async def test_update_template(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     tpl_id = await reg.create(
         template_key="update_me",
         template_version="v1",
@@ -151,7 +151,7 @@ async def test_update_template(db):
 async def test_archive_template(db):
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
     tpl_id = await reg.create(
         template_key="to_archive",
         template_version="v1",

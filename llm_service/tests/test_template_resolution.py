@@ -5,21 +5,25 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 
+_CFG = {
+    "task": {"default_max_attempts": 3, "retry_backoff_base": 2.0, "retry_backoff_max": 60.0,
+             "execute_timeout": 60, "lease_duration": 300, "lease_recovery_interval": 30.0},
+    "provider": {"model": "test-model"},
+    "embedding": {"model": "embedding-3"},
+    "rerank": {"model": "rerank-pro"},
+    "template": {"cache_ttl": 300.0},
+}
+
 
 async def test_resolve_template_expands_messages(db):
     """_resolve_template expands user_prompt_template with input variables."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(
-        db_path=":memory:",
-        provider_api_key="test",
-    )
     provider = MockProvider(responses=[{"choices": [{"message": {"content": "ok"}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     # Create template (string.Template uses $var syntax)
     await reg.create(
@@ -53,15 +57,13 @@ async def test_resolve_template_expands_messages(db):
 
 async def test_resolve_template_fills_output_type_from_template(db):
     """When caller doesn't specify expected_output_type, template provides default."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": "plain text response"}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     await reg.create(
         template_key="text-tpl",
@@ -88,15 +90,13 @@ async def test_resolve_template_fills_output_type_from_template(db):
 
 async def test_resolve_template_caller_messages_take_precedence(db):
     """Caller-provided messages override template expansion."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": "ok"}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     await reg.create(
         template_key="test",
@@ -122,13 +122,11 @@ async def test_resolve_template_caller_messages_take_precedence(db):
 
 async def test_execute_metadata_persisted(db):
     """metadata is stored in task row and request row is auto-generated."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"ok": true}'}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
+    svc = LLMService(db=db, provider=provider, config=_CFG)
 
     result = await svc.execute(
         "mining", "cloud_core_network", "test",
@@ -151,15 +149,13 @@ async def test_execute_metadata_persisted(db):
 
 async def test_schema_injected_into_system_prompt(db):
     """When template has output_schema_json + json_object type, schema is appended to system prompt."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"summary": "ok"}'}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     schema = {
         "type": "object",
@@ -196,15 +192,13 @@ async def test_schema_injected_into_system_prompt(db):
 
 async def test_schema_injected_no_system_prompt(db):
     """When no system prompt exists, schema becomes a new system message."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"name": "test"}'}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
     await reg.create(
@@ -233,15 +227,13 @@ async def test_schema_injected_no_system_prompt(db):
 
 async def test_schema_not_injected_for_text_type(db):
     """Schema injection only happens for json_object / json_array, not text."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": "plain text"}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
     await reg.create(
@@ -269,15 +261,13 @@ async def test_schema_not_injected_for_text_type(db):
 
 async def test_execute_with_text_template_parses_as_text(db):
     """execute with text template: parse_status is succeeded, not failed."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": "This is plain text."}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     # Create template with text output type
     await reg.create(
@@ -302,13 +292,11 @@ async def test_execute_with_text_template_parses_as_text(db):
 
 async def test_submit_without_messages_falls_back_to_input_payload(db):
     """Async submit should persist a synthetic user message when only input is provided."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"ok": true}'}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
+    svc = LLMService(db=db, provider=provider, config=_CFG)
 
     task_id = await svc.submit(
         "mining", "cloud_core_network", "bulk_submit",
@@ -327,13 +315,11 @@ async def test_submit_without_messages_falls_back_to_input_payload(db):
 
 async def test_submit_with_missing_template_still_persists_fallback_message(db):
     """Missing template should not leave async worker with empty messages."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": '{"ok": true}'}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
+    svc = LLMService(db=db, provider=provider, config=_CFG)
 
     task_id = await svc.submit(
         "mining", "cloud_core_network", "retrieval_units",
@@ -352,15 +338,13 @@ async def test_submit_with_missing_template_still_persists_fallback_message(db):
 
 async def test_resolve_template_prefers_domain_specific_template(db):
     """Domain-specific template should override a global template with the same key."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": "ok"}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     await reg.create(
         template_key="rewrite-query",
@@ -393,15 +377,13 @@ async def test_resolve_template_prefers_domain_specific_template(db):
 
 async def test_resolve_template_falls_back_to_global_template(db):
     """Global template should be used when the requested domain has no override."""
-    from llm_service.config import LLMServiceConfig
     from llm_service.providers.mock import MockProvider
     from llm_service.runtime.service import LLMService
     from llm_service.runtime.template_registry import TemplateRegistry
 
-    cfg = LLMServiceConfig(db_path=":memory:", provider_api_key="test")
     provider = MockProvider(responses=[{"choices": [{"message": {"content": "ok"}}]}])
-    svc = LLMService(db=db, provider=provider, config=cfg)
-    reg = TemplateRegistry(db)
+    reg = TemplateRegistry(db, cache_ttl=300.0)
+    svc = LLMService(db=db, provider=provider, config=_CFG, templates=reg)
 
     await reg.create(
         template_key="rewrite-query",

@@ -43,7 +43,7 @@ class LLMService:
             backoff_base=dig(config, "task", "retry_backoff_base"),
             backoff_max=dig(config, "task", "retry_backoff_max"),
         )
-        self._templates = templates or TemplateRegistry(db)
+        self._templates = templates or TemplateRegistry(db, cache_ttl=dig(config, "template", "cache_ttl"))
         self._model_provider = model_provider
         self._provider = provider
         self._provider_name = getattr(provider, 'provider_name', 'unknown')
