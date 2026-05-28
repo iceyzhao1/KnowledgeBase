@@ -45,6 +45,22 @@ mining:
     - alarm
     - checklist
 
+  # Document types (informational, stored in metadata_json)
+  document_types:
+    - command
+    - feature
+    - procedure
+    - troubleshooting
+    - alarm
+    - constraint
+    - checklist
+    - expert_note
+    - project_note
+    - standard
+    - training
+    - reference
+    - other
+
   # Semantic role mapping: section title keywords -> core semantic_role
   role_keyword_rules: []
 
