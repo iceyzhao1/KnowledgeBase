@@ -91,12 +91,15 @@ def create_app(
                 embedding_api_key=dig(cfg, "embedding", "api_key"),
                 embedding_url=dig(cfg, "embedding", "base_url"),
                 embedding_model=dig(cfg, "embedding", "model"),
+                embedding_timeout=dig(cfg, "embedding", "timeout"),
+                embedding_bypass_proxy=dig(cfg, "embedding", "bypass_proxy"),
+                embedding_headers=dig(cfg, "embedding", "headers") or {},
                 rerank_api_key=dig(cfg, "rerank", "api_key"),
                 rerank_url=dig(cfg, "rerank", "base_url"),
                 rerank_model=dig(cfg, "rerank", "model"),
-                timeout=dig(cfg, "embedding", "timeout"),
-                bypass_proxy=dig(cfg, "embedding", "bypass_proxy"),
-                extra_headers=dig(cfg, "embedding", "headers") or {},
+                rerank_timeout=dig(cfg, "rerank", "timeout"),
+                rerank_bypass_proxy=dig(cfg, "rerank", "bypass_proxy"),
+                rerank_headers=dig(cfg, "rerank", "headers") or {},
             )
         )
 

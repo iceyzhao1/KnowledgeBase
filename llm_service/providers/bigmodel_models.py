@@ -15,23 +15,38 @@ class BigModelProvider:
         embedding_api_key: str = "",
         embedding_url: str = "https://open.bigmodel.cn/api/paas/v4/embeddings",
         embedding_model: str = "embedding-3",
+        embedding_timeout: int = 60,
+        embedding_bypass_proxy: bool = False,
+        embedding_headers: dict | None = None,
         rerank_api_key: str = "",
         rerank_url: str = "https://open.bigmodel.cn/api/paas/v4/rerank",
         rerank_model: str = "",
-        timeout: int = 60,
-        bypass_proxy: bool = False,
+        rerank_timeout: int = 60,
+        rerank_bypass_proxy: bool = False,
+        rerank_headers: dict | None = None,
+        # Legacy aliases kept for backward compat during migration
+        timeout: int | None = None,
+        bypass_proxy: bool | None = None,
         extra_headers: dict | None = None,
     ) -> None:
         self._embedding_api_key = embedding_api_key
         self._embedding_url = embedding_url.rstrip("/")
         self._embedding_model = embedding_model
+        self._embedding_headers = embedding_headers or extra_headers or {}
         self._rerank_api_key = rerank_api_key
         self._rerank_url = rerank_url.rstrip("/")
         self._rerank_model = rerank_model
-        self._extra_headers = extra_headers or {}
-        self._timeout = timeout
-        transport = httpx.AsyncHTTPTransport() if bypass_proxy else None
-        self._client = httpx.AsyncClient(transport=transport, timeout=timeout)
+        self._rerank_headers = rerank_headers or {}
+
+        # Use per-capability timeout, fall back to legacy shared param
+        self._embedding_timeout = embedding_timeout if timeout is None else timeout
+        self._rerank_timeout = rerank_timeout if timeout is None else timeout
+
+        # Build a shared client with the longer of the two timeouts
+        max_timeout = max(self._embedding_timeout, self._rerank_timeout)
+        bp = embedding_bypass_proxy if bypass_proxy is None else bypass_proxy
+        transport = httpx.AsyncHTTPTransport() if bp else None
+        self._client = httpx.AsyncClient(transport=transport, timeout=max_timeout)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -42,10 +57,11 @@ class BigModelProvider:
                 "not_configured",
                 f"BigModel API key is not configured for {capability}",
             )
+        extra = self._embedding_headers if capability == "embedding" else self._rerank_headers
         return {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            **self._extra_headers,
+            **extra,
         }
 
     async def _post(

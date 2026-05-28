@@ -5,17 +5,24 @@ No defaults, no env fallbacks. Missing required fields = hard error.
 
 Exception: CONTROL_PLANE_BASE_URL is the single bootstrap parameter that
 tells this service where to find its config. It may be set via env var.
+
+Secrets (api_key fields) support ``${ENV_VAR}`` syntax — resolved at load time
+from the process environment.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Pattern: ${VAR} or ${VAR:-default}
+_ENV_RE = re.compile(r"\$\{([^}]+)\}")
 
 # Bootstrap: the one URL needed before we can fetch everything else.
 CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8910")
@@ -64,6 +71,39 @@ def dig(data: dict, *keys: str) -> Any:
     return node
 
 
+def _expand_env(value: str) -> str:
+    """Replace ``${VAR}`` and ``${VAR:-default}`` patterns with env values."""
+    def _replace(m: re.Match) -> str:
+        expr = m.group(1)
+        if ":-" in expr:
+            var, default = expr.split(":-", 1)
+            return os.getenv(var.strip(), default)
+        return os.getenv(expr.strip(), "")
+    return _ENV_RE.sub(_replace, value)
+
+
+def _resolve_env_vars(data: Any) -> Any:
+    """Recursively resolve ``${VAR}`` in all string values."""
+    if isinstance(data, dict):
+        return {k: _resolve_env_vars(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_resolve_env_vars(v) for v in data]
+    if isinstance(data, str) and "${" in data:
+        return _expand_env(data)
+    return data
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep-merge *override* into *base* — nested dicts are merged, not replaced."""
+    result = dict(base)
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
 def dig_optional(data: dict, *keys: str, default: Any = None) -> Any:
     """Walk nested dict by *keys*; return *default* on miss."""
     node: Any = data
@@ -94,10 +134,8 @@ def resolve_active_model_config(cfg: dict) -> dict:
         logger.warning("active_model '%s' not found in provider.models, using base config", active)
         return dict(provider_cfg)
 
-    # Merge: model_cfg overrides base provider_cfg
-    merged = dict(provider_cfg)
-    merged.update(model_cfg)
-    return merged
+    # Deep-merge: model_cfg overrides base provider_cfg (nested dicts preserved)
+    return _deep_merge(provider_cfg, model_cfg)
 
 
 def _validate_required(data: dict) -> None:
@@ -139,6 +177,7 @@ def fetch_config_from_control_plane(
     if not isinstance(data, dict):
         raise ValueError(f"Control plane returned non-dict YAML for llm_service")
 
+    data = _resolve_env_vars(data)
     _validate_required(data)
     logger.info("Loaded config from control plane (%s)", endpoint)
     return data

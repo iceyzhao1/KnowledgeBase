@@ -118,15 +118,12 @@ def main() -> None:
     logger.info("  domain:           %s", domain)
     logger.info("  input_path:       %s", DATA_DIR)
     logger.info("  llm_base_url:     %s", llm_url)
-    logger.info("  embedding_model:  %s", mining_cfg.embedding_model)
-    logger.info("  embedding_dims:   %d", mining_cfg.embedding_dimensions)
 
     t0 = time.perf_counter()
     result = run(
         input_path=DATA_DIR,
         domain=domain,
         publish_on_partial_failure=True,
-        llm_bypass_proxy=True,
     )
     elapsed = time.perf_counter() - t0
 
