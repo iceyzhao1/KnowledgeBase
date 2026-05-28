@@ -690,6 +690,19 @@ def convert_extracted(
 # One-shot helpers used by ingestion
 # ---------------------------------------------------------------------------
 
+def html_to_markdown(html_path: Path, doc_title: str | None = None) -> str:
+    """Convert a standalone HTML file to markdown using the shared renderer."""
+    text = read_text(html_path)
+    tree = build_tree(text)
+    body = _find_body(tree)
+    md = "".join(_render(c, 0) for c in body.get("children", []))
+    md = re.sub(r"\n{3,}", "\n\n", md)
+    md = md.replace("****", "")
+    md = md.strip()
+    title = doc_title or html_path.stem
+    return f"# {title}\n\n{md}\n"
+
+
 def archive_to_markdown(
     src: Path,
     *,

@@ -31,6 +31,12 @@ TABLE_CAPTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Chinese heading patterns
+CN_CHAPTER_RE = re.compile(r"^第[一二三四五六七八九十百千零\d]+[章部篇]")
+CN_SECTION_RE = re.compile(r"^第[一二三四五六七八九十百千零\d]+[节条款]")
+CN_ENUM_RE = re.compile(r"^[（(][一二三四五六七八九十\d]+[）)]\s*\S")
+CN_DASH_ENUM_RE = re.compile(r"^[一二三四五六七八九十]+[、．.]\s*\S")
+
 
 @dataclass(frozen=True)
 class _PdfBlock:
@@ -48,6 +54,7 @@ def parse_pdf_to_section_tree(
     """Parse a PDF file into a SectionNode tree."""
     blocks = _extract_blocks(pdf_path)
     blocks = _drop_repeated_headers_footers(blocks)
+    blocks = _split_long_blocks(blocks)
     content_blocks = _classify_blocks(blocks)
     if not content_blocks:
         return SectionNode(title=doc_title, level=0)
@@ -124,12 +131,53 @@ def _drop_repeated_headers_footers(blocks: list[_PdfBlock]) -> list[_PdfBlock]:
     return out
 
 
+def _split_long_blocks(blocks: list[_PdfBlock]) -> list[_PdfBlock]:
+    """Split blocks with multi-line text at blank-line boundaries.
+
+    When a PDF has no detectable headings, entire pages can become single
+    giant blocks. Splitting at double-newlines (or single newlines when
+    the block is very large) gives the classifier more granularity.
+    """
+    out: list[_PdfBlock] = []
+    for b in blocks:
+        # Only split blocks with multiple lines that are reasonably large
+        if "\n" not in b.text:
+            out.append(b)
+            continue
+
+        # Try splitting at double-newline (paragraph boundary)
+        parts = re.split(r"\n\s*\n", b.text)
+        if len(parts) <= 1:
+            # No double-newlines: try single newline for very large blocks
+            if len(b.text) > 1000:
+                parts = b.text.split("\n")
+            else:
+                out.append(b)
+                continue
+
+        for part in parts:
+            part = part.strip()
+            if part:
+                out.append(_PdfBlock(
+                    page_no=b.page_no,
+                    text=part,
+                    font_size=b.font_size,
+                    x0=b.x0,
+                    y0=b.y0,
+                    page_height=b.page_height,
+                ))
+    return out
+
+
 def _classify_blocks(blocks: list[_PdfBlock]) -> list[ContentBlock]:
     if not blocks:
         return []
 
     size_counter = Counter(b.font_size for b in blocks if b.font_size > 0)
     body_size = size_counter.most_common(1)[0][0] if size_counter else 10.0
+
+    # Collect distinct font sizes sorted descending for level mapping
+    distinct_sizes = sorted(set(b.font_size for b in blocks if b.font_size > 0), reverse=True)
 
     result: list[ContentBlock] = []
     for b in blocks:
@@ -140,6 +188,22 @@ def _classify_blocks(blocks: list[_PdfBlock]) -> list[ContentBlock]:
         if TOC_DOT_LEADER_RE.search(first_line):
             continue
 
+        # --- Chinese heading detection ---
+        cn_heading = _try_cn_heading(first_line)
+        if cn_heading:
+            is_short = len(b.text) <= 400
+            font_ok = b.font_size + 0.1 >= body_size
+            if is_short and font_ok:
+                result.append(ContentBlock(
+                    block_type="heading",
+                    text=first_line,
+                    level=cn_heading,
+                ))
+                if rest:
+                    result.append(ContentBlock(block_type="paragraph", text=rest))
+                continue
+
+        # --- Numeric heading detection (existing logic) ---
         m = HEADING_RE.match(first_line)
         if m:
             number = m.group(1)
@@ -161,6 +225,19 @@ def _classify_blocks(blocks: list[_PdfBlock]) -> list[ContentBlock]:
                     ))
                 continue
 
+        # --- Font-size heuristic heading detection ---
+        if b.font_size > body_size * 1.2 and len(first_line) < 200 and len(b.text) <= 400:
+            level = _font_size_to_level(b.font_size, distinct_sizes)
+            if 1 <= level <= 6:
+                result.append(ContentBlock(
+                    block_type="heading",
+                    text=first_line,
+                    level=level,
+                ))
+                if rest:
+                    result.append(ContentBlock(block_type="paragraph", text=rest))
+                continue
+
         if TABLE_CAPTION_RE.match(first_line):
             result.append(ContentBlock(
                 block_type="table",
@@ -173,6 +250,30 @@ def _classify_blocks(blocks: list[_PdfBlock]) -> list[ContentBlock]:
             text=b.text,
         ))
     return result
+
+
+def _try_cn_heading(text: str) -> int | None:
+    """Detect Chinese heading patterns. Returns heading level or None."""
+    if CN_CHAPTER_RE.match(text):
+        return 1
+    if CN_SECTION_RE.match(text):
+        return 2
+    if CN_ENUM_RE.match(text):
+        return 3
+    if CN_DASH_ENUM_RE.match(text):
+        return 3
+    return None
+
+
+def _font_size_to_level(font_size: float, distinct_sizes: list[float]) -> int:
+    """Map a font size to a heading level based on rank among distinct sizes.
+
+    Largest size → level 1, second largest → level 2, etc.
+    """
+    for idx, size in enumerate(distinct_sizes):
+        if abs(font_size - size) < 0.5:
+            return min(idx + 1, 6)
+    return 4  # default for unrecognized large sizes
 
 
 def _build_section_tree(

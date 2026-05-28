@@ -15,6 +15,7 @@ from typing import Any
 from knowledge_mining.mining.contracts.models import ContentBlock, DocumentProfile, RawSegmentData, SectionNode
 from knowledge_mining.mining.infra.hash_utils import content_hash, normalized_hash
 from knowledge_mining.mining.infra.text_utils import token_count
+from knowledge_mining.mining.infra.text_utils import split_sentences
 
 
 class DefaultSegmenter:
@@ -41,6 +42,7 @@ _SCHEMA_BLOCK_TYPES = {
 
 # Merge thresholds — module-level named constants for discoverability
 _MERGE_MAX_TOKENS = 512
+_SPLIT_MAX_TOKENS = 512
 _TABLE_MIN_INDEPENDENT_TOKENS = 300
 
 # Block type priority for merged segments (higher = dominant)
@@ -72,6 +74,7 @@ def segment_document(
     segments: list[RawSegmentData] = []
     _walk_sections(doc_root, profile.document_key, [], segments, parser_name)
     segments = _merge_small_segments(segments, min_tokens=100)
+    segments = _split_large_segments(segments, max_tokens=_SPLIT_MAX_TOKENS)
     return [
         RawSegmentData(
             document_key=s.document_key,
@@ -231,6 +234,117 @@ def _merge_small_segments(
             merged.append(seg)
 
     return merged
+
+
+def _split_large_segments(
+    segments: list[RawSegmentData],
+    max_tokens: int = 512,
+) -> list[RawSegmentData]:
+    """Split segments exceeding max_tokens at paragraph/sentence boundaries.
+
+    Strategy:
+    1. Split at paragraph boundaries (\\n\\n)
+    2. If a single paragraph still exceeds the limit, split at sentence boundaries
+    3. Preserve section_path, section_title and other metadata on each sub-segment
+    """
+    if not segments:
+        return segments
+
+    result: list[RawSegmentData] = []
+    for seg in segments:
+        tc = seg.token_count if seg.token_count is not None else 0
+        if tc <= max_tokens:
+            result.append(seg)
+            continue
+
+        sub_texts = _split_text_by_paragraphs(seg.raw_text, max_tokens)
+        for sub in sub_texts:
+            result.append(_clone_segment_with_text(seg, sub))
+
+    return result
+
+
+def _split_text_by_paragraphs(text: str, max_tokens: int) -> list[str]:
+    """Split text at paragraph boundaries, then at sentence boundaries if needed."""
+    paragraphs = text.split("\n\n")
+    chunks: list[str] = []
+    current: list[str] = []
+    current_tc = 0
+
+    for para in paragraphs:
+        para_tc = token_count(para)
+
+        # If a single paragraph exceeds the limit, split it by sentences
+        if para_tc > max_tokens:
+            # Flush current buffer first
+            if current:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_tc = 0
+            # Split paragraph into sentences
+            chunks.extend(_split_paragraph_by_sentences(para, max_tokens))
+            continue
+
+        if current_tc + para_tc > max_tokens and current:
+            chunks.append("\n\n".join(current))
+            current = [para]
+            current_tc = para_tc
+        else:
+            current.append(para)
+            current_tc += para_tc
+
+    if current:
+        chunks.append("\n\n".join(current))
+
+    return [c for c in chunks if c.strip()]
+
+
+def _split_paragraph_by_sentences(text: str, max_tokens: int) -> list[str]:
+    """Split a single paragraph at sentence boundaries."""
+    sentences = split_sentences(text)
+    if not sentences:
+        return [text] if text.strip() else []
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_tc = 0
+
+    for sent in sentences:
+        sent_tc = token_count(sent)
+        if current_tc + sent_tc > max_tokens and current:
+            chunks.append("".join(current))
+            current = [sent]
+            current_tc = sent_tc
+        else:
+            current.append(sent)
+            current_tc += sent_tc
+
+    if current:
+        chunks.append("".join(current))
+
+    return [c for c in chunks if c.strip()]
+
+
+def _clone_segment_with_text(seg: RawSegmentData, new_text: str) -> RawSegmentData:
+    """Create a new RawSegmentData with replaced text and recomputed hashes/counts."""
+    norm = new_text.lower().strip()
+    return RawSegmentData(
+        document_key=seg.document_key,
+        segment_index=0,  # re-indexed by caller
+        block_type=seg.block_type,
+        semantic_role=seg.semantic_role,
+        section_path=seg.section_path,
+        section_title=seg.section_title,
+        raw_text=new_text,
+        normalized_text=norm,
+        content_hash=content_hash(new_text),
+        normalized_hash=normalized_hash(new_text),
+        token_count=token_count(new_text),
+        structure_json=seg.structure_json,
+        source_offsets_json=seg.source_offsets_json,
+        entity_refs_json=seg.entity_refs_json,
+        metadata_json=seg.metadata_json,
+    )
 
 
 def _pick_block_type(a: str, b: str) -> str:

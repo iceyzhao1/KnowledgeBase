@@ -99,3 +99,17 @@ def jaccard_similarity(text1: str, text2: str) -> float:
     if not s1 or not s2:
         return 0.0
     return len(s1 & s2) / len(s1 | s2)
+
+
+# Sentence-boundary pattern for CJK-aware splitting
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？\n])")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Split text at sentence boundaries (CJK-aware).
+
+    Splits on Chinese sentence-ending punctuation (。！？) and newlines.
+    Returns non-empty sentence strings.
+    """
+    parts = _SENTENCE_BOUNDARY_RE.split(text)
+    return [p.strip() for p in parts if p.strip()]

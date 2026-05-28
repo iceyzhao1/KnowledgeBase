@@ -15,6 +15,7 @@ from knowledge_mining.mining.infra.hash_utils import compute_raw_hash, compute_s
 from knowledge_mining.mining.ingestion.preprocessing import (
     SUPPORTED_ARCHIVE_EXTS,
     archive_to_markdown,
+    html_to_markdown,
 )
 from knowledge_mining.mining.ingestion.pdf_preprocessing import pdf_to_text
 
@@ -36,6 +37,8 @@ _EXTENSION_MAP: dict[str, str] = {
 
 PARSABLE_EXTENSIONS = {".md", ".markdown", ".txt"}
 PDF_EXTENSIONS = {".pdf"}
+HTML_EXTENSIONS = {".html", ".htm"}
+DOCX_EXTENSIONS = {".doc", ".docx"}
 PREPROCESS_EXTENSIONS = SUPPORTED_ARCHIVE_EXTS  # {".chm", ".hdx"}
 
 _SKIP_NAMES = {
@@ -129,6 +132,27 @@ def ingest_directory(
                     summary["unparsed_documents"] += 1
                     metadata_json["source_format"] = "pdf"
                     metadata_json["preprocess_error"] = f"{type(e).__name__}: {e}"
+            elif ext in HTML_EXTENSIONS:
+                # .html / .htm — convert to markdown via shared renderer.
+                try:
+                    content = html_to_markdown(file_path, doc_title=file_path.stem)
+                    file_type = "markdown"  # converted, will use MarkdownParser
+                    summary["parsed_documents"] += 1
+                    metadata_json["source_format"] = "html"
+                except Exception as e:
+                    logger.warning(
+                        "html preprocessing failed for %s: %s; registering without content",
+                        file_path, e,
+                    )
+                    content = ""
+                    summary["unparsed_documents"] += 1
+                    metadata_json["source_format"] = "html"
+                    metadata_json["preprocess_error"] = f"{type(e).__name__}: {e}"
+            elif ext in DOCX_EXTENSIONS:
+                # .doc / .docx — binary; DocxParser reads file_path directly.
+                content = ""
+                summary["parsed_documents"] += 1
+                metadata_json["source_format"] = ext.lstrip(".")
             elif ext in PARSABLE_EXTENSIONS:
                 content = content_bytes.decode("utf-8", errors="replace")
                 summary["parsed_documents"] += 1

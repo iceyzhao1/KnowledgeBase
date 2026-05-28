@@ -15,6 +15,7 @@ from knowledge_mining.mining.contracts.models import ContentBlock, SectionNode
 from knowledge_mining.mining.infra.text_utils import token_count as _token_count
 from knowledge_mining.mining.infra.structure import parse_structure as _parse_md_structure
 from knowledge_mining.mining.infra.pdf_parser import parse_pdf_to_section_tree
+from knowledge_mining.mining.infra.docx_parser import parse_docx_to_section_tree
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,23 @@ class PdfParser:
             return None
 
 
+class DocxParser:
+    """Structural parser for DOCX using python-docx."""
+
+    def parse(
+        self, content: str, file_name: str, context: dict[str, Any],
+    ) -> SectionNode | None:
+        file_path = (context or {}).get("file_path")
+        if not file_path:
+            logger.warning("DocxParser: no file_path in context for %s", file_name)
+            return None
+        try:
+            return parse_docx_to_section_tree(file_path, doc_title=file_name)
+        except Exception as e:
+            logger.warning("DocxParser failed for %s: %s", file_path, e)
+            return None
+
+
 def create_parser(file_type: str, **kwargs: Any) -> DocumentParser:
     """Factory: return appropriate parser for the given file_type."""
     if file_type == "markdown":
@@ -130,6 +148,8 @@ def create_parser(file_type: str, **kwargs: Any) -> DocumentParser:
         )
     elif file_type == "pdf":
         return PdfParser()
+    elif file_type in ("doc", "docx"):
+        return DocxParser()
     else:
         return PassthroughParser()
 
