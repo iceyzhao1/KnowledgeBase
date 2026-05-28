@@ -10,6 +10,7 @@ import uuid
 from typing import Any, TYPE_CHECKING
 
 from knowledge_mining.mining.contracts.models import RawSegmentData, SegmentRelationData
+from knowledge_mining.mining.contracts.rst_relations import LLM_TO_DB_RELATION, RST_DB_VALUES
 
 if TYPE_CHECKING:
     from knowledge_mining.mining.infra.domain_pack import DomainProfile
@@ -39,22 +40,8 @@ class DiscourseRelationBuilder:
     stage_name = "discourse_relations"
     stage_version = "1"
 
-    _LLM_TO_DB_RELATION = {
-        # Map template prompt relation names → DB relation_type
-        "ELABORATES": "elaborates",
-        "EVIDENCES": "evidences",
-        "CAUSES": "causes",
-        "RESULTS_IN": "results_in",
-        "BACKGROUNDS": "backgrounds",
-        "CONDITIONS": "conditions",
-        "SUMMARIZES": "summarizes",
-        "JUSTIFIES": "justifies",
-        "ENABLES": "enables",
-        "CONTRASTS_WITH": "contrasts_with",
-        "PARALLELS": "parallels",
-        "SEQUENCES": "sequences",
-    }
-    _RST_WHITELIST = frozenset(_LLM_TO_DB_RELATION.values())
+    _LLM_TO_DB_RELATION = LLM_TO_DB_RELATION
+    _RST_WHITELIST = RST_DB_VALUES
 
     def __init__(
         self,

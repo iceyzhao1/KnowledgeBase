@@ -602,8 +602,8 @@ class TestDiscourseRelationBuilder:
         ]
 
         llm_output = [
-            {"source": 0, "target": 1, "relation": "ELABORATION", "confidence": 0.9},
-            {"source": 1, "target": 2, "relation": "CAUSATION", "confidence": 0.7},
+            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.9},
+            {"source": 1, "target": 2, "relation": "CAUSES", "confidence": 0.7},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -628,7 +628,7 @@ class TestDiscourseRelationBuilder:
 
         llm_output = [
             {"source": 0, "target": 1, "relation": "UNRELATED", "confidence": 0.3},
-            {"source": 0, "target": 1, "relation": "ELABORATION", "confidence": 0.8},
+            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.8},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -644,7 +644,7 @@ class TestDiscourseRelationBuilder:
         segments = [RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="A")]
 
         llm_output = [
-            {"source": 0, "target": 5, "relation": "ELABORATION", "confidence": 0.9},
+            {"source": 0, "target": 5, "relation": "ELABORATES", "confidence": 0.9},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -935,14 +935,11 @@ class TestRstRelationTypes:
 
     def test_rst_labels_present(self):
         from knowledge_mining.mining.contracts.models import VALID_RELATION_TYPES
+        from knowledge_mining.mining.contracts.rst_relations import RST_DB_VALUES
 
-        rst_labels = {
-            "evidences", "causes", "results_in", "backgrounds",
-            "conditions", "summarizes", "justifies", "enables",
-            "contrasts_with", "parallels", "sequences", "unrelated",
-        }
-        for label in rst_labels:
+        for label in RST_DB_VALUES:
             assert label in VALID_RELATION_TYPES, f"{label} missing from VALID_RELATION_TYPES"
+        assert "unrelated" in VALID_RELATION_TYPES
 
     def test_structural_labels_still_present(self):
         from knowledge_mining.mining.contracts.models import VALID_RELATION_TYPES

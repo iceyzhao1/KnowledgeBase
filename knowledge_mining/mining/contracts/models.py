@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from knowledge_mining.mining.contracts.rst_relations import RST_DB_VALUES
+
 
 # ---------------------------------------------------------------------------
 # Enum-adjacent constants (mirror CHECK constraints from SQL schemas)
@@ -61,8 +63,7 @@ VALID_SEMANTIC_ROLES = frozenset({
     "unknown",
 })
 
-VALID_RELATION_TYPES = frozenset({
-    # Structural relations
+_STRUCTURAL_RELATIONS = frozenset({
     "previous",
     "next",
     "same_section",
@@ -72,35 +73,9 @@ VALID_RELATION_TYPES = frozenset({
     "elaborates",
     "condition",
     "contrast",
-    # RST discourse relations (EVO-17, legacy verb forms — kept for back-compat)
-    "evidences",
-    "causes",
-    "results_in",
-    "backgrounds",
-    "conditions",
-    "summarizes",
-    "justifies",
-    "enables",
-    "contrasts_with",
-    "parallels",
-    "sequences",
-    "exemplifies",
-    "concedes",
-    "purposes",
-    # RST discourse relations (current noun forms, aligned with domain.yaml prompts)
-    "elaboration",
-    "sequence",
-    "causation",
-    "evidence",
-    "background",
-    "exemplification",
-    "contrast",
-    "concession",
-    "condition",
-    "purpose",
-    "unrelated",
-    "other",
 })
+
+VALID_RELATION_TYPES = _STRUCTURAL_RELATIONS | RST_DB_VALUES | frozenset({"unrelated", "other"})
 
 VALID_UNIT_TYPES = frozenset({
     "raw_text",
