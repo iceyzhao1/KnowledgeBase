@@ -35,14 +35,7 @@ CREATE TABLE IF NOT EXISTS asset_documents (
     id             TEXT PRIMARY KEY,
     document_key   TEXT NOT NULL UNIQUE,
     document_name  TEXT,
-    document_type  TEXT CHECK (
-        document_type IS NULL OR
-        document_type IN (
-            'command', 'feature', 'procedure', 'troubleshooting', 'alarm',
-            'constraint', 'checklist', 'expert_note', 'project_note',
-            'standard', 'training', 'reference', 'other'
-        )
-    ),
+    document_type  TEXT,
     metadata_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at     TEXT NOT NULL
 );
@@ -106,12 +99,7 @@ CREATE TABLE IF NOT EXISTS asset_raw_segments (
     block_type          TEXT NOT NULL DEFAULT 'unknown' CHECK (
         block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')
     ),
-    semantic_role       TEXT NOT NULL DEFAULT 'unknown' CHECK (
-        semantic_role IN (
-            'concept', 'parameter', 'example', 'note', 'procedure_step',
-            'troubleshooting_step', 'constraint', 'alarm', 'checklist', 'unknown'
-        )
-    ),
+    semantic_role       TEXT NOT NULL DEFAULT 'unknown',
     raw_text            TEXT NOT NULL,
     normalized_text     TEXT NOT NULL,
     content_hash        TEXT NOT NULL,
@@ -147,7 +135,8 @@ CREATE TABLE IF NOT EXISTS asset_raw_segment_relations (
             'section_header_of', 'references', 'elaborates', 'condition',
             'contrast', 'evidences', 'causes', 'results_in', 'backgrounds',
             'conditions', 'summarizes', 'justifies', 'enables', 'contrasts_with',
-            'parallels', 'sequences', 'unrelated', 'other'
+            'parallels', 'sequences', 'exemplifies', 'concedes', 'purposes',
+            'unrelated', 'other'
         )
     ),
     weight              REAL NOT NULL DEFAULT 1.0,
@@ -186,12 +175,7 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_units (
     block_type           TEXT NOT NULL DEFAULT 'unknown' CHECK (
         block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')
     ),
-    semantic_role        TEXT NOT NULL DEFAULT 'unknown' CHECK (
-        semantic_role IN (
-            'concept', 'parameter', 'example', 'note', 'procedure_step',
-            'troubleshooting_step', 'constraint', 'alarm', 'checklist', 'unknown'
-        )
-    ),
+    semantic_role        TEXT NOT NULL DEFAULT 'unknown',
     facets_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
     entity_refs_json     JSONB NOT NULL DEFAULT '[]'::jsonb,
     source_refs_json     JSONB NOT NULL DEFAULT '{}'::jsonb,
