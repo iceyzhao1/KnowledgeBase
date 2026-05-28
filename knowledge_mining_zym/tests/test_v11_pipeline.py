@@ -22,7 +22,6 @@ from knowledge_mining_zym.mining.contracts.models import (
     StageEvent,
     VALID_BLOCK_TYPES,
     VALID_RELATION_TYPES,
-    VALID_SEMANTIC_ROLES,
     VALID_SOURCE_TYPES,
     VALID_UNIT_TYPES,
 )
@@ -106,7 +105,6 @@ class TestModels:
         assert "heading" in VALID_BLOCK_TYPES
         assert "previous" in VALID_RELATION_TYPES
         assert "section_header_of" in VALID_RELATION_TYPES
-        assert "concept" in VALID_SEMANTIC_ROLES
         assert "raw_text" in VALID_UNIT_TYPES
         assert "contextual_text" in VALID_UNIT_TYPES
         assert "entity_card" in VALID_UNIT_TYPES
@@ -431,8 +429,10 @@ class TestEndToEndPipeline:
         stages = {e["stage"] for e in events}
         assert "select_snapshot" in stages
         assert "segment" in stages
-        assert "build_relations" in stages
-        assert "build_retrieval_units" in stages
+        assert "segment_persist" in stages
+        assert "relations_persist" in stages
+        assert "retrieval_units" in stages
+        assert "retrieval_units_persist" in stages
         rdb.close()
 
 

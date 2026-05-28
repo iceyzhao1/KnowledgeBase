@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -171,23 +172,54 @@ class LlmClient:
         self,
         task_ids: dict[str, str],
         poll_interval: float = 1.0,
+        timeout_seconds: float | None = None,
+        status_error_limit: int = 5,
+        cancel_checker: Callable[[], bool] | None = None,
+        cancel_pending_on_exit: bool = True,
     ) -> dict[str, list[dict]]:
         """Poll multiple tasks concurrently — collect results as they complete.
 
-        No timeout. Loops until all tasks resolve (success or failure).
-        Stuck workers are handled by the supervisor layer above.
+        Bounded wait: returns successfully completed results and abandons
+        unresolved tasks when timeout/cancel/error-limit is reached.
 
         Args:
             task_ids: {key -> task_id} mapping (e.g. {"0": "task-abc", "1": "task-def"})
             poll_interval: seconds between scan rounds
+            timeout_seconds: total time budget. None = no deadline.
+            status_error_limit: consecutive status-check failures per task
+                before the task is abandoned.
+            cancel_checker: returns True when caller wants to stop waiting.
+            cancel_pending_on_exit: best-effort cancel unresolved tasks on exit.
 
         Returns:
             {key -> parsed_output} for successfully completed tasks only.
         """
         results: dict[str, list[dict]] = {}
         pending: dict[str, str] = dict(task_ids)  # key -> task_id
+        status_errors: dict[str, int] = {key: 0 for key in pending}
+        deadline = time.time() + timeout_seconds if timeout_seconds is not None else None
+        should_cancel_pending = False
+        exit_reason: str | None = None
+        tasks_to_cancel: dict[str, str] = {}
 
         while pending:
+            hit_status_error_limit = False
+            if cancel_checker is not None:
+                try:
+                    if cancel_checker():
+                        should_cancel_pending = True
+                        exit_reason = "cancelled"
+                        logger.warning("poll_all cancelled with %d pending tasks", len(pending))
+                        break
+                except Exception as e:
+                    logger.warning("poll_all cancel_checker failed: %s", e)
+
+            if deadline is not None and time.time() >= deadline:
+                should_cancel_pending = True
+                exit_reason = "timeout"
+                logger.warning("poll_all timed out with %d pending tasks", len(pending))
+                break
+
             still_pending: dict[str, str] = {}
             for key, task_id in pending.items():
                 status = self.check_status(task_id)
@@ -201,18 +233,63 @@ class LlmClient:
                     logger.info("Task %s (%s) ended with status %s", key, task_id, status)
 
                 elif status is None:
-                    # HTTP error (LLM service temporarily unreachable) — keep trying
-                    still_pending[key] = task_id
+                    status_errors[key] = status_errors.get(key, 0) + 1
+                    if status_errors[key] >= status_error_limit:
+                        should_cancel_pending = True
+                        hit_status_error_limit = True
+                        exit_reason = "status errors"
+                        tasks_to_cancel[key] = task_id
+                        logger.warning(
+                            "Task %s (%s) status check failed %d times; abandoning",
+                            key, task_id, status_errors[key],
+                        )
+                    else:
+                        still_pending[key] = task_id
 
                 else:
                     # queued / running — keep waiting
+                    status_errors[key] = 0
                     still_pending[key] = task_id
 
             pending = still_pending
+            if hit_status_error_limit:
+                break
             if pending:
                 time.sleep(poll_interval)
 
+        if should_cancel_pending and cancel_pending_on_exit:
+            tasks_to_cancel.update(pending)
+        if tasks_to_cancel and cancel_pending_on_exit:
+            logger.warning(
+                "poll_all exiting due to %s; cancelling %d pending tasks",
+                exit_reason or "unresolved status errors",
+                len(tasks_to_cancel),
+            )
+            self.cancel_many(tasks_to_cancel.values())
+
         return results
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Best-effort task cancel via llm_service. Returns False on failure."""
+        try:
+            client = self._get_client()
+            resp = client.post(f"{self._base_url}/api/v1/tasks/{task_id}/cancel")
+            if resp.status_code in (200, 202):
+                return True
+            logger.warning("cancel_task %s returned HTTP %s: %s", task_id, resp.status_code, resp.text[:200])
+            return False
+        except Exception as e:
+            logger.warning("cancel_task failed for %s: %s", task_id, e)
+            self.close()
+            return False
+
+    def cancel_many(self, task_ids) -> int:
+        """Best-effort cancel multiple tasks. Returns number acknowledged."""
+        count = 0
+        for task_id in task_ids:
+            if self.cancel_task(str(task_id)):
+                count += 1
+        return count
 
     def execute(
         self,

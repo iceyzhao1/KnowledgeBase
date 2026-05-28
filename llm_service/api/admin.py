@@ -5,7 +5,11 @@ import logging
 
 from fastapi import APIRouter, Request
 
-from llm_service.config import fetch_config_from_control_plane, dig
+from llm_service.config import (
+    dig,
+    fetch_config_from_control_plane,
+    resolve_active_model_config,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -28,17 +32,19 @@ async def reload_config(request: Request):
         logger.exception("Failed to fetch config from control plane")
         return {"ok": False, "error": str(exc)}
 
-    # 2. Update provider (chat)
+    # 2. Resolve active model config (handles multi-model merge)
+    active_provider = resolve_active_model_config(new_cfg)
+
+    # 3. Update provider (chat) — use resolved config
     provider = app.state.llm_service._provider
     if hasattr(provider, "_url"):
-        provider._url = dig(new_cfg, "provider", "base_url").rstrip("/")
-        provider._api_key = dig(new_cfg, "provider", "api_key")
-        provider._model = dig(new_cfg, "provider", "model")
-        provider._extra_headers = {**(dig(new_cfg, "provider", "headers") or {}),
-                                   **(dig(new_cfg, "model", "extra_headers") or {})}
-        provider._timeout = dig(new_cfg, "provider", "timeout")
+        provider._url = active_provider["base_url"].rstrip("/")
+        provider._api_key = active_provider["api_key"]
+        provider._model = active_provider.get("model", active_provider.get("active_model", ""))
+        provider._extra_headers = active_provider.get("headers") or {}
+        provider._timeout = active_provider.get("timeout", 30)
 
-    # 3. Update model provider (embedding + rerank)
+    # 4. Update model provider (embedding + rerank)
     model_provider = app.state.llm_service._model_provider
     if hasattr(model_provider, "_embedding_api_key"):
         model_provider._embedding_api_key = dig(new_cfg, "embedding", "api_key")
@@ -47,14 +53,12 @@ async def reload_config(request: Request):
         model_provider._rerank_api_key = dig(new_cfg, "rerank", "api_key")
         model_provider._rerank_url = dig(new_cfg, "rerank", "base_url").rstrip("/")
         model_provider._rerank_model = dig(new_cfg, "rerank", "model")
-        model_provider._timeout = dig(new_cfg, "model", "timeout")
-        model_provider._extra_headers = dig(new_cfg, "model", "extra_headers") or {}
 
-    # 4. Update service-level config dict (used by dig() calls in runtime)
+    # 5. Update service-level config dict (used by dig() calls in runtime)
     app.state.config = new_cfg
     app.state.llm_service._config = new_cfg
 
-    # 5. Update model service defaults
+    # 6. Update model service defaults
     if hasattr(app.state, "model_service"):
         app.state.model_service._default_embedding_model = dig(new_cfg, "embedding", "model")
         app.state.model_service._default_rerank_model = dig(new_cfg, "rerank", "model")
@@ -63,7 +67,9 @@ async def reload_config(request: Request):
     return {
         "ok": True,
         "config": {
-            "provider_model": dig(new_cfg, "provider", "model"),
+            "active_model": new_cfg.get("provider", {}).get("active_model"),
+            "provider_model": active_provider.get("model"),
+            "provider_base_url": active_provider.get("base_url"),
             "embedding_model": dig(new_cfg, "embedding", "model"),
             "rerank_model": dig(new_cfg, "rerank", "model"),
             "worker_concurrency": dig(new_cfg, "worker", "concurrency"),

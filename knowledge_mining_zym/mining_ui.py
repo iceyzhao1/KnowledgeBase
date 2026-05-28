@@ -24,6 +24,7 @@ import logging
 import os
 import shutil
 import sys
+import asyncio
 import threading
 import time
 import traceback
@@ -1080,6 +1081,35 @@ def _safe_render(spec: dict[str, Any], run_id: str | None) -> list[Any]:
         return out
 
 
+def _poll_ui_payload(input_path: str, focus_stage: str | None) -> dict | None:
+    """Load one UI polling snapshot off the NiceGUI event loop."""
+    snap = _query_latest_run(input_path)
+    if snap is None:
+        return None
+
+    run_row = snap["run"]
+    run_id = run_row["id"]
+    phase = _phase_from_run(run_row)
+    stages = _compute_pipeline_status(run_id, run_row)
+    operators = _extract_operators(run_row)
+
+    panel_data = None
+    if focus_stage:
+        spec = STAGE_BY_ID.get(focus_stage)
+        if spec:
+            panel_data = _safe_render(spec, run_id)
+
+    return {
+        "run_id": run_id,
+        "phase": phase,
+        "run_row": run_row,
+        "stages": stages,
+        "operators": operators,
+        "focus_stage": focus_stage,
+        "panel_data": panel_data,
+    }
+
+
 # =====================================================================
 # Per-stage status derivation (status + KPI) from PG
 # =====================================================================
@@ -1171,12 +1201,16 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         rt.close()
         asset.close()
 
-    # In-memory stage events (emitted by StreamingPipeline workers, post 2026-05-07).
-    # Fall back to legacy persist-time names for runs created before that change.
+    # In-memory stage events. Primary names are the StreamingPipeline stage names
+    # (parse/segment/enrich/discourse_relations/retrieval_units); persist-side names
+    # carry the _persist suffix. Legacy names (build_relations, build_retrieval_units,
+    # bare "segment" for persist) remain in the chain so runs created before the
+    # 2026-05-21 rename still display.
     parse_evt = events_by_stage.get("parse")
     seg_evt = events_by_stage.get("segment") or events_by_stage.get("segment_persist")
     enrich_evt = events_by_stage.get("enrich")
-    rel_evt = (events_by_stage.get("relations")
+    rel_evt = (events_by_stage.get("discourse_relations")
+               or events_by_stage.get("relations")
                or events_by_stage.get("relations_persist")
                or events_by_stage.get("build_relations"))
     snap_evt = events_by_stage.get("select_snapshot")
@@ -1184,6 +1218,7 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
               or events_by_stage.get("retrieval_units_persist")
               or events_by_stage.get("build_retrieval_units"))
     ab_evt = events_by_stage.get("assemble_build")
+    vb_evt = events_by_stage.get("validate_build")
     pr_evt = events_by_stage.get("publish_release")
 
     def derive(has_data: bool, evt: dict | None, *, started_others: bool = False) -> tuple[str, int | None]:
@@ -1212,7 +1247,7 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
         kpi = "—"
     stages["ingest"] = {"status": st, "kpi": kpi, "duration_ms": None}
 
-    parse_st, parse_dur = derive(n_segments > 0, parse_evt or seg_evt)
+    parse_st, parse_dur = derive(n_segments > 0, parse_evt)
     stages["parse"] = {"status": parse_st, "kpi": f"≈{n_segments} 段" if n_segments else "—", "duration_ms": parse_dur}
 
     seg_st, seg_dur = derive(n_segments > 0, seg_evt)
@@ -1250,7 +1285,13 @@ def _compute_pipeline_status(run_id: str, run_row: dict) -> dict[str, dict]:
     bd_st, bd_dur = derive(has_build, ab_evt)
     stages["build"] = {"status": bd_st, "kpi": f"build {build_id[:8]}" if has_build and build_id else "—", "duration_ms": bd_dur}
 
-    rel2_st, rel2_dur = derive(n_releases > 0, pr_evt)
+    # validate_build sits between build and release; if it failed, publish_release
+    # never fires, so surface that failure on the release tile instead of leaving
+    # it stuck on pending.
+    if vb_evt and vb_evt.get("status") == "failed" and not (pr_evt and pr_evt.get("status") in ("completed", "started")):
+        rel2_st, rel2_dur = "failed", vb_evt.get("duration_ms")
+    else:
+        rel2_st, rel2_dur = derive(n_releases > 0, pr_evt)
     stages["release"] = {"status": rel2_st, "kpi": f"{n_releases} release" if n_releases else "—", "duration_ms": rel2_dur}
 
     if overall_status == "cancelled":
@@ -1500,6 +1541,9 @@ class MiningState:
     auto_follow: bool = True
     started_at_local: float | None = None
     domain_pack: str | None = None
+    run_row: dict | None = None
+    operators: dict[str, Any] | None = None
+    panel_cache: dict[str, list[Any]] = field(default_factory=dict)
     stages: dict[str, dict] = field(
         default_factory=lambda: {sid: {"status": "pending", "kpi": "—", "duration_ms": None}
                                  for sid in PIPELINE_STAGE_IDS}
@@ -1784,7 +1828,7 @@ def main_page():
         STATE.files.append(dst)
         ui.notify(f"已上传 {e.file.name}", type="positive", position="bottom-right")
 
-    def refresh_ui():
+    def refresh_ui(panel_data: list[Any] | None = None):
         """Synchronize UI components with STATE."""
         if STATE.phase == "ready":
             ready_card.set_visibility(True)
@@ -1794,14 +1838,11 @@ def main_page():
             run_card.set_visibility(True)
 
         # Status bar
-        run_row = None
-        if STATE.input_path:
-            snap = _query_latest_run(STATE.input_path)
-            run_row = snap["run"] if snap else None
+        run_row = STATE.run_row
         status_bar.set_content(_status_bar_html(run_row, STATE.stages, STATE.phase, STATE.domain_pack))
 
         # Pull operator info once per refresh (used by segment / enrich / etc panels).
-        operators = _extract_operators(run_row)
+        operators = STATE.operators
 
         # Stepper buttons
         for sid, btn in stepper_btns.items():
@@ -1824,7 +1865,14 @@ def main_page():
         for sid, panel in panels.items():
             if sid == STATE.focus_stage:
                 panel.show()
-                data = _safe_render(panel.spec, STATE.run_id)
+                if panel_data is not None:
+                    data = panel_data
+                    STATE.panel_cache[sid] = data
+                else:
+                    data = STATE.panel_cache.get(sid)
+                    if data is None:
+                        data = _safe_render(panel.spec, STATE.run_id)
+                        STATE.panel_cache[sid] = data
                 panel.render(data, STATE.stages, operators)
             else:
                 panel.hide()
@@ -1890,27 +1938,58 @@ def main_page():
         STATE.focus_stage = PIPELINE_STAGE_IDS[0]
         STATE.run_id = None
         STATE.domain_pack = domain_pack_v
+        STATE.run_row = None
+        STATE.operators = None
+        STATE.panel_cache = {}
         STATE.stages = {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS}
         refresh_ui()
 
-    def poll_tick():
+    polling = False
+
+    async def poll_tick():
+        nonlocal polling
         if STATE.phase != "running":
+            return
+        if polling:
+            logger.warning("skip UI poll tick: previous poll is still running")
             return
         input_path = STATE.input_path
         if not input_path:
             return
-        snap = _query_latest_run(input_path)
-        if snap is None:
+
+        polling = True
+        try:
+            payload = await asyncio.to_thread(_poll_ui_payload, input_path, STATE.focus_stage)
+        except Exception as e:
+            logger.exception("UI poll failed: %s", e)
             return
-        run_row = snap["run"]
-        STATE.run_id = run_row["id"]
-        new_phase = _phase_from_run(run_row)
-        STATE.phase = new_phase
-        STATE.stages = _compute_pipeline_status(STATE.run_id, run_row)
-        _log_progress(STATE.stages, new_phase)
+        finally:
+            polling = False
+
+        if payload is None:
+            if STATE.started_at_local and time.time() - STATE.started_at_local > 30:
+                STATE.phase = "failed"
+                refresh_ui()
+            return
+
+        STATE.run_id = payload["run_id"]
+        STATE.phase = payload["phase"]
+        STATE.run_row = payload["run_row"]
+        STATE.stages = payload["stages"]
+        STATE.operators = payload["operators"]
+        _log_progress(STATE.stages, STATE.phase)
+
+        panel_data = payload.get("panel_data")
         if STATE.auto_follow:
-            STATE.focus_stage = _next_focus(STATE.focus_stage, STATE.stages, True)
-        refresh_ui()
+            next_focus = _next_focus(STATE.focus_stage, STATE.stages, True)
+            if next_focus != payload.get("focus_stage"):
+                STATE.focus_stage = next_focus
+                next_spec = STAGE_BY_ID.get(next_focus)
+                if next_spec:
+                    panel_data = await asyncio.to_thread(_safe_render, next_spec, STATE.run_id)
+            else:
+                STATE.focus_stage = next_focus
+        refresh_ui(panel_data)
 
     def on_cancel():
         if not STATE.run_id:
@@ -1952,6 +2031,9 @@ def main_page():
         STATE.auto_follow = True
         STATE.started_at_local = None
         STATE.domain_pack = None
+        STATE.run_row = None
+        STATE.operators = None
+        STATE.panel_cache = {}
         STATE.stages = {sid: {"status": "pending", "kpi": "—", "duration_ms": None} for sid in PIPELINE_STAGE_IDS}
         STATE.files = []
         upload.reset()

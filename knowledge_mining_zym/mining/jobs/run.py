@@ -4,11 +4,12 @@ Two entry points:
 - run(input_path, phase1_only=False): full or phase1-only pipeline
 - publish(run_id): publish a completed run's build
 
-Pipeline stages per document:
-  ingest -> parse -> segment -> enrich -> build_relations -> build_retrieval_units
+Pipeline stages per document (StreamingPipeline, then persistence):
+  ingest -> parse -> segment -> enrich -> discourse_relations -> retrieval_units
+  (persist) select_snapshot -> segment_persist -> relations_persist -> retrieval_units_persist
 
 Global stages:
-  select_snapshot -> assemble_build -> [publish_release]
+  assemble_build -> validate_build -> [publish_release]
 """
 from __future__ import annotations
 
@@ -39,6 +40,18 @@ def _check_cancelled(runtime_db: "MiningRuntimeDB", run_id: str) -> None:
     )
     if row and row["status"] == "cancelled":
         raise MiningCancelled()
+
+
+def _is_cancelled(runtime_db: "MiningRuntimeDB", run_id: str) -> bool:
+    """Return True when the run was cancelled; tolerate early/missing rows."""
+    try:
+        row = runtime_db._fetchone(
+            "SELECT status FROM mining_runs WHERE id = %s", (run_id,)
+        )
+        return bool(row and row["status"] == "cancelled")
+    except Exception:
+        logger.exception("cancel status check failed for run_id=%s", run_id)
+        return False
 
 
 from knowledge_mining_zym.mining.infra.db import AssetCoreDB, MiningRuntimeDB
@@ -133,6 +146,9 @@ def run(
     embedding_dimensions = embedding_dimensions or cfg.embedding_dimensions
     max_workers = max_workers or cfg.max_workers
     domain_pack = domain_pack or cfg.domain_pack
+    llm_poll_timeout_seconds = cfg.mining_llm_poll_timeout_seconds
+    llm_poll_interval_seconds = cfg.mining_llm_poll_interval_seconds
+    llm_status_error_limit = cfg.mining_llm_status_error_limit
 
     input_path = Path(input_path)
     batch_params = batch_params or BatchParams()
@@ -147,8 +163,18 @@ def run(
     # Pre-generate run_id so we can fail_run on global exception
     run_id = uuid.uuid4().hex
 
+    cancel_checker = lambda: _is_cancelled(runtime_db, run_id)
+
     # LLM integration: create question generator if URL provided
-    llm_services = _init_llm(llm_base_url, llm_bypass_proxy, profile)
+    llm_services = _init_llm(
+        llm_base_url,
+        llm_bypass_proxy,
+        profile,
+        poll_timeout_seconds=llm_poll_timeout_seconds,
+        poll_interval_seconds=llm_poll_interval_seconds,
+        status_error_limit=llm_status_error_limit,
+        cancel_checker=cancel_checker,
+    )
 
     # Embedding integration: prefer llm_service, fallback to direct Zhipu
     embedding_generator = _init_embedding(
@@ -227,6 +253,10 @@ def _init_llm(
     llm_base_url: str | None,
     bypass_proxy: bool = False,
     profile: DomainProfile | None = None,
+    poll_timeout_seconds: float = 180.0,
+    poll_interval_seconds: float = 1.0,
+    status_error_limit: int = 5,
+    cancel_checker: Any | None = None,
 ) -> dict[str, Any] | None:
     """Initialize LLM services if URL provided.
 
@@ -255,7 +285,13 @@ def _init_llm(
 
     result: dict[str, Any] = {
         "question_generator": LlmQuestionGenerator(
-            base_url=llm_base_url, bypass_proxy=bypass_proxy, profile=profile,
+            base_url=llm_base_url,
+            bypass_proxy=bypass_proxy,
+            profile=profile,
+            timeout=int(poll_timeout_seconds),
+            poll_interval=poll_interval_seconds,
+            status_error_limit=status_error_limit,
+            cancel_checker=cancel_checker,
         ),
     }
 
@@ -266,6 +302,10 @@ def _init_llm(
             base_url=llm_base_url,
             bypass_proxy=bypass_proxy,
             profile=profile,
+            timeout_seconds=poll_timeout_seconds,
+            poll_interval=poll_interval_seconds,
+            status_error_limit=status_error_limit,
+            cancel_checker=cancel_checker,
         )
     except (ImportError, Exception):
         pass
@@ -274,7 +314,12 @@ def _init_llm(
     try:
         from knowledge_mining_zym.mining.stages.relations import DiscourseRelationBuilder
         result["discourse_relation_builder"] = DiscourseRelationBuilder(
-            base_url=llm_base_url, bypass_proxy=bypass_proxy,
+            base_url=llm_base_url,
+            bypass_proxy=bypass_proxy,
+            timeout_seconds=poll_timeout_seconds,
+            poll_interval=poll_interval_seconds,
+            status_error_limit=status_error_limit,
+            cancel_checker=cancel_checker,
         )
     except (ImportError, Exception):
         pass
@@ -284,7 +329,12 @@ def _init_llm(
         try:
             from knowledge_mining_zym.mining.stages.retrieval_units import LLMContextualizer
             result["contextualizer"] = LLMContextualizer(
-                base_url=llm_base_url, bypass_proxy=bypass_proxy,
+                base_url=llm_base_url,
+                bypass_proxy=bypass_proxy,
+                timeout=int(poll_timeout_seconds),
+                poll_interval=poll_interval_seconds,
+                status_error_limit=status_error_limit,
+                cancel_checker=cancel_checker,
             )
         except (ImportError, Exception):
             pass
@@ -343,6 +393,7 @@ def _run_pipeline(
     if profile is None:
         from knowledge_mining_zym.mining.infra.domain_pack import get_default_profile
         profile = get_default_profile()
+    domain_profile = profile
 
     now = _utcnow()
 
@@ -366,7 +417,7 @@ def _run_pipeline(
         batch_id=batch_id,
         batch_code=f"batch-{run_id[:8]}",
         source_type=params.default_source_type,
-        domain=profile.domain_id,
+        domain=domain_profile.domain_id,
         description=f"Mining run {run_id}",
     )
     asset_db.commit()
@@ -379,7 +430,7 @@ def _run_pipeline(
         embedding_generator=embedding_generator,
         discourse_relation_builder=llm.get("discourse_relation_builder"),
         contextualizer=llm.get("contextualizer"),
-        domain_profile=profile,
+        domain_profile=domain_profile,
     )
 
     committed_count = 0
@@ -443,7 +494,7 @@ def _run_pipeline(
                 continue
 
         # Queue for streaming pipeline
-        profile = DocumentProfile(
+        doc_profile = DocumentProfile(
             document_key=doc_key,
             source_type=doc.source_type or params.default_source_type,
             document_type=doc.document_type or params.default_document_type,
@@ -451,14 +502,14 @@ def _run_pipeline(
             tags_json=doc.tags_json,
             title=doc.title,
         )
-        ctx = DocumentContext(raw_file=doc, profile=profile, run_document_id=rd_id)
+        ctx = DocumentContext(raw_file=doc, profile=doc_profile, run_document_id=rd_id)
         work_items.append({
             "doc": doc,
             "rd_id": rd_id,
             "doc_key": doc_key,
             "action": action,
             "existing_doc": existing_doc,
-            "profile": profile,
+            "profile": doc_profile,
             "ctx": ctx,
         })
 
@@ -471,7 +522,7 @@ def _run_pipeline(
             ("segment",               lambda ctx: segment_stage(ctx, config),         1),
             ("enrich",                lambda ctx: enrich_stage(ctx, config),          max_workers),
             ("discourse_relations",   lambda ctx: discourse_stage(ctx, config),       min(max_workers, 2)),
-            ("build_retrieval_units", lambda ctx: retrieval_units_stage(ctx, config), max_workers),
+            ("retrieval_units",       lambda ctx: retrieval_units_stage(ctx, config), max_workers),
         ]
 
         pipeline = StreamingPipeline(stages, run_id=run_id, tracker=tracker)
@@ -485,7 +536,7 @@ def _run_pipeline(
         doc_key = item["doc_key"]
         action = item["action"]
         existing_doc = item["existing_doc"]
-        profile = item["profile"]
+        doc_profile = item["profile"]
 
         # Pipeline error
         if ctx.error:
@@ -510,7 +561,7 @@ def _run_pipeline(
             # Stage 6: Select/create snapshot
             evt = tracker.start_stage(run_id, "select_snapshot", rd_id)
             document_id, snapshot_id, link_id = select_or_create_snapshot(
-                asset_db, doc, profile, batch_id=batch_id,
+                asset_db, doc, doc_profile, batch_id=batch_id,
             )
             tracker.end_stage(evt, run_id, "select_snapshot")
             asset_db.commit()
@@ -530,7 +581,7 @@ def _run_pipeline(
                 asset_db.commit()
 
             # Write segments to DB (track at commit time since pipeline ran in streaming)
-            evt_seg = tracker.start_stage(run_id, "segment", rd_id)
+            evt_seg = tracker.start_stage(run_id, "segment_persist", rd_id)
             for seg in segments:
                 seg_key = f"{seg.document_key}#{seg.segment_index}"
                 seg_id = seg_id_map.get(seg_key, uuid.uuid4().hex)
@@ -555,7 +606,7 @@ def _run_pipeline(
                 )
 
             # Write relations to DB
-            evt_rel = tracker.start_stage(run_id, "build_relations", rd_id)
+            evt_rel = tracker.start_stage(run_id, "relations_persist", rd_id)
             for rel in relations:
                 src_id = seg_id_map.get(rel.source_segment_key, "")
                 tgt_id = seg_id_map.get(rel.target_segment_key, "")
@@ -571,13 +622,13 @@ def _run_pipeline(
                         distance=rel.distance,
                         metadata_json=rel.metadata_json,
                     )
-            tracker.end_stage(evt_rel, run_id, "build_relations",
+            tracker.end_stage(evt_rel, run_id, "relations_persist",
                               output_summary=f"{len(relations)} relations")
-            tracker.end_stage(evt_seg, run_id, "segment",
+            tracker.end_stage(evt_seg, run_id, "segment_persist",
                               output_summary=f"{len(segments)} segments")
 
             # Write retrieval units to DB
-            evt_ru = tracker.start_stage(run_id, "build_retrieval_units", rd_id)
+            evt_ru = tracker.start_stage(run_id, "retrieval_units_persist", rd_id)
             ru_id_map: dict[str, str] = {}
             for ru in retrieval_units:
                 unit_id = uuid.uuid4().hex
@@ -604,7 +655,7 @@ def _run_pipeline(
                 )
 
             asset_db.commit()
-            tracker.end_stage(evt_ru, run_id, "build_retrieval_units",
+            tracker.end_stage(evt_ru, run_id, "retrieval_units_persist",
                               output_summary=f"{len(retrieval_units)} units")
 
             # Generate embeddings for retrieval units (if embedding_generator configured)
@@ -664,14 +715,14 @@ def _run_pipeline(
         # REMOVE detection disabled — incremental batches only process a subset,
         # parent build snapshots are carried forward by assemble_build instead.
         snapshot_decisions = classify_documents(
-            asset_db, snapshot_decisions, domain=profile.domain_id, detect_remove=False,
+            asset_db, snapshot_decisions, domain=domain_profile.domain_id, detect_remove=False,
         )
 
         # Stage 7: Assemble build (auto-selects full vs incremental)
         evt = tracker.start_stage(run_id, "assemble_build")
         build_id = assemble_build(
             asset_db,
-            domain=profile.domain_id,
+            domain=domain_profile.domain_id,
             run_id=run_id,
             batch_id=batch_id,
             snapshot_decisions=snapshot_decisions,
@@ -698,7 +749,7 @@ def _run_pipeline(
             release_id = publish_release(
                 asset_db,
                 build_id=build_id,
-                domain=profile.domain_id,
+                domain=domain_profile.domain_id,
                 released_by=f"run:{run_id}",
             )
             tracker.end_stage(evt, run_id, "publish_release", output_summary=f"release_id={release_id}")

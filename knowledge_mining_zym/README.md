@@ -98,7 +98,8 @@ rule_enricher = get_stage('enrich', '1')  # → RuleBasedEnricher (v1)
 ### Phase 1: Document Mining（文档级，可并行）
 
 ```
-ingest → parse → segment → enrich → build_relations → build_retrieval_units → select_snapshot
+ingest → parse → segment → enrich → discourse_relations → retrieval_units
+       → select_snapshot → segment_persist → relations_persist → retrieval_units_persist
 ```
 
 ### Phase 2: Build & Publish（全局串行）

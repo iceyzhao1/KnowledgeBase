@@ -22,6 +22,9 @@ class MiningConfig(BaseSettings):
         EMBEDDING_MODEL:        model name sent to llm_service embedding endpoint
         EMBEDDING_DIMENSIONS:   embedding vector dimensions
         MINING_LLM_BYPASS_PROXY: bypass system proxy for LLM calls
+        MINING_LLM_POLL_TIMEOUT_SECONDS: max wait per LLM batch poll
+        MINING_LLM_POLL_INTERVAL_SECONDS: seconds between LLM status scans
+        MINING_LLM_STATUS_ERROR_LIMIT: consecutive status errors before abandoning a task
         DOMAIN_PACK:            default domain pack ID
         MAX_WORKERS:            max concurrent workers for streaming pipeline
     """
@@ -29,6 +32,9 @@ class MiningConfig(BaseSettings):
     # LLM Service
     llm_service_url: str = "http://localhost:8900"
     mining_llm_bypass_proxy: bool = False
+    mining_llm_poll_timeout_seconds: float = 180.0
+    mining_llm_poll_interval_seconds: float = 1.0
+    mining_llm_status_error_limit: int = 5
 
     # Embedding (via llm_service)
     embedding_model: str = "embedding-3"

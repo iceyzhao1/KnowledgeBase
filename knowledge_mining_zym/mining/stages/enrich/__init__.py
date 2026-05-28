@@ -7,9 +7,10 @@ LlmEnricher submits segments to llm_service for:
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
 
-from knowledge_mining_zym.mining.contracts.models import VALID_SEMANTIC_ROLES, RawSegmentData
+from knowledge_mining_zym.mining.contracts.models import RawSegmentData
 
 if TYPE_CHECKING:
     from knowledge_mining_zym.mining.infra.domain_pack import DomainProfile
@@ -31,10 +32,18 @@ class LlmEnricher:
         base_url: str = "http://localhost:8900",
         bypass_proxy: bool = False,
         profile: "DomainProfile | None" = None,
+        timeout_seconds: float = 180,
+        poll_interval: float = 1.0,
+        status_error_limit: int = 5,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> None:
         from knowledge_mining_zym.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._profile = profile
+        self._timeout_seconds = timeout_seconds
+        self._poll_interval = poll_interval
+        self._status_error_limit = status_error_limit
+        self._cancel_checker = cancel_checker
 
     def enrich(
         self,
@@ -73,7 +82,13 @@ class LlmEnricher:
                 seg_tasks[str(idx)] = task_id
 
         # Phase 2: Poll all tasks concurrently
-        llm_raw: dict[str, list[dict]] = self._client.poll_all(seg_tasks)
+        llm_raw: dict[str, list[dict]] = self._client.poll_all(
+            seg_tasks,
+            poll_interval=self._poll_interval,
+            timeout_seconds=self._timeout_seconds,
+            status_error_limit=self._status_error_limit,
+            cancel_checker=self._cancel_checker,
+        )
         llm_results: dict[int, dict[str, Any]] = {}
         for key, items in llm_raw.items():
             if items and isinstance(items[0], dict):
@@ -113,7 +128,7 @@ def _apply_llm_result(
         changes["entity_refs_json"] = merged_refs
 
     role = result.get("semantic_role", "")
-    if role and role in VALID_SEMANTIC_ROLES and role != seg.semantic_role:
+    if role and role != seg.semantic_role:
         changes["semantic_role"] = role
 
     doc_type = result.get("document_type", "")

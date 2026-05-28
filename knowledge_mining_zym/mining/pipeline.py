@@ -172,7 +172,7 @@ class MiningPipeline:
 
         # Stage 5: Build retrieval units
         if stage_callback:
-            stage_callback("build_retrieval_units", ctx)
+            stage_callback("retrieval_units", ctx)
         if ctx.segments:
             from knowledge_mining_zym.mining.stages.retrieval_units import build_retrieval_units
             units = build_retrieval_units(

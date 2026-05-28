@@ -502,7 +502,7 @@ class TestMiningPipeline:
         assert "parse" in stages_called
         assert "segment" in stages_called
         assert "enrich" in stages_called
-        assert "build_retrieval_units" in stages_called
+        assert "retrieval_units" in stages_called
 
     def test_custom_operator_swap(self):
         """Verify pipeline works when swapping DefaultSegmenter with custom."""
@@ -689,8 +689,8 @@ class TestDiscourseRelationBuilder:
         ]
 
         llm_output = [
-            {"source": 0, "target": 1, "relation": "ELABORATION", "confidence": 0.9},
-            {"source": 1, "target": 2, "relation": "CAUSATION", "confidence": 0.7},
+            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.9},
+            {"source": 1, "target": 2, "relation": "CAUSES", "confidence": 0.7},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -699,10 +699,10 @@ class TestDiscourseRelationBuilder:
         assert relations[0].relation_type == "elaborates"
         assert relations[0].weight == 0.9
         assert relations[0].metadata_json["source"] == "discourse_llm"
-        assert relations[0].metadata_json["rst_relation"] == "elaboration"
+        assert relations[0].metadata_json["rst_relation"] == "elaborates"
 
         assert relations[1].relation_type == "causes"
-        assert relations[1].metadata_json["rst_relation"] == "causation"
+        assert relations[1].metadata_json["rst_relation"] == "causes"
 
     def test_unrelated_filtered_out(self):
         from knowledge_mining_zym.mining.stages.relations import DiscourseRelationBuilder
@@ -717,7 +717,7 @@ class TestDiscourseRelationBuilder:
 
         llm_output = [
             {"source": 0, "target": 1, "relation": "UNRELATED", "confidence": 0.3},
-            {"source": 0, "target": 1, "relation": "ELABORATION", "confidence": 0.8},
+            {"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.8},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -733,7 +733,7 @@ class TestDiscourseRelationBuilder:
         segments = [RawSegmentData(document_key="doc:/test.md", segment_index=0, raw_text="A")]
 
         llm_output = [
-            {"source": 0, "target": 5, "relation": "ELABORATION", "confidence": 0.9},
+            {"source": 0, "target": 5, "relation": "ELABORATES", "confidence": 0.9},
         ]
 
         relations = builder._parse_llm_results(llm_output, segments)
@@ -1021,14 +1021,11 @@ class TestRstRelationTypes:
 
     def test_rst_labels_present(self):
         from knowledge_mining_zym.mining.contracts.models import VALID_RELATION_TYPES
+        from knowledge_mining_zym.mining.contracts.rst_relations import RST_DB_VALUES
 
-        rst_labels = {
-            "elaboration", "sequence", "causation", "evidence", "background",
-            "exemplification", "contrast", "concession", "condition", "purpose",
-            "unrelated",
-        }
-        for label in rst_labels:
+        for label in RST_DB_VALUES:
             assert label in VALID_RELATION_TYPES, f"{label} missing from VALID_RELATION_TYPES"
+        assert "unrelated" in VALID_RELATION_TYPES
 
     def test_structural_labels_still_present(self):
         from knowledge_mining_zym.mining.contracts.models import VALID_RELATION_TYPES
@@ -1136,7 +1133,7 @@ class TestStreamingPipeline:
             ("parse",                 lambda c: parse_stage(c, config),           1),
             ("segment",               lambda c: segment_stage(c, config),         1),
             ("enrich",                lambda c: enrich_stage(c, config),          2),
-            ("build_retrieval_units", lambda c: retrieval_units_stage(c, config), 2),
+            ("retrieval_units",       lambda c: retrieval_units_stage(c, config), 2),
         ]
 
         pipeline = StreamingPipeline(stages)
@@ -1184,7 +1181,7 @@ class TestStreamingPipeline:
             ("parse",                 lambda c: parse_stage(c, config),           1),
             ("segment",               lambda c: segment_stage(c, config),         1),
             ("enrich",                lambda c: enrich_stage(c, config),          2),
-            ("build_retrieval_units", lambda c: retrieval_units_stage(c, config), 2),
+            ("retrieval_units",       lambda c: retrieval_units_stage(c, config), 2),
         ]
 
         pipeline = StreamingPipeline(stages)
@@ -1234,7 +1231,7 @@ class TestStreamingPipeline:
             ("parse",                 lambda c: parse_stage(c, config),           1),
             ("segment",               lambda c: segment_stage(c, config),         1),
             ("enrich",                lambda c: enrich_stage(c, config),          2),
-            ("build_retrieval_units", lambda c: retrieval_units_stage(c, config), 2),
+            ("retrieval_units",       lambda c: retrieval_units_stage(c, config), 2),
         ]
 
         pipeline = StreamingPipeline(stages)

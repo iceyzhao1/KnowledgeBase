@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from knowledge_mining_zym.mining.contracts.rst_relations import RST_DB_VALUES
+
 
 # ---------------------------------------------------------------------------
 # Enum-adjacent constants (mirror CHECK constraints from SQL schemas)
@@ -20,22 +22,6 @@ VALID_SOURCE_TYPES = frozenset({
     "other",
 })
 
-VALID_DOCUMENT_TYPES = frozenset({
-    "command",
-    "feature",
-    "procedure",
-    "troubleshooting",
-    "alarm",
-    "constraint",
-    "checklist",
-    "expert_note",
-    "project_note",
-    "standard",
-    "training",
-    "reference",
-    "other",
-})
-
 VALID_BLOCK_TYPES = frozenset({
     "paragraph",
     "heading",
@@ -48,21 +34,7 @@ VALID_BLOCK_TYPES = frozenset({
     "unknown",
 })
 
-VALID_SEMANTIC_ROLES = frozenset({
-    "concept",
-    "parameter",
-    "example",
-    "note",
-    "procedure_step",
-    "troubleshooting_step",
-    "constraint",
-    "alarm",
-    "checklist",
-    "unknown",
-})
-
-VALID_RELATION_TYPES = frozenset({
-    # Structural relations
+_STRUCTURAL_RELATIONS = frozenset({
     "previous",
     "next",
     "same_section",
@@ -72,35 +44,9 @@ VALID_RELATION_TYPES = frozenset({
     "elaborates",
     "condition",
     "contrast",
-    # RST discourse relations (EVO-17, legacy verb forms — kept for back-compat)
-    "evidences",
-    "causes",
-    "results_in",
-    "backgrounds",
-    "conditions",
-    "summarizes",
-    "justifies",
-    "enables",
-    "contrasts_with",
-    "parallels",
-    "sequences",
-    "exemplifies",
-    "concedes",
-    "purposes",
-    # RST discourse relations (current noun forms, aligned with domain.yaml prompts)
-    "elaboration",
-    "sequence",
-    "causation",
-    "evidence",
-    "background",
-    "exemplification",
-    "contrast",
-    "concession",
-    "condition",
-    "purpose",
-    "unrelated",
-    "other",
 })
+
+VALID_RELATION_TYPES = _STRUCTURAL_RELATIONS | RST_DB_VALUES | frozenset({"unrelated", "other"})
 
 VALID_UNIT_TYPES = frozenset({
     "raw_text",
@@ -150,16 +96,25 @@ VALID_RUN_DOCUMENT_STATUSES = frozenset({
 })
 
 VALID_STAGE_NAMES = frozenset({
+    # StreamingPipeline (per-document, in-memory) stages
     "parse",
     "segment",
     "enrich",
-    "build_relations",
     "discourse_relations",
-    "build_retrieval_units",
+    "retrieval_units",
+    # Persistence stages (per-document DB writes — distinct names so timings
+    # are not conflated with the compute stages above)
+    "segment_persist",
+    "relations_persist",
+    "retrieval_units_persist",
+    # Global stages
     "select_snapshot",
     "assemble_build",
     "validate_build",
     "publish_release",
+    # Legacy names retained so historical rows still validate
+    "build_relations",
+    "build_retrieval_units",
 })
 
 VALID_STAGE_STATUSES = frozenset({
@@ -381,7 +336,7 @@ class StageEvent:
     id: str
     run_id: str
     run_document_id: str | None = None
-    stage: str = ""  # parse, segment, enrich, build_relations, build_retrieval_units, select_snapshot, assemble_build, validate_build, publish_release
+    stage: str = ""  # see VALID_STAGE_NAMES above
     status: str = "started"  # started, completed, failed, skipped
     duration_ms: int | None = None
     output_summary: str | None = None

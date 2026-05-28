@@ -31,9 +31,7 @@ CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8
 _REQUIRED_PATHS: list[tuple[str, ...]] = [
     ("host",),
     ("port",),
-    ("provider", "base_url"),
-    ("provider", "api_key"),
-    ("provider", "model"),
+    ("provider", "active_model"),
     ("provider", "timeout"),
     ("provider", "bypass_proxy"),
     ("provider", "headers"),
@@ -155,6 +153,15 @@ def _validate_required(data: dict) -> None:
             f"Missing required config fields: {', '.join(missing)}. "
             f"Update llm_service.yaml in the control plane."
         )
+
+    # Validate that the resolved active model has base_url and api_key
+    resolved = resolve_active_model_config(data)
+    if not resolved.get("base_url"):
+        raise ValueError("Resolved provider config missing 'base_url'. Check provider.models entry for active_model.")
+    if not resolved.get("api_key"):
+        raise ValueError("Resolved provider config missing 'api_key'. Check provider.models entry for active_model.")
+    if not resolved.get("model"):
+        raise ValueError("Resolved provider config missing 'model'. Check provider.models entry for active_model.")
 
 
 def fetch_config_from_control_plane(

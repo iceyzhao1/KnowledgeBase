@@ -314,8 +314,10 @@ class TestLiveLLMPipeline:
             events = _rows_to_dicts(rdb.get_stage_events(result["run_id"]))
             stages = {e["stage"] for e in events}
             assert "segment" in stages
-            assert "build_relations" in stages
-            assert "build_retrieval_units" in stages
+            assert "segment_persist" in stages
+            assert "relations_persist" in stages
+            assert "retrieval_units" in stages
+            assert "retrieval_units_persist" in stages
             assert "select_snapshot" in stages
             assert "assemble_build" in stages
             rdb.close()

@@ -32,6 +32,9 @@ class TestQuestionGeneratorBatchPolling:
         gen = LlmQuestionGenerator.__new__(LlmQuestionGenerator)
         gen._client = MagicMock()
         gen._timeout = 30
+        gen._poll_interval = 1.0
+        gen._status_error_limit = 5
+        gen._cancel_checker = None
         gen._last_task_ids = {}
         gen._profile = None
 
@@ -70,6 +73,9 @@ class TestQuestionGeneratorBatchPolling:
         gen = LlmQuestionGenerator.__new__(LlmQuestionGenerator)
         gen._client = MagicMock()
         gen._timeout = 30
+        gen._poll_interval = 1.0
+        gen._status_error_limit = 5
+        gen._cancel_checker = None
         gen._last_task_ids = {}
         gen._profile = None
 
@@ -87,6 +93,9 @@ class TestContextualizerBatchPolling:
         ctxer = LLMContextualizer.__new__(LLMContextualizer)
         ctxer._client = MagicMock()
         ctxer._timeout = 30
+        ctxer._poll_interval = 1.0
+        ctxer._status_error_limit = 5
+        ctxer._cancel_checker = None
         ctxer._last_task_ids = {}
 
         ctxer._client.submit_task.side_effect = ["task-a", "task-b"]
@@ -112,6 +121,9 @@ class TestContextualizerBatchPolling:
         ctxer = LLMContextualizer.__new__(LLMContextualizer)
         ctxer._client = MagicMock()
         ctxer._timeout = 30
+        ctxer._poll_interval = 1.0
+        ctxer._status_error_limit = 5
+        ctxer._cancel_checker = None
         ctxer._last_task_ids = {}
 
         segments = [
@@ -122,3 +134,86 @@ class TestContextualizerBatchPolling:
         results = ctxer.contextualize(segments, "doc text")
         assert results == {}
         ctxer._client.submit_task.assert_not_called()
+
+
+class TestLlmClientBoundedPollAll:
+    def test_poll_all_timeout_returns_completed_results_and_cancels_pending(self):
+        from knowledge_mining_zym.mining.infra.llm_client import LlmClient
+
+        client = LlmClient.__new__(LlmClient)
+        client.check_status = MagicMock(side_effect=lambda tid: "succeeded" if tid == "task-ok" else "running")
+        client.fetch_result = MagicMock(return_value=[{"ok": True}])
+        client.cancel_many = MagicMock(return_value=1)
+
+        results = client.poll_all(
+            {"ok": "task-ok", "slow": "task-slow"},
+            poll_interval=0,
+            timeout_seconds=0.01,
+        )
+
+        assert results == {"ok": [{"ok": True}]}
+        client.cancel_many.assert_called_once()
+        assert list(client.cancel_many.call_args[0][0]) == ["task-slow"]
+
+    def test_poll_all_status_errors_abandon_task(self):
+        from knowledge_mining_zym.mining.infra.llm_client import LlmClient
+
+        client = LlmClient.__new__(LlmClient)
+        client.check_status = MagicMock(return_value=None)
+        client.fetch_result = MagicMock()
+        client.cancel_many = MagicMock(return_value=1)
+
+        results = client.poll_all(
+            {"bad": "task-bad"},
+            poll_interval=0,
+            timeout_seconds=10,
+            status_error_limit=2,
+        )
+
+        assert results == {}
+        assert client.check_status.call_count == 2
+        client.cancel_many.assert_called_once()
+
+    def test_poll_all_cancel_checker_exits_and_cancels_pending(self):
+        from knowledge_mining_zym.mining.infra.llm_client import LlmClient
+
+        client = LlmClient.__new__(LlmClient)
+        client.check_status = MagicMock()
+        client.fetch_result = MagicMock()
+        client.cancel_many = MagicMock(return_value=1)
+
+        results = client.poll_all(
+            {"pending": "task-pending"},
+            poll_interval=0,
+            timeout_seconds=10,
+            cancel_checker=lambda: True,
+        )
+
+        assert results == {}
+        client.check_status.assert_not_called()
+        client.cancel_many.assert_called_once()
+
+
+class TestEnrichBoundedPolling:
+    def test_enrich_partial_llm_results_keep_unreturned_segments(self):
+        from knowledge_mining_zym.mining.stages.enrich import LlmEnricher
+
+        enricher = LlmEnricher.__new__(LlmEnricher)
+        enricher._client = MagicMock()
+        enricher._profile = None
+        enricher._timeout_seconds = 30
+        enricher._poll_interval = 0
+        enricher._status_error_limit = 5
+        enricher._cancel_checker = None
+
+        enricher._client.submit_task.side_effect = ["task-0", "task-1"]
+        enricher._client.poll_all.return_value = {
+            "0": [{"semantic_role": "concept", "entities": []}],
+        }
+
+        segments = _make_segments(2)
+        out = enricher.enrich_batch(segments)
+
+        assert out[0].semantic_role == "concept"
+        assert out[1] == segments[1]
+        enricher._client.poll_all.assert_called_once()

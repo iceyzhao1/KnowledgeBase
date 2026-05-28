@@ -61,7 +61,7 @@ def input_dir(tmp_dir, md_content):
 
 class TestStageEvents:
     def test_doc_level_stages_have_events(self, input_dir, tmp_dir):
-        """Each document should have events for segment, build_relations, build_retrieval_units."""
+        """Each document should emit both compute-side and persist-side events."""
         from knowledge_mining_zym.mining.jobs.run import run
 
         result = run(str(input_dir))
@@ -71,10 +71,14 @@ class TestStageEvents:
         events = rdb.get_stage_events(result["run_id"])
         stages = {e["stage"] for e in events}
 
-        # Doc-level stages (tracked at write-back time)
+        # Compute-side (StreamingPipeline workers)
         assert "segment" in stages, f"Missing 'segment' stage. Got: {stages}"
-        assert "build_relations" in stages, f"Missing 'build_relations' stage. Got: {stages}"
-        assert "build_retrieval_units" in stages, f"Missing 'build_retrieval_units' stage. Got: {stages}"
+        assert "retrieval_units" in stages, f"Missing 'retrieval_units' stage. Got: {stages}"
+
+        # Persist-side (DB write-back)
+        assert "segment_persist" in stages, f"Missing 'segment_persist' stage. Got: {stages}"
+        assert "relations_persist" in stages, f"Missing 'relations_persist' stage. Got: {stages}"
+        assert "retrieval_units_persist" in stages, f"Missing 'retrieval_units_persist' stage. Got: {stages}"
 
         # Global stages
         assert "select_snapshot" in stages
@@ -110,11 +114,13 @@ class TestStageEvents:
         rdb = _make_db(MiningRuntimeDB)
 
         events = rdb.get_stage_events(result["run_id"])
-        seg_events = [e for e in events if e["stage"] == "segment" and e["status"] == "completed" and e["output_summary"] is not None]
+        # output_summary "<N> segments" / "<N> units" is set on the persist-side
+        # end_stage call; the compute-side StreamingPipeline worker does not set it.
+        seg_events = [e for e in events if e["stage"] == "segment_persist" and e["status"] == "completed" and e["output_summary"] is not None]
         assert len(seg_events) >= 1
         assert "segments" in seg_events[0]["output_summary"]
 
-        ru_events = [e for e in events if e["stage"] == "build_retrieval_units" and e["status"] == "completed" and e["output_summary"] is not None]
+        ru_events = [e for e in events if e["stage"] == "retrieval_units_persist" and e["status"] == "completed" and e["output_summary"] is not None]
         assert len(ru_events) >= 1
         assert "units" in ru_events[0]["output_summary"]
 

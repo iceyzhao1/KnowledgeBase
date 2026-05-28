@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from knowledge_mining_zym.mining.contracts.models import RawSegmentData, RetrievalUnitData
@@ -46,10 +47,22 @@ class LlmQuestionGenerator:
     Results are capped at MAX_QUESTIONS_PER_SEGMENT.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False, profile: DomainProfile | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8900",
+        timeout: int = 180,
+        bypass_proxy: bool = False,
+        profile: DomainProfile | None = None,
+        poll_interval: float = 1.0,
+        status_error_limit: int = 5,
+        cancel_checker: Callable[[], bool] | None = None,
+    ) -> None:
         from knowledge_mining_zym.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
+        self._poll_interval = poll_interval
+        self._status_error_limit = status_error_limit
+        self._cancel_checker = cancel_checker
         self._last_task_ids: dict[str, str] = {}
         self._profile = profile
 
@@ -111,7 +124,13 @@ class LlmQuestionGenerator:
         self._last_task_ids = dict(seg_tasks)
 
         # Phase 2: Poll all results concurrently
-        raw_results = self._client.poll_all(seg_tasks)
+        raw_results = self._client.poll_all(
+            seg_tasks,
+            poll_interval=self._poll_interval,
+            timeout_seconds=self._timeout,
+            status_error_limit=self._status_error_limit,
+            cancel_checker=self._cancel_checker,
+        )
         results: dict[str, list[str]] = {}
         for seg_key, items in raw_results.items():
             questions = [item["question"] for item in items if "question" in item]
@@ -133,10 +152,21 @@ class LLMContextualizer:
     In v1.3, the context is folded into raw_text.search_text, NOT a separate unit.
     """
 
-    def __init__(self, base_url: str = "http://localhost:8900", timeout: int = 120, bypass_proxy: bool = False) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8900",
+        timeout: int = 180,
+        bypass_proxy: bool = False,
+        poll_interval: float = 1.0,
+        status_error_limit: int = 5,
+        cancel_checker: Callable[[], bool] | None = None,
+    ) -> None:
         from knowledge_mining_zym.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._timeout = timeout
+        self._poll_interval = poll_interval
+        self._status_error_limit = status_error_limit
+        self._cancel_checker = cancel_checker
         self._last_task_ids: dict[str, str] = {}
 
     @property
@@ -180,7 +210,13 @@ class LLMContextualizer:
 
         self._last_task_ids = dict(seg_tasks)
 
-        raw_results = self._client.poll_all(seg_tasks)
+        raw_results = self._client.poll_all(
+            seg_tasks,
+            poll_interval=self._poll_interval,
+            timeout_seconds=self._timeout,
+            status_error_limit=self._status_error_limit,
+            cancel_checker=self._cancel_checker,
+        )
         results: dict[str, str] = {}
         for seg_key, items in raw_results.items():
             if not items:

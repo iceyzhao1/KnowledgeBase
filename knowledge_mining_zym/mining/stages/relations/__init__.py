@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from knowledge_mining_zym.mining.contracts.models import RawSegmentData, SegmentRelationData
+from knowledge_mining_zym.mining.contracts.rst_relations import LLM_TO_DB_RELATION, RST_DB_VALUES
 
 logger = logging.getLogger(__name__)
 
@@ -36,19 +38,8 @@ class DiscourseRelationBuilder:
     stage_name = "discourse_relations"
     stage_version = "1"
 
-    _LLM_TO_DB_RELATION = {
-        "ELABORATION": "elaborates",
-        "SEQUENCE": "sequences",
-        "CAUSATION": "causes",
-        "EVIDENCE": "evidences",
-        "BACKGROUND": "backgrounds",
-        "EXEMPLIFICATION": "exemplifies",
-        "CONTRAST": "contrasts_with",
-        "CONCESSION": "concedes",
-        "CONDITION": "conditions",
-        "PURPOSE": "purposes",
-    }
-    _RST_WHITELIST = frozenset(_LLM_TO_DB_RELATION.values())
+    _LLM_TO_DB_RELATION = LLM_TO_DB_RELATION
+    _RST_WHITELIST = RST_DB_VALUES
     _MIN_CONFIDENCE = 0.5
 
     def __init__(
@@ -56,10 +47,18 @@ class DiscourseRelationBuilder:
         base_url: str = "http://localhost:8900",
         bypass_proxy: bool = False,
         window_size: int = 15,
+        timeout_seconds: float = 180,
+        poll_interval: float = 1.0,
+        status_error_limit: int = 5,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> None:
         from knowledge_mining_zym.mining.infra.llm_client import LlmClient
         self._client = LlmClient(base_url=base_url, bypass_proxy=bypass_proxy)
         self._window_size = window_size
+        self._timeout_seconds = timeout_seconds
+        self._poll_interval = poll_interval
+        self._status_error_limit = status_error_limit
+        self._cancel_checker = cancel_checker
 
     def build(
         self,
@@ -113,7 +112,13 @@ class DiscourseRelationBuilder:
             if task_id is None:
                 return []
 
-            items = self._client.poll_all({"0": task_id})
+            items = self._client.poll_all(
+                {"0": task_id},
+                poll_interval=self._poll_interval,
+                timeout_seconds=self._timeout_seconds,
+                status_error_limit=self._status_error_limit,
+                cancel_checker=self._cancel_checker,
+            )
             items = items.get("0")
             if items is None:
                 return []
