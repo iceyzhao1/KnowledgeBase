@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from main_control_service.config import MainControlSettings
-from main_control_service.proxy import create_proxy_client, shutdown_proxy_client, proxy_request
+from main_control_service.proxy import create_proxy_client, set_proxy_client, shutdown_proxy_client, proxy_request
 from main_control_service.service import YamlConfigService
 
 
@@ -26,6 +26,7 @@ def create_app(
         app.state.main_control = service
         # Proxy client — shared across all reverse-proxy requests
         client = create_proxy_client()
+        set_proxy_client(client)
         try:
             yield
         finally:
@@ -40,7 +41,6 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )

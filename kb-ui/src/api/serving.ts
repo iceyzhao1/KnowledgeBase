@@ -1,12 +1,8 @@
-import axios from 'axios'
 import type { HealthStatus, SearchResult } from '@/types'
-import { useDomainStore } from '@/stores/domain'
+import { createProxyClient } from '@/api/proxyClient'
 
 export function useServingApi() {
-  const domain = useDomainStore()
-  const client = axios.create({
-    baseURL: `/api/control-plane/api/v1/proxy/${domain.currentDomain}/serving`,
-  })
+  const client = createProxyClient('serving')
 
   return {
     async getHealth(): Promise<HealthStatus> {

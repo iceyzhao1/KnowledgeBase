@@ -1,21 +1,8 @@
-import axios from 'axios'
 import type { HealthStatus, LlmTaskStats, LlmTask, LlmTaskDetail } from '@/types'
-import { useDomainStore } from '@/stores/domain'
-
-function extractItems<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data
-  const obj = data as Record<string, unknown>
-  const items = obj.items ?? obj.data
-  if (Array.isArray(items)) return items
-  return []
-}
+import { createProxyClient, extractItems } from '@/api/proxyClient'
 
 export function useLlmApi() {
-  const domain = useDomainStore()
-  // All requests go through main_control_service reverse proxy
-  const client = axios.create({
-    baseURL: `/api/control-plane/api/v1/proxy/${domain.currentDomain}/llm`,
-  })
+  const client = createProxyClient('llm')
 
   return {
     async getHealth(): Promise<HealthStatus> {

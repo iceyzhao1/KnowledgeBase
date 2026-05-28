@@ -54,7 +54,7 @@ export const useDomainStore = defineStore('domain', () => {
   }
 
   function switchDomain(domainId: string) {
-    if (domains.value.some(d => d.domain_id === domainId)) {
+    if (domains.value.some(d => d.domain_id === domainId && d.enabled)) {
       currentDomain.value = domainId
       localStorage.setItem(STORAGE_KEY, domainId)
     }

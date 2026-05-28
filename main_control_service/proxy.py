@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import ipaddress
+import logging
+import socket
+from urllib.parse import urlparse
+
 import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
+logger = logging.getLogger(__name__)
 
 # Service key → field name in domain_registry.yaml services section
 SERVICE_MAP: dict[str, str] = {
@@ -13,6 +19,22 @@ SERVICE_MAP: dict[str, str] = {
     "mining": "mining_url",
     "serving": "serving_url",
 }
+
+# Headers stripped before forwarding to backend (hop-by-hop + sensitive)
+_STRIP_REQUEST_HEADERS = frozenset({
+    "host", "content-length", "connection", "keep-alive",
+    "transfer-encoding", "upgrade", "proxy-connection",
+    "proxy-authenticate", "proxy-authorization",
+    "cookie", "authorization",
+})
+
+# Networks that must never be reachable via proxy (SSRF protection)
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),      # loopback IPv4
+    ipaddress.ip_network("169.254.0.0/16"),    # link-local (cloud metadata)
+    ipaddress.ip_network("::1/128"),           # loopback IPv6
+    ipaddress.ip_network("fc00::/7"),          # unique-local IPv6
+]
 
 # Shared client — created once in lifespan, reused across requests.
 _proxy_client: httpx.AsyncClient | None = None
@@ -45,6 +67,36 @@ async def shutdown_proxy_client() -> None:
         _proxy_client = None
 
 
+def _is_private_host(hostname: str) -> bool:
+    """Return True if hostname resolves to a private/loopback/link-local IP."""
+    try:
+        # getaddrinfo resolves hostnames; numeric IPs pass through directly
+        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for family, _type, _proto, _canon, sockaddr in addrinfos:
+            ip_str = sockaddr[0]
+            ip = ipaddress.ip_address(ip_str)
+            for network in _BLOCKED_NETWORKS:
+                if ip in network:
+                    return True
+            # Also block RFC-1918 private ranges
+            if ip.is_private:
+                return True
+    except socket.gaierror:
+        # Unresolvable hostname — let it fail naturally at connection time
+        return False
+    return False
+
+
+def _validate_url(url: str) -> None:
+    """Reject non-http(s) schemes and private/loopback IPs to prevent SSRF."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Invalid backend URL scheme")
+    hostname = parsed.hostname
+    if hostname and _is_private_host(hostname):
+        raise HTTPException(status_code=400, detail="Backend URL resolves to a private network")
+
+
 def _resolve_target_url(domain_services: dict, service: str) -> str:
     """Look up the internal URL for a (domain, service) pair."""
     field = SERVICE_MAP.get(service)
@@ -53,7 +105,23 @@ def _resolve_target_url(domain_services: dict, service: str) -> str:
     url = domain_services.get(field)
     if not url:
         raise HTTPException(status_code=502, detail=f"Service {service} not configured for this domain")
-    return url.rstrip("/")
+    url = url.rstrip("/")
+    _validate_url(url)
+    return url
+
+
+def _build_forward_headers(request: Request) -> dict[str, str]:
+    """Strip hop-by-hop and sensitive headers, add proxy context."""
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in _STRIP_REQUEST_HEADERS
+    }
+    # Append to existing X-Forwarded-For if present
+    existing_xff = request.headers.get("x-forwarded-for")
+    client_ip = request.client.host if request.client else "unknown"
+    headers["X-Forwarded-For"] = f"{existing_xff}, {client_ip}" if existing_xff else client_ip
+    headers["X-Forwarded-Proto"] = request.url.scheme
+    return headers
 
 
 async def proxy_request(
@@ -70,34 +138,39 @@ async def proxy_request(
         target_url = f"{target_url}?{request.url.query}"
 
     client = get_proxy_client()
-
-    # Build upstream headers — forward original context
-    headers = dict(request.headers)
-    headers.pop("host", None)
-    headers.pop("content-length", None)
-
+    headers = _build_forward_headers(request)
     body = await request.body()
 
+    upstream_cm = client.stream(
+        method=request.method,
+        url=target_url,
+        headers=headers,
+        content=body,
+    )
     try:
-        upstream = client.stream(
-            method=request.method,
-            url=target_url,
-            headers=headers,
-            content=body,
-        )
-        resp = await upstream.__aenter__()
+        resp = await upstream_cm.__aenter__()
     except httpx.ConnectError as exc:
-        raise HTTPException(status_code=502, detail=f"Backend {service} unreachable: {exc}") from exc
+        logger.warning("Proxy connect error for %s/%s: %s", domain_id, service, exc)
+        raise HTTPException(status_code=502, detail="Backend service unavailable") from exc
     except httpx.TimeoutException as exc:
-        raise HTTPException(status_code=504, detail=f"Backend {service} timeout: {exc}") from exc
+        logger.warning("Proxy timeout for %s/%s: %s", domain_id, service, exc)
+        raise HTTPException(status_code=504, detail="Backend service timeout") from exc
+    except Exception as exc:
+        logger.exception("Proxy error for %s/%s", domain_id, service)
+        raise HTTPException(status_code=502, detail="Backend service error") from exc
 
-    # Stream response back
+    # Stream response back — always close upstream connection in finally
+    closed = False
+
     async def _stream():
+        nonlocal closed
         try:
             async for chunk in resp.aiter_bytes():
                 yield chunk
         finally:
-            await upstream.__aexit__(None, None, None)
+            if not closed:
+                closed = True
+                await upstream_cm.__aexit__(None, None, None)
 
     # Filter out hop-by-hop headers
     response_headers = {

@@ -1,30 +1,13 @@
-import axios from 'axios'
 import type {
   MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
   KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation,
   UploadConfig, UploadResult,
 } from '@/types'
 import type { PaginatedResponse } from '@/types'
-import { useDomainStore } from '@/stores/domain'
-
-function extractItems<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data
-  const obj = data as Record<string, unknown>
-  const items = obj.items ?? obj.data ?? obj.stages
-  if (Array.isArray(items)) return items
-  return []
-}
-
-function extractOne<T>(data: unknown): T {
-  const obj = data as Record<string, unknown>
-  return (obj.data ?? obj) as T
-}
+import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 
 export function useMiningApi() {
-  const domain = useDomainStore()
-  const client = axios.create({
-    baseURL: `/api/control-plane/api/v1/proxy/${domain.currentDomain}/mining`,
-  })
+  const client = createProxyClient('mining')
 
   return {
     // Health
@@ -42,7 +25,7 @@ export function useMiningApi() {
     // Runs
     async getRuns(params?: { status?: string; limit?: number }): Promise<MiningRun[]> {
       const { data } = await client.get('/api/runs', { params })
-      return extractItems<MiningRun>(data)
+      return extractItems<MiningRun>(data, ['stages'])
     },
 
     async getRun(runId: string): Promise<MiningRun> {
