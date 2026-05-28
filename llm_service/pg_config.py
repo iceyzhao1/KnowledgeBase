@@ -1,59 +1,96 @@
-"""PostgreSQL connection configuration for llm_service.
+"""PostgreSQL connection config — single source: control plane database.yaml.
 
-All values come from .env (PG_HOST, PG_PORT, etc.).
-Shares the same PG instance as knowledge_mining_fzl.
+No defaults, no env fallbacks. Missing required fields = hard error.
 """
 from __future__ import annotations
 
-from pathlib import Path
+import logging
+import os
+from dataclasses import dataclass
+from typing import Any
 
-from pydantic_settings import BaseSettings
+import httpx
+import yaml
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+logger = logging.getLogger(__name__)
+
+CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8910")
 
 
-class LlmDbConfig(BaseSettings):
-    """PostgreSQL connection settings, loaded from environment variables."""
+@dataclass
+class LlmDbConfig:
+    """PostgreSQL connection settings — every field is required."""
 
-    pg_host: str
-    pg_port: int = 5432
-    pg_dbname: str
-    pg_user: str
-    pg_password: str
-    pg_sslmode: str = "disable"
-    pg_gssencmode: str = "disable"
-    pg_pool_min: int = 2
-    pg_pool_max: int = 10
-
-    model_config = {
-        "env_prefix": "",
-        "env_file": str(_REPO_ROOT / ".env"),
-        "env_file_encoding": "utf-8",
-        "extra": "ignore",
-    }
+    host: str
+    port: int
+    dbname: str
+    user: str
+    password: str
+    sslmode: str
+    gssencmode: str
+    pool_min: int
+    pool_max: int
 
     @property
     def conninfo(self) -> str:
-        """Build psycopg connection string."""
         return (
-            f"host={self.pg_host} "
-            f"port={self.pg_port} "
-            f"dbname={self.pg_dbname} "
-            f"user={self.pg_user} "
-            f"password={self.pg_password} "
-            f"sslmode={self.pg_sslmode} "
-            f"gssencmode={self.pg_gssencmode}"
+            f"host={self.host} "
+            f"port={self.port} "
+            f"dbname={self.dbname} "
+            f"user={self.user} "
+            f"password={self.password} "
+            f"sslmode={self.sslmode} "
+            f"gssencmode={self.gssencmode}"
         )
 
     @property
     def maintenance_conninfo(self) -> str:
-        """Connection string for the postgres maintenance DB (used to CREATE DATABASE)."""
         return (
-            f"host={self.pg_host} "
-            f"port={self.pg_port} "
+            f"host={self.host} "
+            f"port={self.port} "
             f"dbname=postgres "
-            f"user={self.pg_user} "
-            f"password={self.pg_password} "
-            f"sslmode={self.pg_sslmode} "
-            f"gssencmode={self.pg_gssencmode}"
+            f"user={self.user} "
+            f"password={self.password} "
+            f"sslmode={self.sslmode} "
+            f"gssencmode={self.gssencmode}"
         )
+
+
+def load_db_config() -> LlmDbConfig:
+    """Fetch database.yaml from control plane. Fatal on failure."""
+    url = CONTROL_PLANE_BASE_URL.rstrip("/")
+    endpoint = f"{url}/api/v1/system/database/raw"
+    try:
+        resp = httpx.get(endpoint, timeout=5.0)
+        resp.raise_for_status()
+        data = yaml.safe_load(resp.text)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot fetch DB config from control plane ({endpoint}): {exc}. "
+            f"Ensure main_control_service is running and database.yaml exists."
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("Control plane returned non-dict YAML for database")
+
+    default = data.get("default")
+    if not isinstance(default, dict):
+        raise ValueError("database.yaml must have a 'default' section")
+
+    required = ["host", "port", "dbname", "user", "password", "sslmode", "gssencmode", "pool_min", "pool_max"]
+    missing = [k for k in required if k not in default]
+    if missing:
+        raise ValueError(f"Missing required DB fields: {', '.join(missing)} in database.yaml → default")
+
+    logger.info("Loaded DB config from control plane (%s)", endpoint)
+    return LlmDbConfig(
+        host=str(default["host"]),
+        port=int(default["port"]),
+        dbname=str(default["dbname"]),
+        user=str(default["user"]),
+        password=str(default["password"]),
+        sslmode=str(default["sslmode"]),
+        gssencmode=str(default["gssencmode"]),
+        pool_min=int(default["pool_min"]),
+        pool_max=int(default["pool_max"]),
+    )

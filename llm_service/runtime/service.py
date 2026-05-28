@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from string import Template
 
-from llm_service.config import LLMServiceConfig
+from llm_service.config import dig
 from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
@@ -28,8 +28,9 @@ class LLMService:
         self,
         db: LlmRuntimeDB,
         provider: ProviderProtocol,
-        config: LLMServiceConfig,
+        config: dict,
         model_provider: ModelProviderProtocol | None = None,
+        templates: TemplateRegistry | None = None,
     ):
         self._db = db
         self._config = config
@@ -37,17 +38,16 @@ class LLMService:
         self._submit_lock = asyncio.Lock()
         self._mgr = TaskManager(
             db, self._bus,
-            max_attempts=config.default_max_attempts,
-            lease_duration=config.lease_duration,
-            backoff_base=config.retry_backoff_base,
-            backoff_max=config.retry_backoff_max,
+            max_attempts=dig(config, "task", "default_max_attempts"),
+            lease_duration=dig(config, "task", "lease_duration"),
+            backoff_base=dig(config, "task", "retry_backoff_base"),
+            backoff_max=dig(config, "task", "retry_backoff_max"),
         )
-        self._templates = TemplateRegistry(db)
+        self._templates = templates or TemplateRegistry(db)
         self._model_provider = model_provider
         self._provider = provider
-        # Store provider info for request recording
         self._provider_name = getattr(provider, 'provider_name', 'unknown')
-        self._default_model = getattr(provider, 'default_model', config.provider_model)
+        self._default_model = getattr(provider, 'default_model', dig(config, "provider", "model"))
 
     # ------------------------------------------------------------------
     # Template resolution
@@ -388,7 +388,7 @@ class LLMService:
         max_attempts: int = 2,
         priority: int = 100,
     ) -> str:
-        actual_model = model or getattr(self._model_provider, "embedding_model", None) or self._config.embedding_model
+        actual_model = model or getattr(self._model_provider, "embedding_model", None) or dig(self._config, "embedding", "model")
 
         return await self._submit_with_idempotency(
             idempotency_key=idempotency_key,
@@ -423,7 +423,7 @@ class LLMService:
         max_attempts: int = 2,
         priority: int = 100,
     ) -> str:
-        actual_model = model or getattr(self._model_provider, "_rerank_model", None) or self._config.rerank_model
+        actual_model = model or getattr(self._model_provider, "_rerank_model", None) or dig(self._config, "rerank", "model")
 
         return await self._submit_with_idempotency(
             idempotency_key=idempotency_key,
@@ -515,7 +515,7 @@ class LLMService:
         attempt_id = str(uuid.uuid4())
         result_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._config.lease_duration)
+        lease_dt = datetime.now(timezone.utc) + timedelta(seconds=dig(self._config, "task", "lease_duration"))
         effective_priority = max(priority, 999)
         final_status = "succeeded" if parse_ok else "failed"
 
