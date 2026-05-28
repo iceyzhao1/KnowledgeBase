@@ -28,13 +28,10 @@ _STRIP_REQUEST_HEADERS = frozenset({
     "cookie", "authorization",
 })
 
-# Networks that must never be reachable via proxy (SSRF protection)
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),      # loopback IPv4
-    ipaddress.ip_network("169.254.0.0/16"),    # link-local (cloud metadata)
-    ipaddress.ip_network("::1/128"),           # loopback IPv6
-    ipaddress.ip_network("fc00::/7"),          # unique-local IPv6
-]
+# Cloud metadata endpoint — the only blocked network.
+# Private/loopback IPs are intentionally allowed because this proxy's
+# purpose is to reach internal backend services.
+_METADATA_NETWORK = ipaddress.ip_network("169.254.169.254/32")
 
 # Shared client — created once in lifespan, reused across requests.
 _proxy_client: httpx.AsyncClient | None = None
@@ -67,34 +64,27 @@ async def shutdown_proxy_client() -> None:
         _proxy_client = None
 
 
-def _is_private_host(hostname: str) -> bool:
-    """Return True if hostname resolves to a private/loopback/link-local IP."""
+def _is_metadata_host(hostname: str) -> bool:
+    """Return True if hostname resolves to the cloud metadata endpoint."""
     try:
-        # getaddrinfo resolves hostnames; numeric IPs pass through directly
         addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for family, _type, _proto, _canon, sockaddr in addrinfos:
-            ip_str = sockaddr[0]
-            ip = ipaddress.ip_address(ip_str)
-            for network in _BLOCKED_NETWORKS:
-                if ip in network:
-                    return True
-            # Also block RFC-1918 private ranges
-            if ip.is_private:
+        for _family, _type, _proto, _canon, sockaddr in addrinfos:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip in _METADATA_NETWORK:
                 return True
     except socket.gaierror:
-        # Unresolvable hostname — let it fail naturally at connection time
         return False
     return False
 
 
 def _validate_url(url: str) -> None:
-    """Reject non-http(s) schemes and private/loopback IPs to prevent SSRF."""
+    """Reject non-http(s) schemes and cloud metadata IPs to prevent SSRF."""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=400, detail="Invalid backend URL scheme")
     hostname = parsed.hostname
-    if hostname and _is_private_host(hostname):
-        raise HTTPException(status_code=400, detail="Backend URL resolves to a private network")
+    if hostname and _is_metadata_host(hostname):
+        raise HTTPException(status_code=400, detail="Backend URL resolves to cloud metadata endpoint")
 
 
 def _resolve_target_url(domain_services: dict, service: str) -> str:
