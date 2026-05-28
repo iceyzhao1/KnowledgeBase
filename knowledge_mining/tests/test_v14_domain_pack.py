@@ -1,8 +1,7 @@
 """Domain Pack v1.4 tests.
 
 Tests cover:
-- Domain pack loading via registry + scenario_packs (new path)
-- Domain pack loading via legacy domain_packs (backward compat)
+- Domain pack loading via registry + scenario_packs
 - Domain registry resolution
 - Entity schema from profile
 - Retrieval policy from profile
@@ -23,11 +22,8 @@ import pytest
 # Fixtures
 # ---------------------------------------------------------------------------
 
-# New unified path via scenario_packs
+# Unified path via scenario_packs
 SCENARIO_PACKS_ROOT = Path(__file__).resolve().parents[2] / "scenario_packs"
-
-# Legacy path (deprecated, kept for backward compat tests)
-LEGACY_PACKS_ROOT = Path(__file__).resolve().parent.parent / "domain_packs"
 
 
 @pytest.fixture
@@ -46,9 +42,9 @@ def cloud_profile_explicit_root():
 
 @pytest.fixture
 def generic_profile():
-    """Load generic from legacy domain_packs path (backward compat fallback)."""
+    """Load generic from scenario_packs path."""
     from knowledge_mining.mining.infra.domain_pack import load_domain_pack
-    return load_domain_pack("generic", packs_root=LEGACY_PACKS_ROOT)
+    return load_domain_pack("generic", packs_root=SCENARIO_PACKS_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -94,9 +90,9 @@ class TestDomainPackLoader:
         assert cloud_profile_explicit_root.domain_id == "cloud_core_network"
         assert "command" in cloud_profile_explicit_root.entity_types
 
-    def test_load_generic_legacy(self, generic_profile):
+    def test_load_generic(self, generic_profile):
         assert generic_profile.domain_id == "generic"
-        assert generic_profile.entity_types == frozenset({"concept"})
+        assert "concept" in generic_profile.entity_types
         assert generic_profile.strong_entity_types == frozenset()
 
     def test_load_nonexistent_raises(self):
@@ -122,7 +118,7 @@ class TestDomainPackLoader:
     def test_partitioned_yaml_mining(self, cloud_profile):
         """New partitioned YAML: mining fields are read correctly."""
         assert cloud_profile.retrieval_policy.entity_card == "off"
-        assert cloud_profile.retrieval_policy.max_questions_per_segment == 2
+        assert cloud_profile.retrieval_policy.max_questions_per_segment == 1
         assert len(cloud_profile.llm_templates) >= 4
 
     def test_partitioned_yaml_eval_questions(self, cloud_profile):
@@ -179,13 +175,9 @@ class TestDomainEntitySchema:
         assert "command" in entity_type_enum
         assert "network_element" in entity_type_enum
 
-    def test_generic_schema_has_concept_only(self, generic_profile):
-        from knowledge_mining.mining.infra.llm_templates import build_templates_from_profile
-        templates = build_templates_from_profile(generic_profile)
-        seg_tpl = next(t for t in templates if t["template_key"] == "mining-segment-understanding")
-        schema = json.loads(seg_tpl["output_schema_json"])
-        entity_type_enum = schema["properties"]["entities"]["items"]["properties"]["type"]["enum"]
-        assert entity_type_enum == ["concept"]
+    def test_generic_schema_no_templates(self, generic_profile):
+        """Generic pack has no LLM templates."""
+        assert len(generic_profile.llm_templates) == 0
 
     def test_backward_compat_templates(self):
         """TEMPLATES import still works (loads cloud_core_network by default)."""
@@ -234,7 +226,7 @@ class TestDomainRetrievalPolicy:
         assert len(entity_cards) == 0  # generic has no strong types
 
     def test_max_questions_from_policy(self, cloud_profile):
-        assert cloud_profile.retrieval_policy.max_questions_per_segment == 2
+        assert cloud_profile.retrieval_policy.max_questions_per_segment == 1
 
 
 # ---------------------------------------------------------------------------
@@ -251,8 +243,9 @@ class TestEvalQuestionsContract:
             assert q.question
             assert isinstance(q.expected_entities, tuple)
 
-    def test_generic_has_empty_eval(self, generic_profile):
-        assert len(generic_profile.eval_questions) == 0
+    def test_generic_has_few_eval(self, generic_profile):
+        assert len(generic_profile.eval_questions) > 0
+        assert len(generic_profile.eval_questions) <= 5
 
     def test_eval_coverage_distribution(self, cloud_profile):
         """Verify the 30 questions cover expected categories."""

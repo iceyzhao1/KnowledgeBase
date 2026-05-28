@@ -35,8 +35,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REGISTRY_PATH = _REPO_ROOT / "domain_registry.yaml"
 _SCENARIO_PACKS_ROOT = _REPO_ROOT / "scenario_packs"
 
-# Legacy path (deprecated, kept for backward compat fallback)
-_LEGACY_PACKS_ROOT = Path(__file__).resolve().parent.parent.parent / "domain_packs"
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +122,9 @@ class DomainProfile:
 
     # Domain-specific semantic roles (replaces hardcoded VALID_SEMANTIC_ROLES)
     semantic_roles: frozenset[str]
+
+    # Domain-specific document types (replaces hardcoded VALID_DOCUMENT_TYPES)
+    document_types: frozenset[str]
 
     # Retrieval policy
     retrieval_policy: RetrievalPolicy
@@ -255,6 +256,7 @@ def _parse_domain_yaml(data: dict[str, Any], domain_id: str) -> DomainProfile:
         retrieval_policy = mining.get("retrieval_policy", data.get("retrieval_policy", {}))
         eval_questions = mining.get("eval_questions", data.get("eval_questions", []))
         semantic_roles = mining.get("semantic_roles", [])
+        document_types = mining.get("document_types", [])
     else:
         # Legacy flat structure
         entity_types = data.get("entity_types", [])
@@ -268,6 +270,7 @@ def _parse_domain_yaml(data: dict[str, Any], domain_id: str) -> DomainProfile:
         retrieval_policy = data.get("retrieval_policy", {})
         eval_questions = data.get("eval_questions", [])
         semantic_roles = data.get("semantic_roles", [])
+        document_types = data.get("document_types", [])
 
     return DomainProfile(
         domain_id=domain_id,
@@ -279,6 +282,7 @@ def _parse_domain_yaml(data: dict[str, Any], domain_id: str) -> DomainProfile:
         extractor_rules=_parse_extractor_rules(extractor_rules),
         llm_templates=tuple(llm_templates),
         semantic_roles=frozenset(semantic_roles),
+        document_types=frozenset(document_types),
         retrieval_policy=_parse_retrieval_policy(retrieval_policy),
         eval_questions=_parse_eval_questions(eval_questions),
     )
@@ -304,10 +308,9 @@ def _resolve_scenario_pack(domain_id: str) -> str:
 def load_domain_pack(domain_id: str, *, packs_root: Path | None = None) -> DomainProfile:
     """Load a DomainProfile from the unified scenario_packs directory.
 
-    Resolution order:
+    Resolution:
     1. If packs_root is provided (for testing), use it directly
     2. Otherwise, resolve via domain_registry.yaml → scenario_packs/<pack>/domain.yaml
-    3. Fallback: try legacy domain_packs/<domain_id>/domain.yaml
 
     Args:
         domain_id: Domain identifier (e.g. "cloud_core_network").
@@ -320,33 +323,16 @@ def load_domain_pack(domain_id: str, *, packs_root: Path | None = None) -> Domai
         FileNotFoundError: If domain pack not found.
     """
     if packs_root is not None:
-        # Explicit packs_root (testing or legacy usage)
         yaml_path = packs_root / domain_id / "domain.yaml"
-        if not yaml_path.exists():
-            raise FileNotFoundError(
-                f"Domain pack not found: {yaml_path} "
-                f"(domain_id={domain_id!r}, packs_root={packs_root})"
-            )
     else:
-        # New path: resolve via registry → scenario_packs
         scenario_pack = _resolve_scenario_pack(domain_id)
         yaml_path = _SCENARIO_PACKS_ROOT / scenario_pack / "domain.yaml"
 
-        if not yaml_path.exists():
-            # Fallback to legacy path
-            yaml_path = _LEGACY_PACKS_ROOT / domain_id / "domain.yaml"
-            if not yaml_path.exists():
-                raise FileNotFoundError(
-                    f"Domain pack not found for '{domain_id}'. "
-                    f"Searched: {_SCENARIO_PACKS_ROOT / scenario_pack / 'domain.yaml'}, "
-                    f"{_LEGACY_PACKS_ROOT / domain_id / 'domain.yaml'}"
-                )
-            warnings.warn(
-                f"Loading domain pack from legacy path: {yaml_path}. "
-                f"Please migrate to scenario_packs/.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+    if not yaml_path.exists():
+        raise FileNotFoundError(
+            f"Domain pack not found: {yaml_path} "
+            f"(domain_id={domain_id!r})"
+        )
 
     with open(yaml_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)

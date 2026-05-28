@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
-from knowledge_mining.mining.contracts.models import VALID_SEMANTIC_ROLES, RawSegmentData
+from knowledge_mining.mining.contracts.models import RawSegmentData
 
 if TYPE_CHECKING:
     from knowledge_mining.mining.infra.domain_pack import DomainProfile
@@ -55,8 +55,8 @@ class LlmEnricher:
 
         profile = self._profile
         allowed_entity_types = profile.entity_types if profile else frozenset()
-        # Use domain-specific semantic_roles when available, else fallback to global default
-        valid_roles = profile.semantic_roles if profile and profile.semantic_roles else VALID_SEMANTIC_ROLES
+        # Use domain-specific semantic_roles when available; empty set means no filtering
+        valid_roles = profile.semantic_roles if profile and profile.semantic_roles else None
 
         # Phase 1: Submit all segments
         seg_tasks: dict[str, str] = {}
@@ -95,7 +95,7 @@ def _apply_llm_result(
     seg: RawSegmentData,
     result: dict[str, Any],
     allowed_entity_types: frozenset[str],
-    valid_roles: frozenset[str],
+    valid_roles: frozenset[str] | None,
 ) -> RawSegmentData:
     """Apply LLM enrichment result to a segment."""
     changes: dict[str, Any] = {}
@@ -117,8 +117,9 @@ def _apply_llm_result(
         changes["entity_refs_json"] = merged_refs
 
     role = result.get("semantic_role", "")
-    if role and role in valid_roles and role != seg.semantic_role:
-        changes["semantic_role"] = role
+    if role and role != seg.semantic_role:
+        if valid_roles is None or role in valid_roles:
+            changes["semantic_role"] = role
 
     doc_type = result.get("document_type", "")
     meta = dict(seg.metadata_json)

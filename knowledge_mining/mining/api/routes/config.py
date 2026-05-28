@@ -32,7 +32,7 @@ async def get_config(request: Request) -> dict:
 async def list_domain_packs(request: Request) -> dict:
     """List available domain packs."""
     from pathlib import Path
-    packs_dir = Path(__file__).resolve().parents[3] / "knowledge_mining" / "domain_packs"
+    packs_dir = Path(__file__).resolve().parents[4] / "scenario_packs"
     packs = []
     if packs_dir.exists():
         for f in sorted(packs_dir.iterdir()):

@@ -47,7 +47,15 @@ def build_templates_from_profile(
                         type_prop["enum"] = sorted(profile.entity_types)
                         entity_items["properties"]["type"] = type_prop
                         schema["properties"]["entities"]["items"] = entity_items
-                        tpl_copy["output_schema_json"] = json.dumps(schema)
+
+                    # Inject semantic_role enum from profile
+                    if profile.semantic_roles:
+                        role_prop = schema.get("properties", {}).get("semantic_role", {})
+                        if "enum" not in role_prop:
+                            role_prop["enum"] = sorted(profile.semantic_roles)
+                            schema["properties"]["semantic_role"] = role_prop
+
+                    tpl_copy["output_schema_json"] = json.dumps(schema)
                 except (json.JSONDecodeError, KeyError):
                     pass
 
