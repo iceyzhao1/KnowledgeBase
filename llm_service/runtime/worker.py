@@ -108,21 +108,35 @@ class Worker:
                 await asyncio.sleep(self._poll_interval)
 
     async def _execute_task(self, task_id: str) -> None:
-        """Dispatch to the correct executor based on task_type."""
-        row = await self._db.fetchone("SELECT task_type FROM agent_llm_tasks WHERE id = %s", (task_id,))
-        if not row:
-            await self._mgr.fail(task_id, "missing_task", "task row not found")
-            return
-        task_type = row["task_type"]
+        """Dispatch to the correct executor based on task_type.
 
-        if task_type == "chat":
-            await self._execute_chat(task_id)
-        elif task_type == "embedding":
-            await self._execute_embedding(task_id)
-        elif task_type == "rerank":
-            await self._execute_rerank(task_id)
-        else:
-            await self._mgr.fail(task_id, "unknown_task_type", f"unsupported task_type: {task_type}")
+        Safety net: if the executor fails without calling _mgr.complete/fail,
+        we ensure the task is transitioned out of 'running' so it doesn't block
+        the Worker from claiming new tasks.
+        """
+        try:
+            row = await self._db.fetchone("SELECT task_type FROM agent_llm_tasks WHERE id = %s", (task_id,))
+            if not row:
+                await self._mgr.fail(task_id, "missing_task", "task row not found")
+                return
+            task_type = row["task_type"]
+
+            if task_type == "chat":
+                await self._execute_chat(task_id)
+            elif task_type == "embedding":
+                await self._execute_embedding(task_id)
+            elif task_type == "rerank":
+                await self._execute_rerank(task_id)
+            else:
+                await self._mgr.fail(task_id, "unknown_task_type", f"unsupported task_type: {task_type}")
+        except Exception:
+            # Safety net: if executor failed without completing/failing the task,
+            # ensure it transitions out of 'running' so the Worker can proceed.
+            logger.exception("Safety-net fail for task %s", task_id[:8])
+            try:
+                await self._mgr.fail(task_id, "worker_error", "executor failed without completing task")
+            except Exception:
+                logger.exception("Safety-net fail ALSO failed for task %s", task_id[:8])
 
     # ------------------------------------------------------------------
     # Chat execution — delegates to LLMService.execute_chat_attempt()
@@ -147,12 +161,11 @@ class Worker:
                 expected_type, schema,
             )
         except Exception as e:
-            # execute_chat_attempt handles its own _mgr.fail() for provider/parse errors.
-            # Only handle early failures (missing svc, etc.) here.
-            if not self._svc:
-                await self._mgr.fail(task_id, "no_service", "LLMService not configured")
-            else:
-                logger.debug("Worker: execute_chat_attempt raised %s for task %s (already handled)", type(e).__name__, task_id[:8])
+            # execute_chat_attempt should call _mgr.fail() before re-raising.
+            # But if it didn't (e.g. _mgr.fail() itself failed), ensure the task
+            # is transitioned out of 'running' by re-raising to _execute_task's safety net.
+            logger.warning("Chat execution failed for task %s: %s", task_id[:8], e)
+            raise
 
     # ------------------------------------------------------------------
     # Embedding execution
