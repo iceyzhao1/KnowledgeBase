@@ -1,6 +1,6 @@
 # Pipeline 算法详细文档
 
-> 日期：2026-05-28
+> 日期：2026-05-29（修订）
 > 用途：功能核查点 + 算法审视
 > 范围：Mining Pipeline（挖掘） + Serving Pipeline（检索）全链路算法细节
 
@@ -58,9 +58,46 @@ Queue[0] → [parse×1] → Queue[1] → [segment×1] → Queue[2] → [enrich×
 - `parse_pdf_to_section_tree()` 将 PDF 页面映射为 SectionNode 树
 - 按 Y 坐标识别标题层级
 
-#### 1.2.4 PassthroughParser
+**中文标题识别**（4 种正则模式）：
+
+| 模式 | 正则 | 映射层级 |
+|------|------|----------|
+| 中文章节 | `^第[一二三四五六七八九十百千零\d]+[章部篇]` | Level 1 |
+| 中文小节 | `^第[一二三四五六七八九十百千零\d]+[节条款]` | Level 2 |
+| 中文枚举 | `^[（(][一二三四五六七八九十\d]+[）)]\s*\S` | Level 3 |
+| 中文顿号枚举 | `^[一二三四五六七八九十]+[、．.]\s*\S` | Level 3 |
+
+**字号启发式标题检测**：
+
+- 比较 block font_size 与 body_size
+- font_size ≥ body_size + 0.1 且文本 ≤ 400 字符 → 候选标题
+- `_font_size_to_level()` 按字号在所有不同字号中的排名映射层级（最大 → Level 1）
+
+#### 1.2.4 DocxParser
+
+- 使用 `python-docx` 读取 DOCX 文件
+- 按 style.name 检测标题层级（"Heading 1"~"Heading 6"）
+- 表格检测：`ContentBlock(block_type="table")`，转换为 pipe-delimited markdown
+- 列表检测：段落 style 或 bullet 前缀
+- 使用与 PdfParser 相同的 `_build_section_tree()` 模式构建 SectionNode 树
+- 忽略 content 字符串，直接从 file_path 读取原始文件
+
+#### 1.2.5 PassthroughParser
 
 - 对不支持的文件类型，`tree = None`，后续 stage 全部跳过
+
+#### 1.2.6 Ingestion 预处理（文件类型调度）
+
+**ingestion 层在解析前根据扩展名预处理**：
+
+| 扩展名 | 预处理 | 解析器 |
+|--------|--------|--------|
+| `.md` / `.markdown` | UTF-8 解码 | MarkdownParser |
+| `.txt` | UTF-8 解码 | PlainTextParser |
+| `.pdf` | `pdf_to_text()` 提取文本 | PdfParser（从 file_path 直接读取） |
+| `.doc` / `.docx` | 无（二进制格式） | DocxParser（从 file_path 直接读取） |
+| `.html` / `.htm` | `html_to_markdown()` 转为 markdown | MarkdownParser |
+| `.chm` / `.hdx` | `archive_to_markdown()` 解压+转换 | MarkdownParser |
 
 ### 1.3 Stage 2: Segment（文档分段）
 
@@ -102,6 +139,22 @@ Queue[0] → [parse×1] → Queue[1] → [segment×1] → Queue[2] → [enrich×
 
 3. **同 section 限制**：只合并 `section_path` 相同的 segment
 
+#### 1.3.3 `_split_large_segments()` 拆分策略
+
+**阈值**：`_SPLIT_MAX_TOKENS = 512`
+
+**拆分流程**：
+
+```
+1. 遍历所有 segments
+2. 如果 token_count ≤ 512 → 直接保留
+3. 如果 token_count > 512：
+   a. 按段落边界（\n\n）拆分
+   b. 如果单段落仍超限，按句子边界（。！？\n）拆分（使用 split_sentences()）
+   c. 每个 sub-segment 保持 section_path、section_title 等元数据不变
+   d. token_count 重新计算
+```
+
 **block_type 优先级**（合并后取高优先级）：
 
 | 类型 | 优先级 |
@@ -112,7 +165,7 @@ Queue[0] → [parse×1] → Queue[1] → [segment×1] → Queue[2] → [enrich×
 | paragraph / blockquote | 1 |
 | unknown | 0 |
 
-#### 1.3.3 每个 Segment 的字段
+#### 1.3.4 每个 Segment 的字段
 
 ```
 document_key: 文档标识
@@ -140,7 +193,8 @@ metadata_json: {}
 
 ```
 Phase 1: submit_all
-  - 每个 segment 提交 LLM 任务（template_key="mining-enrich"）
+  - 每个 segment 提交 LLM 任务（template_key="mining-segment-understanding"）
+  - caller_service="mining"
   - 返回 task_id → seg_key 映射
 
 Phase 2: poll_all
@@ -153,6 +207,8 @@ Phase 3: apply_results
     - semantic_role: "definition"|"procedure"|"example"|...
     - content_assessment: {is_substantive, is_navigation}
 ```
+
+**Enrich stage 版本**：`stage_version = "2"`
 
 **域白名单约束**：
 
@@ -181,7 +237,8 @@ Phase 3: apply_results
 3. 每个窗口：
    a. 格式化：[{idx}] ({section_title}) {text[:150]}
    b. 提交 LLM 任务（template_key="mining-discourse-relation"）
-   c. LLM 返回 [{source, target, relation, confidence}]
+   c. caller_service="mining"
+   d. LLM 返回 [{source, target, relation, confidence}]
    d. 映射 relation → DB relation_type
 4. 过滤：白名单 + confidence ≥ min_confidence
 ```
@@ -272,7 +329,8 @@ Phase 3: apply_results
 **入口**：`embedding_stage(ctx, cfg)`
 
 - 提取所有 retrieval unit 的 text
-- 调用 `EmbeddingGenerator.embed_batch(texts)` → 通过 llm_service 的 Embedding API
+- 调用 `LLMServiceEmbeddingGenerator.embed_batch(texts)`
+- 通过 llm_service 的 `POST /api/v1/models/embeddings` 端点（直接 HTTP 调用，不走 llm_client.py）
 - 结果映射：`{unit_key: vector}`
 - 可配置多 worker 并发
 
@@ -772,12 +830,16 @@ assembly:
 
 | 算法 | 位置 | 核心思路 |
 |------|------|----------|
+| PDF 中文标题识别 | `pdf_parser.py` | 4 种中文编号正则 + 字号启发式 |
+| DOCX 结构解析 | `docx_parser.py` | python-docx Heading 样式/表格/列表检测 |
+| HTML 预处理 | `preprocessing.py` | html_to_markdown() 复用渲染器 |
 | 文档分段合并 | `segment.py` | Unstructured CompositeElement 模式，<100 token 小段合并 |
-| LLM 实体提取 | `enrich/__init__.py` | Domain Pack 白名单约束，3阶段批量提交 |
-| RST 篇章分析 | `relations/__init__.py` | 滑动窗口 LLM，12 种关系类型 |
+| 大段拆分 | `segment.py` | >512 token 在段落/句子边界拆分，CJK 感知 |
+| LLM 实体提取 | `enrich/__init__.py` | Domain Pack 白名单约束，3阶段批量提交（template: mining-segment-understanding） |
+| RST 篇章分析 | `relations/__init__.py` | 滑动窗口 LLM，12 种关系类型（template: mining-discourse-relation） |
 | 检索单元生成 | `retrieval_units/__init__.py` | 4 种类型：raw_text/entity_card/table_row/gen_question |
-| 上下文增强 | `retrieval_units/__init__.py` | Anthropic Contextual Retrieval，LLM 生成上下文描述 |
-| 问题生成 | `retrieval_units/__init__.py` | LLM 批量生成 + 结构校验修剪 |
+| 上下文增强 | `retrieval_units/__init__.py` | Anthropic Contextual Retrieval，LLM 生成上下文描述（template: mining-contextual-retrieval） |
+| 问题生成 | `retrieval_units/__init__.py` | LLM 批量生成 + 结构校验修剪（template: mining-question-gen） |
 
 ### 4.2 Serving 侧
 
