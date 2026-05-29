@@ -92,10 +92,27 @@ public class SearchService {
 
         TraceCollector trace = new TraceCollector();
 
-        // 1. Load Domain Profile
-        ServingDomainProfile profile = domainPackReader.getProfile(request.domain());
+        // 1. Resolve domain first so all downstream components see it
+        String effectiveDomain = (request.domain() != null && !request.domain().isBlank())
+                ? request.domain() : defaultDomain;
+        String channel = (request.channel() != null && !request.channel().isBlank())
+                ? request.channel()
+                : domainRegistry.getDefaultChannel(effectiveDomain);
 
-        // 2. Query Understanding + Embedding in parallel
+        // Propagate domain to LLM client BEFORE any parallel calls
+        llmClient.setKnowledgeDomain(effectiveDomain);
+
+        // Validate DB reachable before touching the routing DataSource
+        // (throws domain_database_unavailable if the pool cannot connect)
+        domainPoolManager.getDataSource(effectiveDomain);
+
+        // All DB operations on this thread now route to the domain's pool
+        DomainContext.set(effectiveDomain);
+
+        // 2. Load Domain Profile
+        ServingDomainProfile profile = domainPackReader.getProfile(effectiveDomain);
+
+        // 3. Query Understanding + Embedding in parallel
         //    Embedding is started optimistically — result is only used if dense route is enabled.
         trace.startStage("query_understanding");
         CompletableFuture<QueryUnderstanding> understandingFuture = CompletableFuture.supplyAsync(
@@ -117,34 +134,18 @@ public class SearchService {
                         + ", entities=" + understanding.entities().size()
                         + ", source=" + understanding.source());
 
-        // 3. Retrieval Router
+        // 4. Retrieval Router
         trace.startStage("retrieval_router");
         RetrievalRoutePlan routePlan = router.route(understanding, profile);
         trace.endStage("retrieval_router",
                 "routes=" + routePlan.routes().size()
                         + ", fusion=" + routePlan.fusion().method());
 
-        // 4. Resolve domain and channel; validate DB availability
-        String effectiveDomain = (request.domain() != null && !request.domain().isBlank())
-                ? request.domain() : defaultDomain;
-        String channel = (request.channel() != null && !request.channel().isBlank())
-                ? request.channel()
-                : domainRegistry.getDefaultChannel(effectiveDomain);
-
-        // Propagate domain to LLM client for billing/audit
-        llmClient.setKnowledgeDomain(effectiveDomain);
-
-        // Validate DB reachable before touching the routing DataSource
-        // (throws domain_database_unavailable if the pool cannot connect)
-        domainPoolManager.getDataSource(effectiveDomain);
-
         String dbEnvVar = domainRegistry.findEntry(effectiveDomain)
                 .map(e -> e.databaseUrlEnv() != null ? e.databaseUrlEnv() : "default(shared)")
                 .orElse("default(shared)");
         log.info("[search] routing domain={} channel={} db={}", effectiveDomain, channel, dbEnvVar);
 
-        // All DB operations on this thread now route to the domain's pool
-        DomainContext.set(effectiveDomain);
         ActiveScope scope = null;
         List<RetrievalCandidate> ranked = List.of();
         ContextPack pack = null;
