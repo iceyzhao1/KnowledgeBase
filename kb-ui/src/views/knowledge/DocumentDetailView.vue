@@ -17,16 +17,17 @@
     </div>
 
     <!-- Tabs -->
-    <el-tabs v-model="activeTab" v-if="document" class="doc-detail__tabs">
+    <el-tabs v-model="activeTab" v-if="document" class="doc-detail__tabs" @tab-change="onTabChange">
       <!-- Segments Tab -->
       <el-tab-pane name="segments">
         <template #label>
-          段落 <span class="tab-count">{{ segments.length }}</span>
+          段落 <span class="tab-count">{{ segTotal }}</span>
         </template>
         <el-table
           :data="segments"
           class="kb-table"
           :header-cell-style="{ background: 'transparent' }"
+          v-loading="segLoading"
         >
           <el-table-column label="#" width="60" prop="segment_index" />
           <el-table-column label="类型" width="100" prop="block_type" />
@@ -48,18 +49,22 @@
           </el-table-column>
           <el-table-column label="Token" width="80" prop="token_count" />
         </el-table>
-        <EmptyState v-if="!segments.length" text="无段落数据" />
+        <EmptyState v-if="!segLoading && !segments.length" text="无段落数据" />
+        <div class="tab-pagination" v-if="segTotal > PAGE_SIZE">
+          <el-pagination v-model:current-page="segPage" :page-size="PAGE_SIZE" :total="segTotal" layout="prev, pager, next" size="small" />
+        </div>
       </el-tab-pane>
 
       <!-- Units Tab -->
       <el-tab-pane name="units">
         <template #label>
-          检索单元 <span class="tab-count">{{ units.length }}</span>
+          检索单元 <span class="tab-count">{{ unitTotal }}</span>
         </template>
         <el-table
           :data="units"
           class="kb-table"
           :header-cell-style="{ background: 'transparent' }"
+          v-loading="unitLoading"
         >
           <el-table-column label="类型" width="120">
             <template #default="{ row }">
@@ -74,18 +79,22 @@
           </el-table-column>
           <el-table-column label="权重" width="80" prop="weight" />
         </el-table>
-        <EmptyState v-if="!units.length" text="无检索单元数据" />
+        <EmptyState v-if="!unitLoading && !units.length" text="无检索单元数据" />
+        <div class="tab-pagination" v-if="unitTotal > PAGE_SIZE">
+          <el-pagination v-model:current-page="unitPage" :page-size="PAGE_SIZE" :total="unitTotal" layout="prev, pager, next" size="small" />
+        </div>
       </el-tab-pane>
 
       <!-- Relations Tab -->
       <el-tab-pane name="relations">
         <template #label>
-          关系 <span class="tab-count">{{ relations.length }}</span>
+          关系 <span class="tab-count">{{ relTotal }}</span>
         </template>
         <el-table
           :data="relations"
           class="kb-table"
           :header-cell-style="{ background: 'transparent' }"
+          v-loading="relLoading"
         >
           <el-table-column label="源分段" min-width="200">
             <template #default="{ row }">
@@ -113,7 +122,10 @@
             </template>
           </el-table-column>
         </el-table>
-        <EmptyState v-if="!relations.length" text="无关系数据" />
+        <EmptyState v-if="!relLoading && !relations.length" text="无关系数据" />
+        <div class="tab-pagination" v-if="relTotal > PAGE_SIZE">
+          <el-pagination v-model:current-page="relPage" :page-size="PAGE_SIZE" :total="relTotal" layout="prev, pager, next" size="small" />
+        </div>
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -127,17 +139,34 @@ import { useMiningApi } from '@/api/mining'
 import type { KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 
+const PAGE_SIZE = 50
+
 const props = defineProps<{ docId: string }>()
 const domainStore = useDomainStore()
 const miningApi = useMiningApi()
 
 const loading = ref(false)
 const document = ref<KnowledgeDocument | null>(null)
-const segments = ref<KnowledgeSegment[]>([])
-const units = ref<KnowledgeUnit[]>([])
-const relations = ref<KnowledgeRelation[]>([])
 const activeTab = ref('segments')
 const expandedKeys = ref(new Set<string>())
+
+// Segments
+const segments = ref<KnowledgeSegment[]>([])
+const segTotal = ref(0)
+const segPage = ref(1)
+const segLoading = ref(false)
+
+// Units
+const units = ref<KnowledgeUnit[]>([])
+const unitTotal = ref(0)
+const unitPage = ref(1)
+const unitLoading = ref(false)
+
+// Relations
+const relations = ref<KnowledgeRelation[]>([])
+const relTotal = ref(0)
+const relPage = ref(1)
+const relLoading = ref(false)
 
 function toggleExpand(key: string) {
   if (expandedKeys.value.has(key)) {
@@ -170,25 +199,90 @@ function formatTime(t: string) {
   return new Date(t).toLocaleString('zh-CN')
 }
 
+async function loadSegments() {
+  segLoading.value = true
+  try {
+    const res = await miningApi.getDocumentSegments(props.docId, {
+      limit: PAGE_SIZE,
+      offset: (segPage.value - 1) * PAGE_SIZE,
+    })
+    segments.value = res.items
+    segTotal.value = res.total
+  } catch {
+    segments.value = []
+    segTotal.value = 0
+  } finally {
+    segLoading.value = false
+  }
+}
+
+async function loadUnits() {
+  unitLoading.value = true
+  try {
+    const res = await miningApi.getDocumentUnits(props.docId, {
+      limit: PAGE_SIZE,
+      offset: (unitPage.value - 1) * PAGE_SIZE,
+    })
+    units.value = res.items
+    unitTotal.value = res.total
+  } catch {
+    units.value = []
+    unitTotal.value = 0
+  } finally {
+    unitLoading.value = false
+  }
+}
+
+async function loadRelations() {
+  relLoading.value = true
+  try {
+    const res = await miningApi.getDocumentRelations(props.docId, {
+      limit: PAGE_SIZE,
+      offset: (relPage.value - 1) * PAGE_SIZE,
+    })
+    relations.value = res.items
+    relTotal.value = res.total
+  } catch {
+    relations.value = []
+    relTotal.value = 0
+  } finally {
+    relLoading.value = false
+  }
+}
+
+function onTabChange(tab: string | number) {
+  if (tab === 'segments' && segments.value.length === 0) loadSegments()
+  else if (tab === 'units' && units.value.length === 0) loadUnits()
+  else if (tab === 'relations' && relations.value.length === 0) loadRelations()
+}
+
 async function loadData() {
   loading.value = true
   try {
-    const [doc, segs, unts, rels] = await Promise.all([
-      miningApi.getDocument(props.docId),
-      miningApi.getDocumentSegments(props.docId),
-      miningApi.getDocumentUnits(props.docId),
-      miningApi.getDocumentRelations(props.docId),
-    ])
+    const doc = await miningApi.getDocument(props.docId)
     document.value = doc
-    segments.value = segs
-    units.value = unts
-    relations.value = rels
+    // Load the active tab data
+    segPage.value = 1
+    unitPage.value = 1
+    relPage.value = 1
+    segments.value = []
+    units.value = []
+    relations.value = []
+    await loadSegments()
+    // Preload totals for other tabs (lightweight: just first page)
+    loadUnits()
+    loadRelations()
   } catch {
     document.value = null
   } finally {
     loading.value = false
   }
 }
+
+// Watch page changes
+watch(segPage, loadSegments)
+watch(unitPage, loadUnits)
+watch(relPage, loadRelations)
 
 onMounted(loadData)
 watch(() => domainStore.currentDomain, loadData)
@@ -245,6 +339,12 @@ watch(() => domainStore.currentDomain, loadData)
   font-size: 11px;
   color: var(--kb-text-tertiary);
   margin-left: 4px;
+}
+
+.tab-pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
 }
 
 /* Inline tags — consistent with RunDocumentDetailView */

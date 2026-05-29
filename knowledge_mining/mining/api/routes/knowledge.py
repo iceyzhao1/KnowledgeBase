@@ -132,6 +132,13 @@ async def get_document_segments(
             raise HTTPException(404, f"No snapshots found for document {document_id}")
 
         snapshot_id = link["document_snapshot_id"]
+
+        count_cur = await conn.execute(
+            "SELECT COUNT(*) as c FROM asset_raw_segments WHERE document_snapshot_id = %s",
+            [snapshot_id],
+        )
+        total = (await count_cur.fetchone())["c"]
+
         cur = await conn.execute(
             "SELECT id, segment_key, segment_index, block_type, semantic_role, "
             "section_title, raw_text, token_count "
@@ -142,7 +149,11 @@ async def get_document_segments(
         )
         rows = await cur.fetchall()
 
-    return {"document_id": document_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+    return {
+        "document_id": document_id, "snapshot_id": snapshot_id,
+        "total": total, "limit": limit, "offset": offset,
+        "items": [dict(r) for r in rows],
+    }
 
 
 @router.get("/documents/{document_id}/units")
@@ -170,6 +181,12 @@ async def get_document_units(
         where = "AND unit_type = %s" if unit_type else ""
         params: list[str] = [snapshot_id] + ([unit_type] if unit_type else [])
 
+        count_cur = await conn.execute(
+            f"SELECT COUNT(*) as c FROM asset_retrieval_units WHERE document_snapshot_id = %s {where}",
+            params,
+        )
+        total = (await count_cur.fetchone())["c"]
+
         cur = await conn.execute(
             f"SELECT id, unit_key, unit_type, target_type, title, text, "
             f"block_type, semantic_role, weight, created_at "
@@ -180,7 +197,11 @@ async def get_document_units(
         )
         rows = await cur.fetchall()
 
-    return {"document_id": document_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+    return {
+        "document_id": document_id, "snapshot_id": snapshot_id,
+        "total": total, "limit": limit, "offset": offset,
+        "items": [dict(r) for r in rows],
+    }
 
 
 @router.get("/documents/{document_id}/relations")
@@ -204,6 +225,13 @@ async def get_document_relations(
             raise HTTPException(404, f"No snapshots found for document {document_id}")
 
         snapshot_id = link["document_snapshot_id"]
+
+        count_cur = await conn.execute(
+            "SELECT COUNT(*) as c FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
+            [snapshot_id],
+        )
+        total = (await count_cur.fetchone())["c"]
+
         cur = await conn.execute(
             "SELECT r.id, r.document_snapshot_id, r.source_segment_id, "
             "r.target_segment_id, r.relation_type, r.weight, "
@@ -218,7 +246,11 @@ async def get_document_relations(
         )
         rows = await cur.fetchall()
 
-    return {"document_id": document_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+    return {
+        "document_id": document_id, "snapshot_id": snapshot_id,
+        "total": total, "limit": limit, "offset": offset,
+        "items": [dict(r) for r in rows],
+    }
 
 
 @router.get("/segments")

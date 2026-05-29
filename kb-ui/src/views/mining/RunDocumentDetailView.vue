@@ -118,8 +118,9 @@
           </el-table-column>
           <el-table-column label="Token" width="80" prop="token_count" />
         </el-table>
-
-        <!-- Units Table -->
+        <div class="tab-pagination" v-if="segTotal > PAGE_SIZE">
+          <el-pagination v-model:current-page="segPage" :page-size="PAGE_SIZE" :total="segTotal" layout="prev, pager, next" size="small" />
+        </div>
         <el-table
           v-if="activeArtifactTab === 'units'"
           :data="units"
@@ -136,8 +137,9 @@
           </el-table-column>
           <el-table-column label="权重" width="80" prop="weight" />
         </el-table>
-
-        <!-- Relations Table -->
+        <div class="tab-pagination" v-if="unitTotal > PAGE_SIZE">
+          <el-pagination v-model:current-page="unitPage" :page-size="PAGE_SIZE" :total="unitTotal" layout="prev, pager, next" size="small" />
+        </div>
         <el-table
           v-if="activeArtifactTab === 'relations'"
           :data="relations"
@@ -171,6 +173,9 @@
             </template>
           </el-table-column>
         </el-table>
+        <div class="tab-pagination" v-if="relTotal > PAGE_SIZE">
+          <el-pagination v-model:current-page="relPage" :page-size="PAGE_SIZE" :total="relTotal" layout="prev, pager, next" size="small" />
+        </div>
       </div>
     </template>
   </div>
@@ -190,6 +195,15 @@ const miningApi = useMiningApi()
 const activeArtifactTab = ref('segments')
 const artifactsLoading = ref(false)
 const expandedKeys = ref(new Set<string>())
+const PAGE_SIZE = 50
+
+// Pagination state per tab
+const segTotal = ref(0)
+const segPage = ref(1)
+const unitTotal = ref(0)
+const unitPage = ref(1)
+const relTotal = ref(0)
+const relPage = ref(1)
 
 function toggleExpand(key: string) {
   if (expandedKeys.value.has(key)) {
@@ -314,22 +328,31 @@ async function loadArtifacts() {
   if (activeArtifactTab.value === 'segments') {
     artifactsLoading.value = true
     try {
-      const result = await miningApi.getRunDocumentSegments(props.runId, props.docId)
+      const result = await miningApi.getRunDocumentSegments(props.runId, props.docId, {
+        limit: PAGE_SIZE, offset: (segPage.value - 1) * PAGE_SIZE,
+      })
       segments.value = result.items
+      segTotal.value = result.total ?? 0
     } catch { /* ignore */ }
     finally { artifactsLoading.value = false }
   } else if (activeArtifactTab.value === 'units') {
     artifactsLoading.value = true
     try {
-      const result = await miningApi.getRunDocumentUnits(props.runId, props.docId)
+      const result = await miningApi.getRunDocumentUnits(props.runId, props.docId, {
+        limit: PAGE_SIZE, offset: (unitPage.value - 1) * PAGE_SIZE,
+      })
       units.value = result.items
+      unitTotal.value = result.total ?? 0
     } catch { /* ignore */ }
     finally { artifactsLoading.value = false }
   } else if (activeArtifactTab.value === 'relations') {
     artifactsLoading.value = true
     try {
-      const result = await miningApi.getRunDocumentRelations(props.runId, props.docId)
+      const result = await miningApi.getRunDocumentRelations(props.runId, props.docId, {
+        limit: PAGE_SIZE, offset: (relPage.value - 1) * PAGE_SIZE,
+      })
       relations.value = result.items
+      relTotal.value = result.total ?? 0
     } catch { /* ignore */ }
     finally { artifactsLoading.value = false }
   }
@@ -341,7 +364,15 @@ async function loadAll() {
 }
 
 onMounted(loadAll)
-watch(() => activeArtifactTab.value, loadArtifacts)
+watch(() => activeArtifactTab.value, () => {
+  segPage.value = 1
+  unitPage.value = 1
+  relPage.value = 1
+  loadArtifacts()
+})
+watch(segPage, loadArtifacts)
+watch(unitPage, loadArtifacts)
+watch(relPage, loadArtifacts)
 </script>
 
 <style scoped>
@@ -553,6 +584,12 @@ watch(() => activeArtifactTab.value, loadArtifacts)
 
 .filter-tag:hover { border-color: var(--kb-accent-medium); color: var(--kb-accent); }
 .filter-tag--active { background: var(--kb-accent-soft); border-color: var(--kb-accent); color: var(--kb-accent); }
+
+.tab-pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
 
 /* Common */
 .text-muted { color: var(--kb-text-tertiary); font-size: 13px; }

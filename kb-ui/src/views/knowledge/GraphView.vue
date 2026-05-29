@@ -99,6 +99,8 @@ const filterType = ref('')
 const currentPage = ref(1)
 const pageSize = 30
 const expandedTexts = ref(new Set<string>())
+const serverPage = ref(1)
+const SERVER_PAGE_SIZE = 200
 
 function toggleText(key: string) {
   if (expandedTexts.value.has(key)) {
@@ -186,7 +188,10 @@ function relationTypeLabel(type: string) {
 async function loadData() {
   loading.value = true
   try {
-    const res = await miningApi.getRelations({ limit: 500 })
+    const res = await miningApi.getRelations({
+      limit: SERVER_PAGE_SIZE,
+      offset: (serverPage.value - 1) * SERVER_PAGE_SIZE,
+    })
     relations.value = res.items ?? []
     loadedOnce.value = true
   } catch {
@@ -198,7 +203,8 @@ async function loadData() {
 }
 
 onMounted(loadData)
-watch(() => domainStore.currentDomain, loadData)
+watch(() => domainStore.currentDomain, () => { serverPage.value = 1; loadData() })
+watch(serverPage, loadData)
 </script>
 
 <style scoped>

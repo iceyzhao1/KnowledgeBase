@@ -88,21 +88,21 @@ export function useMiningApi() {
 
     async getRunDocumentSegments(runId: string, docId: string, params?: {
       limit?: number; offset?: number
-    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; items: KnowledgeSegment[] }> {
+    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; total: number; items: KnowledgeSegment[] }> {
       const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/segments`, { params })
       return data
     },
 
     async getRunDocumentUnits(runId: string, docId: string, params?: {
       unit_type?: string; limit?: number; offset?: number
-    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; items: KnowledgeUnit[] }> {
+    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; total: number; items: KnowledgeUnit[] }> {
       const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/units`, { params })
       return data
     },
 
     async getRunDocumentRelations(runId: string, docId: string, params?: {
       limit?: number; offset?: number
-    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; items: KnowledgeRelation[] }> {
+    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; total: number; items: KnowledgeRelation[] }> {
       const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/relations`, { params })
       return data
     },
@@ -165,22 +165,28 @@ export function useMiningApi() {
       return extractOne<KnowledgeDocument>(data)
     },
 
-    async getDocumentSegments(docId: string): Promise<KnowledgeSegment[]> {
-      const { data } = await client.get(`/api/knowledge/documents/${docId}/segments`)
-      return extractItems<KnowledgeSegment>(data)
+    async getDocumentSegments(docId: string, params?: {
+      limit?: number; offset?: number
+    }): Promise<{ document_id: string; snapshot_id: string; total: number; items: KnowledgeSegment[] }> {
+      const { data } = await client.get(`/api/knowledge/documents/${docId}/segments`, { params })
+      return data
     },
 
-    async getDocumentUnits(docId: string): Promise<KnowledgeUnit[]> {
-      const { data } = await client.get(`/api/knowledge/documents/${docId}/units`)
-      return extractItems<KnowledgeUnit>(data)
+    async getDocumentUnits(docId: string, params?: {
+      unit_type?: string; limit?: number; offset?: number
+    }): Promise<{ document_id: string; snapshot_id: string; total: number; items: KnowledgeUnit[] }> {
+      const { data } = await client.get(`/api/knowledge/documents/${docId}/units`, { params })
+      return data
     },
 
-    async getDocumentRelations(docId: string): Promise<KnowledgeRelation[]> {
+    async getDocumentRelations(docId: string, params?: {
+      limit?: number; offset?: number
+    }): Promise<{ document_id: string; snapshot_id: string; total: number; items: KnowledgeRelation[] }> {
       try {
-        const { data } = await client.get(`/api/knowledge/documents/${docId}/relations`)
-        return extractItems<KnowledgeRelation>(data)
+        const { data } = await client.get(`/api/knowledge/documents/${docId}/relations`, { params })
+        return data
       } catch {
-        return []
+        return { document_id: docId, snapshot_id: '', total: 0, items: [] }
       }
     },
 
@@ -194,7 +200,7 @@ export function useMiningApi() {
       return data
     },
 
-    async getRelations(params?: { limit?: number }): Promise<PaginatedResponse<KnowledgeRelation>> {
+    async getRelations(params?: { limit?: number; offset?: number }): Promise<PaginatedResponse<KnowledgeRelation>> {
       const { data } = await client.get('/api/knowledge/relations', { params })
       return data
     },

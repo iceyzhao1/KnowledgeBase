@@ -485,7 +485,13 @@ async def get_run_document_segments(
 
         snapshot_id = doc["document_snapshot_id"]
         if not snapshot_id:
-            return {"run_id": run_id, "document_id": doc_id, "items": []}
+            return {"run_id": run_id, "document_id": doc_id, "snapshot_id": None, "total": 0, "limit": limit, "offset": offset, "items": []}
+
+        count_cur = await conn.execute(
+            "SELECT COUNT(*) as c FROM asset_raw_segments WHERE document_snapshot_id = %s",
+            [snapshot_id],
+        )
+        total = (await count_cur.fetchone())["c"]
 
         cur = await conn.execute(
             "SELECT id, segment_key, segment_index, block_type, semantic_role, "
@@ -497,7 +503,11 @@ async def get_run_document_segments(
         )
         rows = await cur.fetchall()
 
-    return {"run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+    return {
+        "run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id,
+        "total": total, "limit": limit, "offset": offset,
+        "items": [dict(r) for r in rows],
+    }
 
 
 @router.get("/{run_id}/documents/{doc_id}/units")
@@ -522,10 +532,16 @@ async def get_run_document_units(
 
         snapshot_id = doc["document_snapshot_id"]
         if not snapshot_id:
-            return {"run_id": run_id, "document_id": doc_id, "items": []}
+            return {"run_id": run_id, "document_id": doc_id, "snapshot_id": None, "total": 0, "limit": limit, "offset": offset, "items": []}
 
         where = "AND unit_type = %s" if unit_type else ""
         params: list[str] = [snapshot_id] + ([unit_type] if unit_type else [])
+
+        count_cur = await conn.execute(
+            f"SELECT COUNT(*) as c FROM asset_retrieval_units WHERE document_snapshot_id = %s {where}",
+            params,
+        )
+        total = (await count_cur.fetchone())["c"]
 
         cur = await conn.execute(
             f"SELECT id, unit_key, unit_type, target_type, title, text, "
@@ -537,7 +553,11 @@ async def get_run_document_units(
         )
         rows = await cur.fetchall()
 
-    return {"run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+    return {
+        "run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id,
+        "total": total, "limit": limit, "offset": offset,
+        "items": [dict(r) for r in rows],
+    }
 
 
 @router.get("/{run_id}/documents/{doc_id}/relations")
@@ -561,7 +581,13 @@ async def get_run_document_relations(
 
         snapshot_id = doc["document_snapshot_id"]
         if not snapshot_id:
-            return {"run_id": run_id, "document_id": doc_id, "items": []}
+            return {"run_id": run_id, "document_id": doc_id, "snapshot_id": None, "total": 0, "limit": limit, "offset": offset, "items": []}
+
+        count_cur = await conn.execute(
+            "SELECT COUNT(*) as c FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
+            [snapshot_id],
+        )
+        total = (await count_cur.fetchone())["c"]
 
         # Join with segments to get preview text
         cur = await conn.execute(
@@ -578,7 +604,11 @@ async def get_run_document_relations(
         )
         rows = await cur.fetchall()
 
-    return {"run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id, "items": [dict(r) for r in rows]}
+    return {
+        "run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id,
+        "total": total, "limit": limit, "offset": offset,
+        "items": [dict(r) for r in rows],
+    }
 
 
 @router.get("/{run_id}/artifacts")

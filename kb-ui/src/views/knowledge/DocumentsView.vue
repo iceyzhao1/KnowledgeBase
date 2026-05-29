@@ -51,6 +51,9 @@
           </template>
         </el-table-column>
       </el-table>
+      <div class="docs-view__pagination" v-if="paginated.total > PAGE_SIZE">
+        <el-pagination v-model:current-page="currentPage" :page-size="PAGE_SIZE" :total="paginated.total" layout="prev, pager, next" size="small" />
+      </div>
     </div>
   </div>
 </template>
@@ -69,6 +72,8 @@ const loading = ref(false)
 const documents = ref<KnowledgeDocument[]>([])
 const searchText = ref('')
 const paginated = ref({ total: 0, limit: 50, offset: 0 })
+const currentPage = ref(1)
+const PAGE_SIZE = 50
 
 const filteredDocs = computed(() => {
   if (!searchText.value) return documents.value
@@ -82,9 +87,12 @@ const filteredDocs = computed(() => {
 async function loadDocuments() {
   loading.value = true
   try {
-    const res = await miningApi.getDocuments({ limit: 100 })
+    const res = await miningApi.getDocuments({
+      limit: PAGE_SIZE,
+      offset: (currentPage.value - 1) * PAGE_SIZE,
+    })
     documents.value = res.items ?? []
-    paginated.value.total = res.total
+    paginated.value = { total: res.total, limit: res.limit, offset: res.offset }
   } catch {
     documents.value = []
   } finally {
@@ -98,7 +106,8 @@ function formatTime(t: string) {
 }
 
 onMounted(loadDocuments)
-watch(() => domainStore.currentDomain, loadDocuments)
+watch(() => domainStore.currentDomain, () => { currentPage.value = 1; loadDocuments() })
+watch(currentPage, loadDocuments)
 </script>
 
 <style scoped>
@@ -148,6 +157,14 @@ watch(() => domainStore.currentDomain, loadDocuments)
   box-shadow: var(--kb-shadow-card);
   border: 1px solid var(--kb-border-light);
   overflow: hidden;
+}
+
+.docs-view__pagination {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
+  background: var(--kb-bg-card);
+  border-top: 1px solid var(--kb-border-light);
 }
 
 .table-link {
