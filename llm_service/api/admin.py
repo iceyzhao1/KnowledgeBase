@@ -75,3 +75,18 @@ async def reload_config(request: Request):
             "worker_concurrency": dig(new_cfg, "worker", "concurrency"),
         },
     }
+
+
+@router.get("/worker-status")
+async def worker_status(request: Request):
+    """Diagnostic: return actual Worker concurrency and poll interval."""
+    worker = getattr(request.app.state, "worker", None)
+    if not worker:
+        return {"ok": True, "worker_running": False}
+    return {
+        "ok": True,
+        "worker_running": worker._running,
+        "concurrency": worker._concurrency,
+        "poll_interval": worker._poll_interval,
+        "active_tasks": len(worker._tasks),
+    }

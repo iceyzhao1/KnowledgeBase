@@ -73,6 +73,21 @@ def create_app(
             health["connected"], health["tables_ok"], health.get("task_count", "?"),
         )
 
+        # Startup cleanup: re-queue stale "running" tasks from previous crash
+        try:
+            row = await db.fetchone(
+                "SELECT COUNT(*) AS cnt FROM agent_llm_tasks WHERE status = 'running'"
+            )
+            stale = row["cnt"] if row else 0
+            if stale > 0:
+                await db.execute(
+                    "UPDATE agent_llm_tasks SET status = 'queued', lease_expires_at = NULL "
+                    "WHERE status = 'running'"
+                )
+                logger.warning("Re-queued %d stale 'running' tasks on startup", stale)
+        except Exception:
+            logger.exception("Failed to re-queue stale running tasks on startup")
+
         # Providers — all params from config dict, no defaults
         # Resolve multi-model: if provider.models exists, merge active_model overrides
         active_provider = resolve_active_model_config(cfg)
@@ -125,6 +140,7 @@ def create_app(
         recovery = None
         try:
             if start_worker:
+                worker_concurrency = dig(cfg, "worker", "concurrency")
                 worker = Worker(
                     db=db,
                     task_manager=svc._mgr,
@@ -132,7 +148,7 @@ def create_app(
                     provider=provider,
                     model_provider=model_provider,
                     templates=templates,
-                    concurrency=dig(cfg, "worker", "concurrency"),
+                    concurrency=worker_concurrency,
                     poll_interval=dig(cfg, "worker", "poll_interval"),
                     llm_service=svc,
                 )
@@ -145,6 +161,8 @@ def create_app(
                     interval=dig(cfg, "task", "lease_recovery_interval"),
                 )
                 await recovery.start()
+                app.state.worker = worker
+                app.state.worker_concurrency = worker_concurrency
         except Exception:
             if recovery:
                 await recovery.stop()
