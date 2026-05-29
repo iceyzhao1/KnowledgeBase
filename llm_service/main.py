@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Callable
 
@@ -50,6 +51,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        logger.info(
+            "llm_lifespan_start pid=%s app_id=%s config_id=%s start_worker=%s",
+            os.getpid(),
+            id(app),
+            id(cfg),
+            start_worker,
+        )
         # PostgreSQL — all params from control plane database.yaml
         pg_cfg = load_db_config()
         logger.info("Ensuring database schema for %s @ %s:%s", pg_cfg.dbname, pg_cfg.host, pg_cfg.port)
@@ -153,6 +161,14 @@ def create_app(
                     llm_service=svc,
                 )
                 await worker.start()
+                logger.info(
+                    "llm_worker_attached pid=%s app_id=%s worker_id=%s concurrency=%s active_tasks=%s",
+                    os.getpid(),
+                    id(app),
+                    id(worker),
+                    worker_concurrency,
+                    len(worker._tasks),
+                )
 
                 recovery = LeaseRecovery(
                     db=db,
@@ -173,6 +189,12 @@ def create_app(
 
         yield
 
+        logger.info(
+            "llm_lifespan_shutdown pid=%s app_id=%s worker_id=%s",
+            os.getpid(),
+            id(app),
+            id(worker) if worker else None,
+        )
         if recovery:
             await recovery.stop()
         if worker:
@@ -197,7 +219,6 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )

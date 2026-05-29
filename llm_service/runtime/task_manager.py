@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from llm_service.db import LlmRuntimeDB
 from llm_service.runtime.event_bus import EventBus
+
+logger = logging.getLogger(__name__)
 
 
 class TaskManager:
@@ -96,6 +100,12 @@ class TaskManager:
         lease_dt = datetime.now(timezone.utc) + timedelta(seconds=self._lease_duration)
         lease_str = lease_dt.isoformat()
 
+        logger.info(
+            "task_claim_begin pid=%s task_manager_id=%s lease_duration=%s",
+            os.getpid(),
+            id(self),
+            self._lease_duration,
+        )
         row = await self._db.fetchone(
             """UPDATE agent_llm_tasks
                SET status = 'running', started_at = %s, lease_expires_at = %s, updated_at = %s
@@ -105,13 +115,30 @@ class TaskManager:
                    ORDER BY priority DESC, created_at ASC LIMIT 1
                    FOR UPDATE SKIP LOCKED
                )
-               RETURNING id""",
+               RETURNING id, caller_service, knowledge_domain, pipeline_stage, task_type, created_at""",
             (now, lease_str, now, now),
         )
         if not row:
+            logger.info(
+                "task_claim_none pid=%s task_manager_id=%s",
+                os.getpid(),
+                id(self),
+            )
             return None
 
         task_id = row["id"]
+        logger.info(
+            "task_claim_success pid=%s task_manager_id=%s task_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s task_type=%s created_at=%s lease_expires_at=%s",
+            os.getpid(),
+            id(self),
+            task_id,
+            row["caller_service"],
+            row["knowledge_domain"],
+            row["pipeline_stage"],
+            row["task_type"],
+            row["created_at"],
+            lease_str,
+        )
         await self._bus.emit(task_id, "claimed", "task claimed by worker")
         return task_id
 

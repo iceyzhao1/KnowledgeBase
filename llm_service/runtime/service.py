@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -49,6 +50,15 @@ class LLMService:
         self._provider_name = getattr(provider, 'provider_name', 'unknown')
         # For multi-model: use provider.default_model (resolved at construction)
         self._default_model = getattr(provider, 'default_model', config.get("provider", {}).get("model", ""))
+        logger.info(
+            "llm_service_created pid=%s service_id=%s task_manager_id=%s db_id=%s provider=%s model=%s",
+            os.getpid(),
+            id(self),
+            id(self._mgr),
+            id(self._db),
+            self._provider_name,
+            self._default_model,
+        )
 
     # ------------------------------------------------------------------
     # Template resolution
@@ -177,10 +187,29 @@ class LLMService:
                    VALUES (%s, %s, %s, %s, 'running', %s)""",
                 (attempt_id, task_id, request_id, attempt_no, now),
             )
+            logger.info(
+                "chat_attempt_started pid=%s service_id=%s task_id=%s request_id=%s attempt_id=%s attempt_no=%s expected_type=%s model=%s",
+                os.getpid(),
+                id(self),
+                task_id,
+                request_id,
+                attempt_id,
+                attempt_no,
+                expected_type,
+                self._default_model,
+            )
             response_format = (
                 {"type": "json_object"}
                 if expected_type in ("json_object", "json_array")
                 else None
+            )
+            logger.info(
+                "provider_complete_start pid=%s service_id=%s task_id=%s attempt_id=%s model=%s",
+                os.getpid(),
+                id(self),
+                task_id,
+                attempt_id,
+                self._default_model,
             )
             resp = await self._provider.complete(
                 messages=messages, params=params,
@@ -188,6 +217,15 @@ class LLMService:
             )
             latency = int((time.monotonic() - start) * 1000)
             finished = datetime.now(timezone.utc).isoformat()
+            logger.info(
+                "provider_complete_end pid=%s service_id=%s task_id=%s attempt_id=%s latency_ms=%s total_tokens=%s",
+                os.getpid(),
+                id(self),
+                task_id,
+                attempt_id,
+                latency,
+                resp.total_tokens,
+            )
 
             await self._db.execute(
                 """UPDATE agent_llm_attempts
@@ -222,6 +260,14 @@ class LLMService:
 
             if parse_result.parse_status == "succeeded":
                 await self._mgr.complete(task_id)
+                logger.info(
+                    "chat_attempt_succeeded pid=%s service_id=%s task_id=%s attempt_id=%s latency_ms=%s",
+                    os.getpid(),
+                    id(self),
+                    task_id,
+                    attempt_id,
+                    latency,
+                )
             else:
                 # Mark attempt as failed (parse error, not provider error)
                 await self._db.execute(
@@ -234,8 +280,16 @@ class LLMService:
                     task_id, "parse_failed",
                     parse_result.parse_error or f"parse_status={parse_result.parse_status}",
                 )
-                raise RuntimeError(
-                    f"parse_failed: {parse_result.parse_error or parse_result.parse_status}"
+                # Do NOT re-raise: _mgr.fail() already handled retry/dead_letter.
+                # Re-raising would trigger the worker safety net to call _mgr.fail() again,
+                # consuming an extra retry slot per attempt (double-fail bug).
+                logger.info(
+                    "chat_attempt_parse_failed pid=%s service_id=%s task_id=%s attempt_id=%s parse_error=%s",
+                    os.getpid(),
+                    id(self),
+                    task_id,
+                    attempt_id,
+                    parse_result.parse_error or parse_result.parse_status,
                 )
             return parse_result
 
@@ -244,6 +298,15 @@ class LLMService:
             finished = datetime.now(timezone.utc).isoformat()
             error_type = getattr(e, "error_type", "unexpected_error")
             error_msg = str(e)
+            logger.info(
+                "chat_attempt_failed pid=%s service_id=%s task_id=%s attempt_id=%s error_type=%s latency_ms=%s",
+                os.getpid(),
+                id(self),
+                task_id,
+                attempt_id,
+                error_type,
+                latency,
+            )
 
             # Only update attempt if it was inserted (may fail if pre-attempt errored)
             try:
@@ -256,6 +319,8 @@ class LLMService:
             except Exception:
                 logger.exception("Failed to update attempt %s on error", attempt_id[:8])
             await self._mgr.fail(task_id, error_type, error_msg)
+            # Re-raise for provider-level errors (network, timeout, rate_limit)
+            # so worker safety net knows the task was handled.
             raise
 
     # ------------------------------------------------------------------
@@ -288,6 +353,17 @@ class LLMService:
                     (idempotency_key,),
                 )
                 if row:
+                    logger.info(
+                        "task_submit_idempotency_hit pid=%s service_id=%s task_id=%s task_type=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s idempotency_key=%s",
+                        os.getpid(),
+                        id(self),
+                        row["id"],
+                        task_type,
+                        caller_service,
+                        knowledge_domain,
+                        pipeline_stage,
+                        idempotency_key,
+                    )
                     return row["id"]
 
             # Use a transaction for task + request insert
@@ -319,6 +395,18 @@ class LLMService:
                         (request_id, task_id, *request_params, now),
                     )
 
+            logger.info(
+                "task_submitted pid=%s service_id=%s task_id=%s request_type=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s priority=%s max_attempts=%s",
+                os.getpid(),
+                id(self),
+                task_id,
+                task_type,
+                caller_service,
+                knowledge_domain,
+                pipeline_stage,
+                priority,
+                max_attempts,
+            )
             await self._bus.emit(task_id, "submitted", event_message)
             return task_id
 
@@ -471,6 +559,16 @@ class LLMService:
         ALL DB writes are fire-and-forget background tasks.
         This is a relay service — the caller should see near-zero overhead beyond the LLM call itself.
         """
+        logger.info(
+            "sync_execute_start pid=%s service_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s template_key=%s priority=%s",
+            os.getpid(),
+            id(self),
+            caller_service,
+            knowledge_domain,
+            pipeline_stage,
+            template_key,
+            priority,
+        )
         # ---- Phase 1: Resolve template (cached → 0 DB after warm-up) ----
         resolved = await self._resolve_template(
             template_key, knowledge_domain, input, messages, expected_output_type, output_schema,
@@ -488,6 +586,15 @@ class LLMService:
         )
 
         try:
+            logger.info(
+                "sync_execute_provider_start pid=%s service_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s model=%s",
+                os.getpid(),
+                id(self),
+                caller_service,
+                knowledge_domain,
+                pipeline_stage,
+                self._default_model,
+            )
             resp = await self._provider.complete(
                 messages=actual_messages, params=params or {},
                 response_format=response_format,
@@ -496,6 +603,16 @@ class LLMService:
             latency = int((time.monotonic() - start) * 1000)
             error_type = getattr(e, "error_type", "unexpected_error")
             error_msg = str(e)
+            logger.info(
+                "sync_execute_provider_failed pid=%s service_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s error_type=%s latency_ms=%s",
+                os.getpid(),
+                id(self),
+                caller_service,
+                knowledge_domain,
+                pipeline_stage,
+                error_type,
+                latency,
+            )
             return {
                 "task_id": None,
                 "status": "failed",
@@ -507,6 +624,16 @@ class LLMService:
             }
 
         latency = int((time.monotonic() - start) * 1000)
+        logger.info(
+            "sync_execute_provider_end pid=%s service_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s latency_ms=%s total_tokens=%s",
+            os.getpid(),
+            id(self),
+            caller_service,
+            knowledge_domain,
+            pipeline_stage,
+            latency,
+            resp.total_tokens,
+        )
         parse_result = parse_output(resp.output_text, actual_expected_type, actual_schema)
         parse_ok = parse_result.parse_status == "succeeded"
 
@@ -523,6 +650,16 @@ class LLMService:
         async def _persist():
             """Background task: write all bookkeeping rows to DB."""
             try:
+                logger.info(
+                    "sync_execute_persist_start pid=%s service_id=%s task_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s final_status=%s",
+                    os.getpid(),
+                    id(self),
+                    task_id,
+                    caller_service,
+                    knowledge_domain,
+                    pipeline_stage,
+                    final_status,
+                )
                 async with self._db.pool.connection() as conn:
                     async with conn.transaction():
                         # task row
@@ -595,10 +732,26 @@ class LLMService:
                         )
                 # Emit event (fire-and-forget within fire-and-forget)
                 asyncio.ensure_future(self._bus.emit(task_id, final_status, "task completed"))
+                logger.info(
+                    "sync_execute_persist_end pid=%s service_id=%s task_id=%s final_status=%s latency_ms=%s",
+                    os.getpid(),
+                    id(self),
+                    task_id,
+                    final_status,
+                    latency,
+                )
             except Exception:
                 logger.exception("Background persist failed for task %s", task_id[:8])
 
         asyncio.ensure_future(_persist())
+        logger.info(
+            "sync_execute_return pid=%s service_id=%s task_id=%s final_status=%s latency_ms=%s",
+            os.getpid(),
+            id(self),
+            task_id,
+            final_status,
+            latency,
+        )
 
         # ---- Phase 4: Return immediately from memory ----
         if parse_ok:

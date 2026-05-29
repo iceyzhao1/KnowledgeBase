@@ -1,16 +1,31 @@
 from __future__ import annotations
 
+import logging
+import os
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from llm_service.models import EmbeddingTaskRequest, RerankTaskRequest, TaskSubmitRequest
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 
 @router.post("/tasks")
 async def submit_task(body: TaskSubmitRequest, request: Request):
     svc = request.app.state.llm_service
+    logger.info(
+        "http_submit_task_received pid=%s app_id=%s service_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s template_key=%s priority=%s",
+        os.getpid(),
+        id(request.app),
+        id(svc),
+        body.caller_service,
+        body.knowledge_domain,
+        body.pipeline_stage,
+        body.template_key,
+        body.priority,
+    )
     task_id = await svc.submit(
         body.caller_service,
         body.knowledge_domain,
@@ -27,6 +42,17 @@ async def submit_task(body: TaskSubmitRequest, request: Request):
         priority=body.priority,
     )
     task = await svc.get_task(task_id)
+    logger.info(
+        "http_submit_task_return pid=%s app_id=%s service_id=%s task_id=%s status=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s",
+        os.getpid(),
+        id(request.app),
+        id(svc),
+        task_id,
+        task["status"],
+        body.caller_service,
+        body.knowledge_domain,
+        body.pipeline_stage,
+    )
     return {
         "success": True,
         "data": {
@@ -93,6 +119,17 @@ async def submit_rerank_task(body: RerankTaskRequest, request: Request):
 @router.post("/execute")
 async def execute_task(body: TaskSubmitRequest, request: Request):
     svc = request.app.state.llm_service
+    logger.info(
+        "http_execute_task_received pid=%s app_id=%s service_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s template_key=%s priority=%s",
+        os.getpid(),
+        id(request.app),
+        id(svc),
+        body.caller_service,
+        body.knowledge_domain,
+        body.pipeline_stage,
+        body.template_key,
+        body.priority,
+    )
     result = await svc.execute(
         body.caller_service,
         body.knowledge_domain,
@@ -107,6 +144,17 @@ async def execute_task(body: TaskSubmitRequest, request: Request):
         metadata=body.metadata,
         max_attempts=body.max_attempts,
         priority=body.priority,
+    )
+    logger.info(
+        "http_execute_task_return pid=%s app_id=%s service_id=%s task_id=%s status=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s",
+        os.getpid(),
+        id(request.app),
+        id(svc),
+        result.get("task_id"),
+        result.get("status"),
+        body.caller_service,
+        body.knowledge_domain,
+        body.pipeline_stage,
     )
     return {"success": True, "data": result}
 

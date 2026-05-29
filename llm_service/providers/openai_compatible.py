@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import logging
+import os
+import time
+
 import httpx
 
 from llm_service.providers.base import ProviderError, ProviderResponse
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatibleProvider:
@@ -53,12 +59,40 @@ class OpenAICompatibleProvider:
         }
         if response_format is not None:
             body["response_format"] = response_format
+        started = time.monotonic()
+        logger.info(
+            "openai_provider_http_start pid=%s provider_id=%s url=%s model=%s message_count=%s",
+            os.getpid(),
+            id(self),
+            self._url,
+            self._model,
+            len(messages),
+        )
         try:
             resp = await self._client.post(self._url, json=body, headers=headers)
         except httpx.TimeoutException as e:
+            logger.info(
+                "openai_provider_http_error pid=%s provider_id=%s error_type=timeout elapsed_ms=%s",
+                os.getpid(),
+                id(self),
+                int((time.monotonic() - started) * 1000),
+            )
             raise ProviderError("timeout", str(e)) from e
         except httpx.ConnectError as e:
+            logger.info(
+                "openai_provider_http_error pid=%s provider_id=%s error_type=connection_error elapsed_ms=%s",
+                os.getpid(),
+                id(self),
+                int((time.monotonic() - started) * 1000),
+            )
             raise ProviderError("connection_error", str(e)) from e
+        logger.info(
+            "openai_provider_http_end pid=%s provider_id=%s status_code=%s elapsed_ms=%s",
+            os.getpid(),
+            id(self),
+            resp.status_code,
+            int((time.monotonic() - started) * 1000),
+        )
 
         if resp.status_code == 429:
             raise ProviderError("rate_limited", resp.text)
