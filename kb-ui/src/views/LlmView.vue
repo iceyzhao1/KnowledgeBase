@@ -451,7 +451,7 @@ function goToTask(row: LlmTask) {
 const { start: startPolling } = usePolling(refreshLiveData, 5000, { immediate: false })
 
 watch([filterStatus, filterType, filterStage], () => { currentPage.value = 1; loadTasks() })
-watch(currentPage, loadTasks)
+watch(currentPage, () => loadTasks())
 watch(activeTab, (tab) => {
   // Sync tab to URL query param
   if (route.query.tab !== tab) {
