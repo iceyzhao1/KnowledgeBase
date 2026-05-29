@@ -5,13 +5,14 @@
 # Stage 1: 构建 Java (Maven 用完即丢)
 # ═══════════════════════════════════════════════════════════════
 FROM eclipse-temurin:21-jdk AS build-java
-RUN apt-get update && apt-get install -y curl \
-    && curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
-    | tar xz -C /opt && ln -s /opt/apache-maven-3.9.9/bin/mvn /usr/bin/mvn \
-    && rm -rf /var/lib/apt/lists/*
+# ── Maven 从华为云镜像下载 ──
+RUN curl -fsSL https://repo.huaweicloud.com/apache/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
+    | tar xz -C /opt && ln -s /opt/apache-maven-3.9.9/bin/mvn /usr/bin/mvn
+# ── Maven 依赖换阿里云镜像 ──
+RUN mkdir -p /root/.m2 && echo '<settings><mirrors><mirror><id>aliyun</id><mirrorOf>*</mirrorOf><url>https://maven.aliyun.com/repository/public</url></mirror></mirrors></settings>' > /root/.m2/settings.xml
 WORKDIR /build
 COPY agent_serving_java/pom.xml .
-RUN mvn dependency:go-offline -B -q
+RUN mvn dependency:go-offline -B
 COPY agent_serving_java/src ./src
 RUN mvn package -DskipTests -B -q
 
@@ -19,6 +20,8 @@ RUN mvn package -DskipTests -B -q
 # Stage 2: 构建前端 (Node 用完即丢)
 # ═══════════════════════════════════════════════════════════════
 FROM node:20-alpine AS build-ui
+# ── npm 换淘宝镜像 ──
+RUN npm config set registry https://registry.npmmirror.com
 WORKDIR /build
 COPY kb-ui/package.json kb-ui/package-lock.json* kb-ui/pnpm-lock.yaml* kb-ui/yarn.lock* ./
 RUN npm ci --silent 2>/dev/null || npm install --silent
@@ -71,6 +74,7 @@ COPY mcp_server/ ./mcp_server/
 # ── 共享配置与数据 ──
 COPY .env .env.example ./
 COPY domain_registry.yaml ./
+COPY reset_db.py ./
 COPY scenario_packs/ ./scenario_packs/
 COPY databases/ ./databases/
 
