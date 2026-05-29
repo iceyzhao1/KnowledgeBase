@@ -41,9 +41,9 @@
               {{ row.section_title || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="内容预览" min-width="250">
+          <el-table-column label="内容" min-width="300">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.raw_text, 120) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`seg-${row.segment_index}`) }" @click="toggleExpand(`seg-${row.segment_index}`)">{{ row.raw_text || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="Token" width="80" prop="token_count" />
@@ -67,9 +67,9 @@
             </template>
           </el-table-column>
           <el-table-column label="标题" min-width="200" prop="title" />
-          <el-table-column label="内容预览" min-width="250">
+          <el-table-column label="内容" min-width="300">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.text, 120) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`unit-${row.id ?? row.title}`) }" @click="toggleExpand(`unit-${row.id ?? row.title}`)">{{ row.text || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="权重" width="80" prop="weight" />
@@ -87,9 +87,9 @@
           class="kb-table"
           :header-cell-style="{ background: 'transparent' }"
         >
-          <el-table-column label="源分段" min-width="160">
+          <el-table-column label="源分段" min-width="200">
             <template #default="{ row }">
-              <span class="text-preview">{{ relSourcePreview(row) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rs-${row.source_segment_id}`) }" @click="toggleExpand(`rs-${row.source_segment_id}`)">{{ row.source_text || row.source_segment_id }}</span>
             </template>
           </el-table-column>
           <el-table-column label="关系类型" width="140">
@@ -97,9 +97,9 @@
               <span class="relation-type-tag">{{ relationTypeLabel(row.relation_type) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="目标分段" min-width="160">
+          <el-table-column label="目标分段" min-width="200">
             <template #default="{ row }">
-              <span class="text-preview">{{ relTargetPreview(row) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rt-${row.target_segment_id}`) }" @click="toggleExpand(`rt-${row.target_segment_id}`)">{{ row.target_text || row.target_segment_id }}</span>
             </template>
           </el-table-column>
           <el-table-column label="置信度" width="90">
@@ -137,6 +137,16 @@ const segments = ref<KnowledgeSegment[]>([])
 const units = ref<KnowledgeUnit[]>([])
 const relations = ref<KnowledgeRelation[]>([])
 const activeTab = ref('segments')
+const expandedKeys = ref(new Set<string>())
+
+function toggleExpand(key: string) {
+  if (expandedKeys.value.has(key)) {
+    expandedKeys.value.delete(key)
+  } else {
+    expandedKeys.value.add(key)
+  }
+  expandedKeys.value = new Set(expandedKeys.value)
+}
 
 function unitTypeLabel(type: string) {
   const map: Record<string, string> = {
@@ -158,21 +168,6 @@ function relationTypeLabel(type: string) {
 function formatTime(t: string) {
   if (!t) return '-'
   return new Date(t).toLocaleString('zh-CN')
-}
-
-function truncate(text: string | null | undefined, len: number) {
-  if (!text) return '-'
-  return text.length > len ? text.slice(0, len) + '...' : text
-}
-
-function relSourcePreview(rel: KnowledgeRelation) {
-  if (rel.source_text) return truncate(rel.source_text, 60)
-  return rel.source_segment_id.slice(0, 8) + '...'
-}
-
-function relTargetPreview(rel: KnowledgeRelation) {
-  if (rel.target_text) return truncate(rel.target_text, 60)
-  return rel.target_segment_id.slice(0, 8) + '...'
 }
 
 async function loadData() {
@@ -287,5 +282,25 @@ watch(() => domainStore.currentDomain, loadData)
   font-size: 12px;
   color: var(--kb-text-secondary);
   line-height: 1.4;
+}
+
+.text-preview.expandable {
+  cursor: pointer;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  transition: color 0.15s ease;
+}
+
+.text-preview.expandable:hover {
+  color: var(--kb-accent);
+}
+
+.text-preview.expandable.is-expanded {
+  -webkit-line-clamp: unset;
+  display: block;
+  white-space: pre-wrap;
 }
 </style>

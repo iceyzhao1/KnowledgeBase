@@ -44,9 +44,9 @@
           :header-cell-style="{ background: 'transparent' }"
           size="default"
         >
-          <el-table-column label="源分段" min-width="160">
+          <el-table-column label="源分段" min-width="200">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.source_text, 60) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedTexts.has(`s-${row.source_segment_id}`) }" @click="toggleText(`s-${row.source_segment_id}`)">{{ row.source_text || row.source_segment_id }}</span>
             </template>
           </el-table-column>
           <el-table-column label="关系" width="140">
@@ -54,19 +54,14 @@
               <span class="relation-badge">{{ relationTypeLabel(row.relation_type) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="目标分段" min-width="160">
+          <el-table-column label="目标分段" min-width="200">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.target_text, 60) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedTexts.has(`t-${row.target_segment_id}`) }" @click="toggleText(`t-${row.target_segment_id}`)">{{ row.target_text || row.target_segment_id }}</span>
             </template>
           </el-table-column>
           <el-table-column label="置信度" width="100" align="center">
             <template #default="{ row }">
-              {{ row.confidence.toFixed(2) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="权重" width="80" align="center">
-            <template #default="{ row }">
-              {{ row.weight?.toFixed(2) ?? '-' }}
+              {{ row.confidence?.toFixed(2) ?? '-' }}
             </template>
           </el-table-column>
         </el-table>
@@ -103,6 +98,17 @@ const relations = ref<KnowledgeRelation[]>([])
 const filterType = ref('')
 const currentPage = ref(1)
 const pageSize = 30
+const expandedTexts = ref(new Set<string>())
+
+function toggleText(key: string) {
+  if (expandedTexts.value.has(key)) {
+    expandedTexts.value.delete(key)
+  } else {
+    expandedTexts.value.add(key)
+  }
+  // Trigger reactivity
+  expandedTexts.value = new Set(expandedTexts.value)
+}
 
 const relationTypes = computed(() => {
   const types = new Set(relations.value.map(r => r.relation_type))
@@ -131,7 +137,7 @@ const graphNodes = computed<GraphNode[]>(() => {
       const catIdx = relationTypes.value.indexOf(r.relation_type)
       nodeMap.set(r.source_segment_id, {
         id: r.source_segment_id,
-        name: truncate(r.source_text, 20) || r.source_segment_id.slice(0, 8),
+        name: shortName(r.source_text, r.source_segment_id.slice(0, 8)),
         category: catIdx >= 0 ? catIdx : 0,
         value: 1,
       })
@@ -142,7 +148,7 @@ const graphNodes = computed<GraphNode[]>(() => {
     if (!nodeMap.has(r.target_segment_id)) {
       nodeMap.set(r.target_segment_id, {
         id: r.target_segment_id,
-        name: truncate(r.target_text, 20) || r.target_segment_id.slice(0, 8),
+        name: shortName(r.target_text, r.target_segment_id.slice(0, 8)),
         category: 0,
         value: 1,
       })
@@ -159,13 +165,13 @@ const graphEdges = computed<GraphEdge[]>(() =>
     source: r.source_segment_id,
     target: r.target_segment_id,
     relationType: r.relation_type,
-    weight: r.weight ?? r.confidence,
+    weight: r.confidence,
   }))
 )
 
-function truncate(text: string | null | undefined, len: number) {
-  if (!text) return ''
-  return text.length > len ? text.slice(0, len) + '...' : text
+function shortName(text: string | null | undefined, fallback: string) {
+  if (!text) return fallback
+  return text.length > 24 ? text.slice(0, 24) + '...' : text
 }
 
 function relationTypeLabel(type: string) {
@@ -273,6 +279,26 @@ watch(() => domainStore.currentDomain, loadData)
   font-size: 12px;
   color: var(--kb-text-secondary);
   line-height: 1.4;
+}
+
+.text-preview.expandable {
+  cursor: pointer;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  transition: all 0.15s ease;
+}
+
+.text-preview.expandable:hover {
+  color: var(--kb-accent);
+}
+
+.text-preview.expandable.is-expanded {
+  -webkit-line-clamp: unset;
+  display: block;
+  white-space: pre-wrap;
 }
 
 .relation-badge {

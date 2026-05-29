@@ -111,9 +111,9 @@
           <el-table-column label="类型" width="100" prop="block_type" />
           <el-table-column label="角色" width="100" prop="semantic_role" />
           <el-table-column label="标题" min-width="150" prop="section_title" />
-          <el-table-column label="内容预览" min-width="250">
+          <el-table-column label="内容" min-width="300">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.raw_text, 120) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`seg-${row.segment_index}`) }" @click="toggleExpand(`seg-${row.segment_index}`)">{{ row.raw_text || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="Token" width="80" prop="token_count" />
@@ -129,9 +129,9 @@
         >
           <el-table-column label="类型" width="120" prop="unit_type" />
           <el-table-column label="标题" min-width="200" prop="title" />
-          <el-table-column label="内容预览" min-width="250">
+          <el-table-column label="内容" min-width="300">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.text, 120) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`unit-${row.id ?? row.title}`) }" @click="toggleExpand(`unit-${row.id ?? row.title}`)">{{ row.text || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="权重" width="80" prop="weight" />
@@ -145,9 +145,9 @@
           :header-cell-style="{ background: 'transparent' }"
           v-loading="artifactsLoading"
         >
-          <el-table-column label="源分段" min-width="120">
+          <el-table-column label="源分段" min-width="200">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.source_text as string || row.source_segment_id?.slice(0, 8) || '-', 60) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rs-${row.source_segment_id}`) }" @click="toggleExpand(`rs-${row.source_segment_id}`)">{{ row.source_text || row.source_segment_id || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="关系类型" width="140">
@@ -155,9 +155,9 @@
               <span class="relation-type-tag">{{ relationTypeLabel(row.relation_type) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="目标分段" min-width="120">
+          <el-table-column label="目标分段" min-width="200">
             <template #default="{ row }">
-              <span class="text-preview">{{ truncate(row.target_text as string || row.target_segment_id?.slice(0, 8) || '-', 60) }}</span>
+              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rt-${row.target_segment_id}`) }" @click="toggleExpand(`rt-${row.target_segment_id}`)">{{ row.target_text || row.target_segment_id || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="置信度" width="90">
@@ -189,6 +189,16 @@ const miningApi = useMiningApi()
 
 const activeArtifactTab = ref('segments')
 const artifactsLoading = ref(false)
+const expandedKeys = ref(new Set<string>())
+
+function toggleExpand(key: string) {
+  if (expandedKeys.value.has(key)) {
+    expandedKeys.value.delete(key)
+  } else {
+    expandedKeys.value.add(key)
+  }
+  expandedKeys.value = new Set(expandedKeys.value)
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const segments = ref<any[]>([])
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -287,11 +297,6 @@ function formatMs(ms: number) {
   const s = Math.round(ms / 1000)
   if (s < 60) return `${s}s`
   return `${Math.floor(s / 60)}m ${s % 60}s`
-}
-
-function truncate(text: string | null | undefined, len: number) {
-  if (!text) return '-'
-  return text.length > len ? text.slice(0, len) + '...' : text
 }
 
 function relationTypeLabel(type: string) {
@@ -551,7 +556,27 @@ watch(() => activeArtifactTab.value, loadArtifacts)
 
 /* Common */
 .text-muted { color: var(--kb-text-tertiary); font-size: 13px; }
-.text-preview { font-size: 12px; color: var(--kb-text-secondary); }
+.text-preview { font-size: 12px; color: var(--kb-text-secondary); line-height: 1.4; }
+
+.text-preview.expandable {
+  cursor: pointer;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  transition: color 0.15s ease;
+}
+
+.text-preview.expandable:hover {
+  color: var(--kb-accent);
+}
+
+.text-preview.expandable.is-expanded {
+  -webkit-line-clamp: unset;
+  display: block;
+  white-space: pre-wrap;
+}
 .relation-type-tag {
   display: inline-block;
   padding: 1px 8px;
