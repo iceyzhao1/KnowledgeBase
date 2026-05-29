@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -82,36 +81,14 @@ class Worker:
 
     async def start(self) -> None:
         self._running = True
-        logger.info(
-            "worker_start pid=%s worker_id=%s configured_concurrency=%s poll_interval=%s",
-            os.getpid(),
-            id(self),
-            self._concurrency,
-            self._poll_interval,
-        )
         for i in range(self._concurrency):
             name = f"worker-{i}"
             t = asyncio.create_task(self._loop(name), name=name)
             self._tasks.append(t)
-            logger.info(
-                "worker_loop_created pid=%s worker_id=%s loop_name=%s task_obj_id=%s total_loops=%s",
-                os.getpid(),
-                id(self),
-                name,
-                id(t),
-                len(self._tasks),
-            )
         logger.info("Worker started with %d concurrency", self._concurrency)
 
     async def stop(self) -> None:
         self._running = False
-        logger.info(
-            "worker_stop_requested pid=%s worker_id=%s active_loop_count=%s active_task_ids=%s",
-            os.getpid(),
-            id(self),
-            len(self._tasks),
-            sorted(self._active_task_ids),
-        )
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -119,54 +96,18 @@ class Worker:
         logger.info("Worker stopped")
 
     async def _loop(self, name: str) -> None:
-        logger.info(
-            "worker_loop_start pid=%s worker_id=%s loop_name=%s loop_task_id=%s",
-            os.getpid(),
-            id(self),
-            name,
-            id(asyncio.current_task()),
-        )
         while self._running:
             try:
-                logger.info(
-                    "worker_claim_poll pid=%s worker_id=%s loop_name=%s local_inflight=%s",
-                    os.getpid(),
-                    id(self),
-                    name,
-                    len(self._active_task_ids),
-                )
                 task_id = await self._mgr.claim()
                 if task_id:
                     self._active_task_ids.add(task_id)
-                    logger.info(
-                        "worker_claimed pid=%s worker_id=%s loop_name=%s task_id=%s local_inflight=%s",
-                        os.getpid(),
-                        id(self),
-                        name,
-                        task_id,
-                        len(self._active_task_ids),
-                    )
                     try:
                         await self._execute_task(task_id)
                     finally:
                         self._active_task_ids.discard(task_id)
-                        logger.info(
-                            "worker_task_done pid=%s worker_id=%s loop_name=%s task_id=%s local_inflight=%s",
-                            os.getpid(),
-                            id(self),
-                            name,
-                            task_id,
-                            len(self._active_task_ids),
-                        )
                 else:
                     await asyncio.sleep(self._poll_interval)
             except asyncio.CancelledError:
-                logger.info(
-                    "worker_loop_cancelled pid=%s worker_id=%s loop_name=%s",
-                    os.getpid(),
-                    id(self),
-                    name,
-                )
                 return
             except Exception as e:
                 logger.exception("%s error: %s", name, e)
@@ -181,7 +122,7 @@ class Worker:
         """
         try:
             row = await self._db.fetchone(
-                "SELECT caller_service, knowledge_domain, pipeline_stage, task_type FROM agent_llm_tasks WHERE id = %s",
+                "SELECT task_type FROM agent_llm_tasks WHERE id = %s",
                 (task_id,),
             )
             if not row:
@@ -216,30 +157,12 @@ class Worker:
         if not req:
             await self._mgr.fail(task_id, "missing_request", "no request row found")
             return
-        task_row = await self._db.fetchone(
-            "SELECT caller_service, knowledge_domain, pipeline_stage, task_type FROM agent_llm_tasks WHERE id = %s",
-            (task_id,),
-        )
 
         messages = _ensure_list(req["messages_json"])
         params = _ensure_dict(req["params_json"])
         expected_type = req["expected_output_type"]
         schema = _ensure_dict(req["output_schema_json"]) or None
         request_id = req["id"]
-        logger.info(
-            "chat_attempt_dispatch pid=%s worker_id=%s task_id=%s request_id=%s caller_service=%s knowledge_domain=%s pipeline_stage=%s task_type=%s prompt_template_key=%s provider=%s model=%s",
-            os.getpid(),
-            id(self),
-            task_id,
-            request_id,
-            task_row["caller_service"] if task_row else None,
-            task_row["knowledge_domain"] if task_row else None,
-            task_row["pipeline_stage"] if task_row else None,
-            task_row["task_type"] if task_row else None,
-            req.get("prompt_template_key") or "",
-            req.get("provider"),
-            req.get("model"),
-        )
 
         try:
             await self._svc.execute_chat_attempt(
