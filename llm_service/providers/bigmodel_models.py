@@ -46,7 +46,7 @@ class BigModelProvider:
         max_timeout = max(self._embedding_timeout, self._rerank_timeout)
         bp = embedding_bypass_proxy if bypass_proxy is None else bypass_proxy
         transport = httpx.AsyncHTTPTransport() if bp else None
-        self._client = httpx.AsyncClient(transport=transport, timeout=max_timeout)
+        self._client = httpx.AsyncClient(transport=transport, timeout=max_timeout, trust_env=not bp)
 
     async def close(self) -> None:
         await self._client.aclose()

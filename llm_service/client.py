@@ -94,7 +94,7 @@ class LLMClient:
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is not None:
             return self._client
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout)
+        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout, proxy=None, trust_env=False)
         return self._client
 
     async def close(self) -> None:
