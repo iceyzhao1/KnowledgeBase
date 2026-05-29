@@ -402,14 +402,14 @@ function formatTime(t?: string | null) {
   return new Date(t).toLocaleString('zh-CN')
 }
 
-async function loadStats() {
-  loading.value = true
+async function loadStats(silent = false) {
+  if (!silent) loading.value = true
   try { stats.value = await llmApi.getStats({ domain: domainStore.currentDomain }) } catch { stats.value = null }
-  finally { loading.value = false }
+  finally { if (!silent) loading.value = false }
 }
 
-async function loadTasks() {
-  loadingTasks.value = true
+async function loadTasks(silent = false) {
+  if (!silent) loadingTasks.value = true
   try {
     const params: Record<string, unknown> = {
       domain: domainStore.currentDomain,
@@ -423,7 +423,7 @@ async function loadTasks() {
     tasks.value = res.items
     taskTotal.value = res.total
   } catch { tasks.value = []; taskTotal.value = 0 }
-  finally { loadingTasks.value = false }
+  finally { if (!silent) loadingTasks.value = false }
 }
 
 async function loadTemplates() {
@@ -437,7 +437,7 @@ async function loadTemplates() {
 
 async function refreshLiveData() {
   if (document.visibilityState !== 'visible') return
-  await Promise.all([loadStats(), loadTasks()])
+  await Promise.all([loadStats(true), loadTasks(true)])
 }
 
 async function loadAll() {

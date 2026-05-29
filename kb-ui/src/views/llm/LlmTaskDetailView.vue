@@ -1,5 +1,5 @@
 <template>
-  <div class="task-detail" v-loading="loading">
+  <div class="task-detail" v-loading="initialLoading">
     <!-- Header -->
     <div class="task-detail__header">
       <div class="task-detail__header-left">
@@ -390,6 +390,7 @@ const router = useRouter()
 const llmApi = useLlmApi()
 
 const loading = ref(true)
+const initialLoading = ref(true)
 const cancelling = ref(false)
 const task = ref<Record<string, any> | null>(null)
 const requestData = ref<Record<string, any> | null>(null)
@@ -609,8 +610,8 @@ async function handleCancel() {
   }
 }
 
-async function loadAll() {
-  loading.value = true
+async function loadAll(silent = false) {
+  if (!silent) loading.value = true
   try {
     const detail = await llmApi.getTask(props.taskId).catch(() => null) as Record<string, any> | null
     if (detail) {
@@ -621,7 +622,8 @@ async function loadAll() {
       events.value = Array.isArray(detail.events) ? detail.events : []
     }
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
+    initialLoading.value = false
   }
 }
 
@@ -631,7 +633,7 @@ async function refreshTaskDetail() {
     stopPolling()
     return
   }
-  await loadAll()
+  await loadAll(true)
 }
 
 const { start: startPolling, stop: stopPolling } = usePolling(refreshTaskDetail, 3000, { immediate: false })

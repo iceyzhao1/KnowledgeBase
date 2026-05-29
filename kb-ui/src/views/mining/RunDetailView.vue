@@ -1,5 +1,5 @@
 <template>
-  <div class="run-detail" v-loading="miningStore.loading">
+  <div class="run-detail" v-loading="initialLoading">
     <div class="run-detail__back">
       <el-button text @click="$router.push('/mining')">
         <el-icon><ArrowLeft /></el-icon> 返回列表
@@ -152,6 +152,7 @@ const domainStore = useDomainStore()
 const miningStore = useMiningStore()
 
 const activeDocFilter = ref('all')
+const initialLoading = ref(true)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 // ── Formatters ──
@@ -253,11 +254,12 @@ const filteredDocs = computed(() => {
 
 // ── Polling ──
 
-async function pollOnce() {
+async function pollOnce(silent = false) {
   await Promise.all([
     miningStore.fetchProgress(props.runId),
-    miningStore.fetchRunDetail(props.runId),
+    miningStore.fetchRunDetail(props.runId, { silent }),
   ])
+  initialLoading.value = false
   if (miningStore.currentRun?.status !== 'running' && pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
@@ -266,9 +268,9 @@ async function pollOnce() {
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer)
-  pollOnce().then(() => {
+  pollOnce(false).then(() => {
     if (miningStore.currentRun?.status === 'running') {
-      pollTimer = setInterval(() => pollOnce(), 3000)
+      pollTimer = setInterval(() => pollOnce(true), 3000)
     }
   })
 }

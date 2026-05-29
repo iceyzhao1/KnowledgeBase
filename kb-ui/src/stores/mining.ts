@@ -26,20 +26,20 @@ export const useMiningStore = defineStore('mining', () => {
   const miningApi = useMiningApi()
   const domainStore = useDomainStore()
 
-  async function fetchRuns() {
-    loading.value = true
+  async function fetchRuns(options?: { silent?: boolean }) {
+    if (!options?.silent) loading.value = true
     error.value = null
     try {
       runs.value = await miningApi.getRuns()
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch runs'
     } finally {
-      loading.value = false
+      if (!options?.silent) loading.value = false
     }
   }
 
-  async function fetchRunDetail(runId: string) {
-    loading.value = true
+  async function fetchRunDetail(runId: string, options?: { silent?: boolean }) {
+    if (!options?.silent) loading.value = true
     error.value = null
     try {
       const [run, runStages, runDocsResult] = await Promise.all([
@@ -53,7 +53,7 @@ export const useMiningStore = defineStore('mining', () => {
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch run detail'
     } finally {
-      loading.value = false
+      if (!options?.silent) loading.value = false
     }
   }
 
