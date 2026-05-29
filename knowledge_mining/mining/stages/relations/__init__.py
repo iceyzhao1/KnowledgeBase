@@ -109,7 +109,7 @@ class DiscourseRelationBuilder:
                 input={"segments": "\n".join(seg_lines)},
                 knowledge_domain=self._knowledge_domain,
                 pipeline_stage="discourse_relations",
-                expected_output_type="json_array",
+                expected_output_type="json_object",
             )
             if task_id is None:
                 return []
@@ -118,6 +118,10 @@ class DiscourseRelationBuilder:
             items = items.get("0")
             if items is None:
                 return []
+
+            # Unwrap {"relations": [...]} wrapper (llm_client wraps dict into [dict])
+            if items and isinstance(items[0], dict) and "relations" in items[0]:
+                items = items[0]["relations"]
 
             return self._parse_llm_results(items, segments)
 

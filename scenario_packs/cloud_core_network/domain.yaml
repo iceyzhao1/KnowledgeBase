@@ -104,7 +104,7 @@ mining:
     - template_key: mining-question-gen
       template_version: "4"
       purpose: "从段落内容生成假设性检索问题"
-      system_prompt: "你是通信网络知识库的检索优化助手。你判断段落是否值得生成问题，如果是则生成高质量检索问题。你的输出必须是且仅是一个 JSON 数组（以 [ 开头，以 ] 结尾），禁止输出 JSON 对象（花括号 {}）。"
+      system_prompt: "你是通信网络知识库的检索优化助手。你判断段落是否值得生成问题，如果是则生成高质量检索问题。"
       user_prompt_template: >
         分析以下技术文档段落：
 
@@ -112,9 +112,9 @@ mining:
         段落内容：$content
 
         首先评估该段落是否包含值得生成问题的实质性知识：
-        - 如果是目录、导航列表、纯链接/锚点列表：输出空数组 []
-        - 如果是大量空值或占位符的稀疏表格：输出空数组 []
-        - 如果内容过于简短或模糊，无法生成有意义的问题：输出空数组 []
+        - 如果是目录、导航列表、纯链接/锚点列表：输出 {"questions": []}
+        - 如果是大量空值或占位符的稀疏表格：输出 {"questions": []}
+        - 如果内容过于简短或模糊，无法生成有意义的问题：输出 {"questions": []}
 
         如果段落确实包含实质性知识，生成 1 个高质量检索问题：
         - 问题必须能从该段落中找到明确答案
@@ -139,18 +139,20 @@ mining:
         ❌ "SMF通过哪个接口与PCF交互？" — 答案仅为"N7"
         ❌ "SMF在5GC中通过哪些功能管理PDU会话？" — 几乎复述了列表内容
 
-        输出 JSON 数组，每个元素包含 question 字段。无合适问题时输出空数组 []。
+        输出一个 JSON 对象，包含 questions 字段（数组）。
+        每个 questions 元素包含 question 字段（字符串）。
 
         **⚠️ 输出格式要求（必须严格遵守）**：
-        - 必须输出 JSON 数组，以 [ 开头，以 ] 结尾
-        - 禁止输出 JSON 对象/字典（即禁止以 { 开头）
-        - 禁止输出格式说明或 JSON Schema 定义
-        - 正确示例：[{"question": "SMF在PDU会话建立过程中如何为UE分配IP地址？"}]
-        - 空结果示例：[]
-        - 错误示例：{"questions": [{"question": "..."}]}（这是对象，不是数组）
+        - 必须输出 JSON 对象，以 { 开头，以 } 结尾
+        - questions 字段的值是数组，每个元素是 {"question": "..."}
+        - 无合适问题时 questions 为空数组：{"questions": []}
+        - 禁止输出 JSON Schema 定义
+        - 正确示例：{"questions": [{"question": "SMF在PDU会话建立过程中如何为UE分配IP地址？"}]}
+        - 空结果示例：{"questions": []}
+        - 错误示例：[{"question": "..."}]（这是数组，不是对象）
         - 错误示例：{"type": "array", "items": ...}（这是 Schema 定义，不是数据）
-      expected_output_type: json_array
-      output_schema_json: '{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}'
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"questions":{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}'
 
     - template_key: mining-segment-understanding
       template_version: "4"
@@ -215,7 +217,7 @@ mining:
     - template_key: mining-discourse-relation
       template_version: "2"
       purpose: "分析段落间的语篇关系（RST修辞结构理论）"
-      system_prompt: "你是通信网络技术文档的语篇关系分析专家。分析给定段落列表中段落之间的修辞关系，要尽可能识别出不同类型的关系。你的输出必须是且仅是一个 JSON 数组（以 [ 开头，以 ] 结尾），禁止输出 JSON 对象（花括号 {}）。"
+      system_prompt: "你是通信网络技术文档的语篇关系分析专家。分析给定段落列表中段落之间的修辞关系，要尽可能识别出不同类型的关系。"
       user_prompt_template: >
         分析以下编号段落之间的语篇关系：
 
@@ -257,7 +259,7 @@ mining:
         - ❌ "参考规范列表"不是前文内容的 EVIDENCES。参考规范是文献引用，不是数据/实验证据
         - ❌ 如果两个段落只是不同的主题（如"计费接口"和"NF接口总表"），不构成对比关系
 
-        输出 JSON 数组，每个元素包含：
+        输出一个 JSON 对象，包含 relations 字段（数组）。每个 relations 元素包含：
         - source: 源段落编号（整数）
         - target: 目标段落编号（整数）
         - relation: 关系类型（大写）
@@ -266,15 +268,16 @@ mining:
         只输出有明确关系的段落对，跳过 UNRELATED 的。
 
         **⚠️ 输出格式要求（必须严格遵守）**：
-        - 必须输出 JSON 数组，以 [ 开头，以 ] 结尾
-        - 禁止输出 JSON 对象/字典（即禁止以 { 开头）
+        - 必须输出 JSON 对象，以 { 开头，以 } 结尾
+        - relations 字段的值是数组，每个元素是一条关系
+        - 无关系时 relations 为空数组：{"relations": []}
         - 禁止输出 JSON Schema 定义或格式说明
-        - 正确示例：[{"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.9}, {"source": 1, "target": 4, "relation": "SEQUENCES", "confidence": 0.85}]
-        - 空结果示例：[]
-        - 错误示例：{"0": {"source": 0, "target": 1, ...}}（这是对象，不是数组）
+        - 正确示例：{"relations": [{"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.9}, {"source": 1, "target": 4, "relation": "SEQUENCES", "confidence": 0.85}]}
+        - 空结果示例：{"relations": []}
+        - 错误示例：[{"source": 0, ...}]（这是数组，不是对象）
         - 错误示例：{"type": "array", "items": ...}（这是 Schema 定义，不是数据）
-      expected_output_type: json_array
-      output_schema_json: '{"type":"array","items":{"type":"object","properties":{"source":{"type":"integer"},"target":{"type":"integer"},"relation":{"type":"string"},"confidence":{"type":"number","minimum":0.0,"maximum":1.0}},"required":["source","target","relation","confidence"],"additionalProperties":false}}'
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"relations":{"type":"array","items":{"type":"object","properties":{"source":{"type":"integer"},"target":{"type":"integer"},"relation":{"type":"string"},"confidence":{"type":"number","minimum":0.0,"maximum":1.0}},"required":["source","target","relation","confidence"],"additionalProperties":false}}},"required":["relations"],"additionalProperties":false}'
 
     - template_key: mining-contextual-retrieval
       template_version: "2"

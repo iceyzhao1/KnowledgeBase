@@ -60,13 +60,16 @@ class LlmQuestionGenerator:
                 },
                 knowledge_domain=self._knowledge_domain,
                 pipeline_stage="retrieval_units",
-                expected_output_type="json_array",
+                expected_output_type="json_object",
             )
             if task_id is None:
                 return []
             items = self._client.poll_result(task_id, timeout=self._timeout)
             if items is None:
                 return []
+            # Unwrap {"questions": [...]} wrapper (llm_client wraps dict into [dict])
+            if items and isinstance(items[0], dict) and "questions" in items[0]:
+                items = items[0]["questions"]
             questions = [item["question"] for item in items if "question" in item]
             return questions[:max_q]
         except Exception:
@@ -95,7 +98,7 @@ class LlmQuestionGenerator:
                 },
                 knowledge_domain=self._knowledge_domain,
                 pipeline_stage="retrieval_units",
-                expected_output_type="json_array",
+                expected_output_type="json_object",
             )
             if task_id:
                 seg_tasks[seg_key] = task_id
@@ -109,6 +112,9 @@ class LlmQuestionGenerator:
         raw_results = self._client.poll_all(seg_tasks)
         results: dict[str, list[str]] = {}
         for seg_key, items in raw_results.items():
+            # Unwrap {"questions": [...]} wrapper (llm_client wraps dict into [dict])
+            if items and isinstance(items[0], dict) and "questions" in items[0]:
+                items = items[0]["questions"]
             questions = [item["question"] for item in items if "question" in item]
             # Cap at max_questions_per_segment from profile policy
             if questions:
