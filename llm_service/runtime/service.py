@@ -256,9 +256,10 @@ class LLMService:
             except Exception:
                 logger.exception("Failed to update attempt %s on error", attempt_id[:8])
             await self._mgr.fail(task_id, error_type, error_msg)
-            # Re-raise for provider-level errors (network, timeout, rate_limit)
-            # so worker safety net knows the task was handled.
-            raise
+            # Do NOT re-raise: _mgr.fail() already handled retry/dead_letter.
+            # Re-raising would trigger the worker safety net to call _mgr.fail() again,
+            # consuming an extra retry slot per attempt (double-fail bug).
+            return None
 
     # ------------------------------------------------------------------
     # Common submit with idempotency

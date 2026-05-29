@@ -170,9 +170,9 @@ class Worker:
                 expected_type, schema,
             )
         except Exception as e:
-            # execute_chat_attempt should call _mgr.fail() before re-raising.
-            # But if it didn't (e.g. _mgr.fail() itself failed), ensure the task
-            # is transitioned out of 'running' by re-raising to _execute_task's safety net.
+            # execute_chat_attempt no longer re-raises — it handles _mgr.fail() internally.
+            # If we reach here, something truly unexpected happened (e.g. DB query for request failed).
+            # Let the safety net in _execute_task handle it.
             logger.warning("Chat execution failed for task %s: %s", task_id[:8], e)
             raise
 
