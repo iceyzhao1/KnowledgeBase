@@ -144,7 +144,7 @@ mining:
       output_schema_json: '{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}'
 
     - template_key: mining-segment-understanding
-      template_version: "3"
+      template_version: "4"
       purpose: "从段落提取实体、分类语义角色、评估内容质量"
       system_prompt: "你是通信网络知识库的内容理解助手。分析技术文档段落，提取关键实体、分类语义角色，并评估内容质量。"
       user_prompt_template: >
@@ -156,7 +156,13 @@ mining:
 
         输出 JSON 对象，包含：
         - entities: 实体列表，每个元素包含 type 和 name
-          type 可选值：command / network_element / parameter / protocol / interface / alarm / feature / concept
+          type 可选值（仅限以下 8 种，禁止使用其他值）：command / network_element / parameter / protocol / interface / alarm / feature / concept
+
+        **⚠️ entities[].type 与 semantic_role 是两个不同字段，切勿混淆：**
+        - entities[].type 描述实体本身是什么（如"SMF"是 network_element，"PFCP"是 protocol）
+        - semantic_role 描述该段落的内容性质（如 procedure_step 表示段落讲的是操作步骤）
+        - 禁止在 entities[].type 中使用 semantic_role 的值（如 procedure_step、troubleshooting_step、checklist、note、example、constraint）
+        - 如果一个事物不是上述 8 种实体类型之一，不要把它放入 entities 列表
 
         质量指引：
         - 只提取文档中明确出现、有专有名称的技术实体
