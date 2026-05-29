@@ -115,8 +115,6 @@ def run(
     phase1_only: bool = False,
     publish_on_partial_failure: bool = False,
     llm_base_url: str | None = None,
-    embedding_api_key: str | None = None,
-    embedding_base_url: str | None = None,
     max_workers: int | None = None,
     domain: str | None = None,
     domain_pack: str | None = None,
@@ -131,8 +129,6 @@ def run(
         phase1_only: If True, stop after document-level processing (no build/publish)
         publish_on_partial_failure: If True, publish even when some docs failed.
         llm_base_url: LLM service URL (e.g. "http://localhost:8900"). None = from env.
-        embedding_api_key: Embedding API key (only for direct Zhipu fallback).
-        embedding_base_url: Direct embedding API base URL (fallback). None = from env.
         domain: Domain ID to load from registry. None = from env.
         domain_pack: (Deprecated) Use domain instead.
         channel: Release channel. None = from registry default_channel.
@@ -190,9 +186,9 @@ def run(
     # LLM integration: create question generator if URL provided
     llm_services = _init_llm(llm_base_url, profile, knowledge_domain=profile.domain_id)
 
-    # Embedding integration: prefer llm_service, fallback to direct Zhipu
+    # Embedding integration: via llm_service
     embedding_generator = _init_embedding(
-        llm_base_url, embedding_api_key, embedding_base_url,
+        llm_base_url,
         knowledge_domain=profile.domain_id,
     )
 
@@ -358,30 +354,21 @@ def _init_llm(
 
 def _init_embedding(
     llm_base_url: str | None,
-    api_key: str | None,
-    base_url: str,
     *,
     knowledge_domain: str | None = None,
 ) -> Any | None:
-    """Prefer shared llm_service embedding endpoint, fallback to direct Zhipu client.
+    """Initialize embedding via llm_service.
 
     Model name and dimensions are managed by llm_service — caller does not pass them.
+    Returns None if llm_base_url is not configured.
     """
-    if llm_base_url:
-        from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
-
-        return LLMServiceEmbeddingGenerator(
-            base_url=llm_base_url,
-            knowledge_domain=knowledge_domain,
-        )
-
-    if not api_key:
+    if not llm_base_url:
         return None
 
-    from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
-    return ZhipuEmbeddingGenerator(
-        api_key=api_key,
-        base_url=base_url,
+    from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
+    return LLMServiceEmbeddingGenerator(
+        base_url=llm_base_url,
+        knowledge_domain=knowledge_domain,
     )
 
 

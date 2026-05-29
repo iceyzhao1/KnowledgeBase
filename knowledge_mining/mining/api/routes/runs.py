@@ -28,7 +28,6 @@ class CreateRunRequest(BaseModel):
     phase1_only: bool = False
     publish_on_partial_failure: bool = False
     llm_base_url: str | None = None
-    embedding_api_key: str | None = None
 
 
 class RunResponse(BaseModel):
@@ -56,7 +55,6 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
     cfg = MiningConfig()
     resolved_domain = body.domain or body.domain_pack or cfg.domain or "cloud_core_network"
 
-    embedding_api_key = body.embedding_api_key
     llm_base_url = body.llm_base_url or cfg.llm_service_url
 
     # Prevent concurrent mining runs
@@ -72,7 +70,6 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
                 phase1_only=body.phase1_only,
                 publish_on_partial_failure=body.publish_on_partial_failure,
                 llm_base_url=llm_base_url,
-                embedding_api_key=embedding_api_key,
                 max_workers=body.max_workers,
                 domain=resolved_domain,
             )
