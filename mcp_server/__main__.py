@@ -27,7 +27,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=None, help="HTTP bind port (default: 9000)")
     args = parser.parse_args()
 
-    transport = args.transport or os.environ.get("MCP_TRANSPORT", "stdio")
+    transport = args.transport or os.environ.get("MCP_TRANSPORT", "streamable-http")
 
     # Set env vars before importing server (FastMCP reads them in constructor)
     if args.host:
