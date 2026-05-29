@@ -70,7 +70,8 @@ class LlmQuestionGenerator:
             # Unwrap {"questions": [...]} wrapper (llm_client wraps dict into [dict])
             if items and isinstance(items[0], dict) and "questions" in items[0]:
                 items = items[0]["questions"]
-            questions = [item["question"] for item in items if "question" in item]
+            # items is now a list of strings (questions)
+            questions = [q for q in items if isinstance(q, str) and q.strip()]
             return questions[:max_q]
         except Exception:
             return []
@@ -115,7 +116,8 @@ class LlmQuestionGenerator:
             # Unwrap {"questions": [...]} wrapper (llm_client wraps dict into [dict])
             if items and isinstance(items[0], dict) and "questions" in items[0]:
                 items = items[0]["questions"]
-            questions = [item["question"] for item in items if "question" in item]
+            # items is now a list of strings (questions)
+            questions = [q for q in items if isinstance(q, str) and q.strip()]
             # Cap at max_questions_per_segment from profile policy
             if questions:
                 results[seg_key] = questions[:max_q]

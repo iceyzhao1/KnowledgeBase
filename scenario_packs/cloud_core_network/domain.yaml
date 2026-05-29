@@ -139,20 +139,19 @@ mining:
         ❌ "SMF通过哪个接口与PCF交互？" — 答案仅为"N7"
         ❌ "SMF在5GC中通过哪些功能管理PDU会话？" — 几乎复述了列表内容
 
-        输出一个 JSON 对象，包含 questions 字段（数组）。
-        每个 questions 元素包含 question 字段（字符串）。
+        输出一个 JSON 对象，包含 questions 字段（字符串数组）。
 
         **⚠️ 输出格式要求（必须严格遵守）**：
         - 必须输出 JSON 对象，以 { 开头，以 } 结尾
-        - questions 字段的值是数组，每个元素是 {"question": "..."}
+        - questions 字段的值是字符串数组，每个元素直接是问题文本
         - 无合适问题时 questions 为空数组：{"questions": []}
         - 禁止输出 JSON Schema 定义
-        - 正确示例：{"questions": [{"question": "SMF在PDU会话建立过程中如何为UE分配IP地址？"}]}
+        - 正确示例：{"questions": ["SMF在PDU会话建立过程中如何为UE分配IP地址？"]}
         - 空结果示例：{"questions": []}
-        - 错误示例：[{"question": "..."}]（这是数组，不是对象）
+        - 错误示例：{"questions": [{"question": "..."}]}（不需要嵌套对象）
         - 错误示例：{"type": "array", "items": ...}（这是 Schema 定义，不是数据）
       expected_output_type: json_object
-      output_schema_json: '{"type":"object","properties":{"questions":{"type":"array","items":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}'
+      output_schema_json: '{"type":"object","properties":{"questions":{"type":"array","items":{"type":"string"}}},"required":["questions"],"additionalProperties":false}'
 
     - template_key: mining-segment-understanding
       template_version: "4"
