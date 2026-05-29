@@ -421,10 +421,9 @@ class TestEndToEndPipeline:
         rdb = _make_db(MiningRuntimeDB)
         events = rdb.get_stage_events(result["run_id"])
         stages = {e["stage"] for e in events}
-        assert "select_snapshot" in stages
-        assert "segment" in stages
-        assert "build_relations" in stages
-        assert "build_retrieval_units" in stages
+        assert "segment" in stages, f"Missing 'segment'. Got: {stages}"
+        assert "discourse" in stages, f"Missing 'discourse'. Got: {stages}"
+        assert "retrieval_units" in stages, f"Missing 'retrieval_units'. Got: {stages}"
         rdb.close()
 
 

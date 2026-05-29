@@ -61,7 +61,7 @@ def input_dir(tmp_dir, md_content):
 
 class TestStageEvents:
     def test_doc_level_stages_have_events(self, input_dir, tmp_dir):
-        """Each document should have events for segment, build_relations, build_retrieval_units."""
+        """Each document should have events for segment, discourse, retrieval_units."""
         from knowledge_mining.mining.jobs.run import run
 
         result = run(str(input_dir))
@@ -73,13 +73,12 @@ class TestStageEvents:
 
         # Doc-level stages (tracked at write-back time)
         assert "segment" in stages, f"Missing 'segment' stage. Got: {stages}"
-        assert "build_relations" in stages, f"Missing 'build_relations' stage. Got: {stages}"
-        assert "build_retrieval_units" in stages, f"Missing 'build_retrieval_units' stage. Got: {stages}"
+        assert "discourse" in stages, f"Missing 'discourse' stage. Got: {stages}"
+        assert "retrieval_units" in stages, f"Missing 'retrieval_units' stage. Got: {stages}"
 
         # Global stages
-        assert "select_snapshot" in stages
-        assert "assemble_build" in stages
-        assert "validate_build" in stages
+        assert "assemble_build" in stages, f"Missing 'assemble_build'. Got: {stages}"
+        assert "validate_build" in stages, f"Missing 'validate_build'. Got: {stages}"
 
         rdb.close()
 
@@ -114,7 +113,7 @@ class TestStageEvents:
         assert len(seg_events) >= 1
         assert "segments" in seg_events[0]["output_summary"]
 
-        ru_events = [e for e in events if e["stage"] == "build_retrieval_units" and e["status"] == "completed" and e["output_summary"] is not None]
+        ru_events = [e for e in events if e["stage"] == "retrieval_units" and e["status"] == "completed" and e["output_summary"] is not None]
         assert len(ru_events) >= 1
         assert "units" in ru_events[0]["output_summary"]
 

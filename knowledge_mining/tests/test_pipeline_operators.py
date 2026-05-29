@@ -229,6 +229,7 @@ class TestQuestionGenerationFilter:
             llm_templates=(),
             semantic_roles=frozenset(),
             retrieval_policy=policy,
+            document_types=frozenset(),
             eval_questions=(),
         )
 
@@ -363,7 +364,8 @@ class TestTableRowUnits:
             role_keyword_rules=(), heading_role_keywords=(),
             extractor_rules=(), llm_templates=(),
             semantic_roles=frozenset(),
-            retrieval_policy=policy, eval_questions=(),
+            retrieval_policy=policy, document_types=frozenset(),
+            eval_questions=(),
         )
 
         seg = RawSegmentData(
@@ -492,14 +494,14 @@ def _collect_blocks(node: SectionNode) -> list[ContentBlock]:
 # Wave 1: EmbeddingGenerator Tests
 # ===================================================================
 
-class TestZhipuEmbeddingGenerator:
-    """ZhipuEmbeddingGenerator should call Zhipu API and return embeddings."""
+class TestLLMServiceEmbeddingGenerator:
+    """LLMServiceEmbeddingGenerator should call llm_service and return embeddings."""
 
     def test_embed_single_text(self):
-        from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
+        from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
         from unittest.mock import patch, MagicMock
 
-        gen = ZhipuEmbeddingGenerator(api_key="test-key", dimensions=1024)
+        gen = LLMServiceEmbeddingGenerator(base_url="http://localhost:8900")
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -519,16 +521,16 @@ class TestZhipuEmbeddingGenerator:
             assert result[0] == [0.1, 0.2, 0.3]
 
     def test_embed_empty_input(self):
-        from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
+        from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
 
-        gen = ZhipuEmbeddingGenerator(api_key="test-key")
+        gen = LLMServiceEmbeddingGenerator(base_url="http://localhost:8900")
         assert gen.embed([]) == []
 
     def test_embed_api_failure_returns_empty(self):
-        from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
+        from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
         from unittest.mock import patch, MagicMock
 
-        gen = ZhipuEmbeddingGenerator(api_key="test-key")
+        gen = LLMServiceEmbeddingGenerator(base_url="http://localhost:8900")
 
         with patch("httpx.Client") as mock_client_cls:
             mock_client = MagicMock()
@@ -541,10 +543,10 @@ class TestZhipuEmbeddingGenerator:
             assert result == []
 
     def test_embed_batch(self):
-        from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
+        from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
         from unittest.mock import patch, MagicMock
 
-        gen = ZhipuEmbeddingGenerator(api_key="test-key")
+        gen = LLMServiceEmbeddingGenerator(base_url="http://localhost:8900")
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -571,13 +573,6 @@ class TestZhipuEmbeddingGenerator:
         gen = NoOpEmbeddingGenerator()
         assert gen.embed(["test"]) == []
         assert gen.embed_batch(["test"]) == []
-
-    def test_properties(self):
-        from knowledge_mining.mining.infra.embedding import ZhipuEmbeddingGenerator
-
-        gen = ZhipuEmbeddingGenerator(api_key="test-key", model="embedding-3", dimensions=1024)
-        assert gen.model_name == "embedding-3"
-        assert gen.dimensions == 1024
 
 
 # ===================================================================
@@ -710,7 +705,8 @@ class TestContextualizer:
             role_keyword_rules=(), heading_role_keywords=(),
             extractor_rules=(), llm_templates=(),
             semantic_roles=frozenset(),
-            retrieval_policy=policy, eval_questions=(),
+            retrieval_policy=policy, document_types=frozenset(),
+            eval_questions=(),
         )
 
         segments = [
@@ -1107,7 +1103,7 @@ class TestDBEmbeddingWrite:
                 embedding_id="emb-1",
                 retrieval_unit_id="ru-1",
                 embedding_model="embedding-3",
-                embedding_provider="zhipu",
+                embedding_provider="llm_service",
                 text_kind="full",
                 embedding_dim=3,
                 embedding_vector=vec,
@@ -1119,7 +1115,7 @@ class TestDBEmbeddingWrite:
             assert row is not None
             assert row["embedding_model"] == "embedding-3"
             assert row["embedding_dim"] == 3
-            assert row["embedding_provider"] == "zhipu"
+            assert row["embedding_provider"] == "llm_service"
         finally:
             db.close()
 
