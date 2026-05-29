@@ -81,7 +81,7 @@
       <!-- Documents Table -->
       <div class="run-detail__section">
         <div class="section-header">
-          <h4 class="section-label" style="margin-bottom: 0">文档处理结果 ({{ filteredDocs.length }})</h4>
+          <h4 class="section-label" style="margin-bottom: 0">文档处理结果 ({{ miningStore.documentsTotal }})</h4>
           <div class="doc-filters">
             <button
               v-for="f in docFilters"
@@ -134,6 +134,15 @@
             </template>
           </el-table-column>
         </el-table>
+        <div class="run-detail__pagination" v-if="miningStore.documentsTotal > 50">
+          <el-pagination
+            v-model:current-page="docPageProxy"
+            :page-size="50"
+            :total="miningStore.documentsTotal"
+            layout="prev, pager, next"
+            size="small"
+          />
+        </div>
       </div>
     </template>
   </div>
@@ -244,6 +253,15 @@ const docFilters = computed(() => {
   ]
 })
 
+// ── Document pagination ──
+
+const docPageProxy = computed({
+  get: () => miningStore.documentsPage,
+  set: (val: number) => { miningStore.documentsPage = val },
+})
+
+// ── Filtered docs ──
+
 const filteredDocs = computed(() => {
   if (activeDocFilter.value === 'all') return miningStore.documents
   if (activeDocFilter.value === 'processing') {
@@ -280,6 +298,11 @@ onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 watch(() => domainStore.currentDomain, () => {
   miningStore.clearCurrentRun()
   startPolling()
+})
+watch(() => miningStore.documentsPage, () => {
+  if (miningStore.currentRun) {
+    miningStore.fetchRunDocuments(miningStore.currentRun.id)
+  }
 })
 </script>
 
@@ -550,5 +573,13 @@ watch(() => domainStore.currentDomain, () => {
 .text-error {
   font-size: 12px;
   color: var(--kb-danger);
+}
+
+.run-detail__pagination {
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+  border-top: 1px solid var(--kb-border-light);
+  margin-top: 4px;
 }
 </style>

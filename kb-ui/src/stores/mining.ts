@@ -9,6 +9,9 @@ export const useMiningStore = defineStore('mining', () => {
   const currentRun = ref<MiningRun | null>(null)
   const stages = ref<MiningRunStage[]>([])
   const documents = ref<MiningRunDocument[]>([])
+  const documentsTotal = ref(0)
+  const documentsPage = ref(1)
+  const DOCUMENTS_PAGE_SIZE = 50
   const progress = ref<{
     total: number; completed: number; failed: number; skipped: number
     processing: number; progress_percent: number; current_stage: string | null
@@ -45,15 +48,26 @@ export const useMiningStore = defineStore('mining', () => {
       const [run, runStages, runDocsResult] = await Promise.all([
         miningApi.getRun(runId),
         miningApi.getRunStages(runId),
-        miningApi.getRunDocuments(runId),
+        miningApi.getRunDocuments(runId, { page: documentsPage.value, page_size: DOCUMENTS_PAGE_SIZE }),
       ])
       currentRun.value = run
       stages.value = runStages
       documents.value = runDocsResult.documents
+      documentsTotal.value = runDocsResult.total
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch run detail'
     } finally {
       if (!options?.silent) loading.value = false
+    }
+  }
+
+  async function fetchRunDocuments(runId: string) {
+    try {
+      const runDocsResult = await miningApi.getRunDocuments(runId, { page: documentsPage.value, page_size: DOCUMENTS_PAGE_SIZE })
+      documents.value = runDocsResult.documents
+      documentsTotal.value = runDocsResult.total
+    } catch {
+      // silently ignore
     }
   }
 
@@ -120,6 +134,8 @@ export const useMiningStore = defineStore('mining', () => {
     currentRun.value = null
     stages.value = []
     documents.value = []
+    documentsTotal.value = 0
+    documentsPage.value = 1
     progress.value = null
     currentDocument.value = null
     documentStages.value = []
@@ -127,10 +143,11 @@ export const useMiningStore = defineStore('mining', () => {
   }
 
   return {
-    runs, currentRun, stages, documents, progress,
+    runs, currentRun, stages, documents, documentsTotal, documentsPage,
+    progress,
     currentDocument, documentStages, documentArtifacts,
     loading, error,
-    fetchRuns, fetchRunDetail, fetchProgress,
+    fetchRuns, fetchRunDetail, fetchRunDocuments, fetchProgress,
     fetchDocumentDetail,
     createRun, cancelRun, publishRun, clearCurrentRun,
   }
