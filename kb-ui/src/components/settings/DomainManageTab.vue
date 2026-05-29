@@ -108,6 +108,7 @@ onMounted(() => store.loadDomains())
 .domain-manage-tab__layout {
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: 1fr;
   gap: 0;
   height: calc(100vh - 220px);
   min-height: 400px;
@@ -190,6 +191,7 @@ onMounted(() => store.loadDomains())
 .domain-manage-tab__editor-wrap {
   flex: 1;
   min-height: 0;
+  position: relative;
   overflow: hidden;
 }
 

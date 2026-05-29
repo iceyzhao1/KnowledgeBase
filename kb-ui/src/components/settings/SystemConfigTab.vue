@@ -62,6 +62,7 @@ onMounted(() => store.loadSystemConfigs())
 .system-config-tab__layout {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-rows: 1fr;
   gap: 0;
   height: calc(100vh - 220px);
   min-height: 400px;
@@ -115,6 +116,7 @@ onMounted(() => store.loadSystemConfigs())
 .system-config-tab__editor-wrap {
   flex: 1;
   min-height: 0;
+  position: relative;
   overflow: hidden;
 }
 
