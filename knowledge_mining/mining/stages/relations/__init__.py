@@ -94,7 +94,18 @@ class DiscourseRelationBuilder:
         if removed > 0:
             logger.info("RST whitelist: filtered %d/%d relations", removed, len(all_relations))
 
-        return filtered
+        # Deduplicate by (source, target, relation_type) — keep highest confidence
+        seen: dict[tuple[str, str, str], SegmentRelationData] = {}
+        for r in filtered:
+            key = (r.source_segment_key, r.target_segment_key, r.relation_type)
+            existing = seen.get(key)
+            if existing is None or (r.confidence is not None and (existing.confidence is None or r.confidence > existing.confidence)):
+                seen[key] = r
+        deduped = list(seen.values())
+        if len(deduped) < len(filtered):
+            logger.info("RST dedup: removed %d duplicate relations", len(filtered) - len(deduped))
+
+        return deduped
 
     def _analyze_window(self, segments: list[RawSegmentData]) -> list[SegmentRelationData]:
         seg_lines = []

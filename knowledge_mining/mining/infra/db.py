@@ -373,7 +373,14 @@ class AssetCoreDB(_DB):
             """INSERT INTO asset_raw_segment_relations
                    (id, document_snapshot_id, source_segment_id, target_segment_id,
                     relation_type, weight, confidence, distance, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (source_segment_id, target_segment_id, relation_type)
+               DO UPDATE SET
+                   weight = EXCLUDED.weight,
+                   confidence = EXCLUDED.confidence,
+                   distance = EXCLUDED.distance,
+                   metadata_json = EXCLUDED.metadata_json,
+                   document_snapshot_id = EXCLUDED.document_snapshot_id""",
             (
                 relation_id, document_snapshot_id, source_segment_id, target_segment_id,
                 relation_type, weight, confidence, distance, _json_dumps(metadata_json),
