@@ -59,7 +59,7 @@ def load_db_config() -> LlmDbConfig:
     url = CONTROL_PLANE_BASE_URL.rstrip("/")
     endpoint = f"{url}/api/v1/system/database/raw"
     try:
-        resp = httpx.get(endpoint, timeout=5.0, proxy=None)
+        resp = httpx.get(endpoint, timeout=5.0, proxy=None, trust_env=False)
         resp.raise_for_status()
         data = yaml.safe_load(resp.text)
     except Exception as exc:

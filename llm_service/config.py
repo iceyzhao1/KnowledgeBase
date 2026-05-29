@@ -172,7 +172,7 @@ def fetch_config_from_control_plane(
     url = (base_url or CONTROL_PLANE_BASE_URL).rstrip("/")
     endpoint = f"{url}/api/v1/system/llm_service/raw"
     try:
-        resp = httpx.get(endpoint, timeout=timeout, proxy=None)
+        resp = httpx.get(endpoint, timeout=timeout, proxy=None, trust_env=False)
         resp.raise_for_status()
         data = yaml.safe_load(resp.text)
     except Exception as exc:

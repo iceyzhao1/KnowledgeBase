@@ -39,7 +39,7 @@ class LlmClient:
     def _get_client(self, timeout: int | None = None) -> httpx.Client:
         """Get or create a reusable httpx.Client."""
         if self._client is None or self._client.is_closed:
-            self._client = httpx.Client(timeout=timeout or self._timeout, proxy=None)
+            self._client = httpx.Client(timeout=timeout or self._timeout, proxy=None, trust_env=False)
         return self._client
 
     def close(self) -> None:
