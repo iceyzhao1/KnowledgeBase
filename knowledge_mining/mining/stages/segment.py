@@ -37,7 +37,7 @@ class DefaultSegmenter:
 
 _SCHEMA_BLOCK_TYPES = {
     "paragraph", "table", "list", "code", "blockquote",
-    "html_table", "raw_html", "unknown",
+    "html_table", "raw_html", "heading", "unknown",
 }
 
 # Merge thresholds — module-level named constants for discoverability
@@ -108,6 +108,18 @@ def _walk_sections(
     current_path = list(parent_path)
     if node.title and node.level > 0:
         current_path.append({"title": node.title, "level": node.level})
+        # Emit heading as independent segment (for relation building)
+        heading_block = ContentBlock(
+            block_type="heading",
+            text=node.title,
+            level=node.level,
+        )
+        segments.append(
+            _make_segment(
+                document_key, current_path, node, [heading_block],
+                len(segments), parser_name,
+            )
+        )
 
     current_group: list[ContentBlock] = []
     block_index = 0
@@ -124,8 +136,14 @@ def _walk_sections(
                 )
                 block_index += 1
                 current_group = []
-            # Heading text is NOT emitted as a separate segment;
-            # it will appear as section_title on subsequent content segments.
+            # Emit heading as independent segment (PDF/DOCX explicit heading blocks)
+            segments.append(
+                _make_segment(
+                    document_key, current_path, node, [block],
+                    block_index, parser_name,
+                )
+            )
+            block_index += 1
         elif block.block_type in ("table", "html_table", "code", "list", "blockquote"):
             if current_group:
                 segments.append(
@@ -197,14 +215,14 @@ def _merge_small_segments(
             and seg.block_type in ("list", "table", "html_table")
             and (prev_tc + seg_tc) <= _MERGE_MAX_TOKENS
             and not (seg.block_type in ("table", "html_table") and seg_tc > _TABLE_MIN_INDEPENDENT_TOKENS)
-        )
+        ) if seg.block_type != "heading" else False
 
-        # Try merge: short current segment into previous (paragraph/list only, never merge tables/code backward)
+        # Try merge: short current segment into previous (paragraph/list only, never merge tables/code/headings backward)
         backward_merge = (
             seg_tc < min_tokens
-            and seg.block_type not in ("table", "html_table", "code")
+            and seg.block_type not in ("table", "html_table", "code", "heading")
             and (prev_tc + seg_tc) <= _MERGE_MAX_TOKENS
-            and prev.block_type not in ("table", "html_table", "code")
+            and prev.block_type not in ("table", "html_table", "code", "heading")
         )
 
         if intro_merge or backward_merge:
@@ -369,6 +387,7 @@ def _make_segment(
     """
     primary_block = next((b for b in blocks if b.block_type != "heading"), None)
     if primary_block is None:
+        # All blocks are headings — use the first one
         primary_block = blocks[0] if blocks else None
     block_type = _schema_block_type(primary_block.block_type if primary_block else "unknown")
 
