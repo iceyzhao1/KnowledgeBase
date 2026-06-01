@@ -45,6 +45,8 @@
 !deploy-build.sh
 !deploy-server.sh
 !reset_db.py
+!export_db.py
+!import_db.py
 
 # === But still exclude these within allowlisted dirs ===
 *.sqlite
