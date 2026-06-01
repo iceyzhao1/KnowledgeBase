@@ -79,18 +79,11 @@ EXPORT_TABLES = [
 
 
 def escape_sql(value):
-    """将 Python 值转为 SQL 字面量"""
+    """将 Python 值转为 SQL 字面量，使用 psycopg 的适配器确保 JSON 等类型正确转义"""
+    import psycopg.sql
     if value is None:
         return "NULL"
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return repr(value)
-    # str, datetime, uuid, bytes 等
-    s = str(value).replace("'", "''")
-    return f"'{s}'"
+    return psycopg.sql.Literal(value).as_string(None)
 
 
 def export_table(cur, table: str, out) -> int:
