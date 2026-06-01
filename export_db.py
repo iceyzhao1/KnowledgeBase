@@ -79,11 +79,22 @@ EXPORT_TABLES = [
 
 
 def escape_sql(value):
-    """将 Python 值转为 SQL 字面量，使用 psycopg 的适配器确保 JSON 等类型正确转义"""
-    import psycopg.sql
+    """将 Python 值转为 SQL 字面量，dict/list 用 json.dumps 保证合法 JSON"""
+    import json
     if value is None:
         return "NULL"
-    return psycopg.sql.Literal(value).as_string(None)
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, (dict, list)):
+        s = json.dumps(value, ensure_ascii=False).replace("'", "''")
+        return f"'{s}'"
+    # str, datetime, uuid, bytes 等
+    s = str(value).replace("'", "''")
+    return f"'{s}'"
 
 
 def export_table(cur, table: str, out) -> int:
