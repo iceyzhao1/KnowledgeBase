@@ -3,16 +3,18 @@ CoreMasterKB 数据库导入脚本
 - 读取 .env 中的 PG 连接信息
 - 执行 export_db.py 导出的 INSERT SQL 文件
 - 要求目标表已存在（由 reset_db.py 创建）
+- 导入前自动 TRUNCATE 所有表（反序，处理外键）
 
 用法：python import_db.py [SQL文件]
 默认：backups/ 目录下最新的 export_*.sql
 """
 from __future__ import annotations
 
-import glob
-import os
 import sys
 from pathlib import Path
+
+# ── 表顺序（共享定义） ────────────────────────────────────────
+from db_tables import EXPORT_TABLES
 
 # ── 加载 .env ──────────────────────────────────────────────
 REPO_ROOT = Path(__file__).resolve().parent
@@ -51,12 +53,24 @@ CONNINFO = (
 
 
 def find_latest_backup() -> Path | None:
-    """在 backups/ 下找最新的 export_*.sql"""
     backup_dir = REPO_ROOT / "backups"
     if not backup_dir.exists():
         return None
     files = sorted(backup_dir.glob("export_*.sql"), reverse=True)
     return files[0] if files else None
+
+
+def parse_statements(sql: str) -> list[str]:
+    """从 SQL 文本中提取独立语句，跳过注释、空行、BEGIN/COMMIT"""
+    stmts = []
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        if stripped.upper() in ("BEGIN;", "COMMIT;"):
+            continue
+        stmts.append(stripped)
+    return stmts
 
 
 def main():
@@ -82,32 +96,41 @@ def main():
     print(f"File:    {sql_path}")
     print(f"Size:    {sql_path.stat().st_size / 1024:.1f} KB")
     print(f"Target:  {PG_HOST}:{PG_PORT}/{PG_DBNAME}")
-    print(f"\nWARNING: This will INSERT data into existing tables!")
+    print(f"\nWARNING: This will TRUNCATE all tables and INSERT data!")
     confirm = input("Type 'YES' to proceed: ")
     if confirm != "YES":
         print("Aborted.")
         sys.exit(0)
 
     sql = sql_path.read_text(encoding="utf-8")
-
-    # 去掉注释行，保留纯 SQL
-    lines = []
-    for line in sql.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("--"):
-            continue
-        if stripped:
-            lines.append(line)
-    clean_sql = "\n".join(lines)
-
-    print("\nImporting...")
+    stmts = parse_statements(sql)
+    insert_stmts = [s for s in stmts if s.upper().startswith("INSERT")]
+    print(f"Statements to execute: {len(insert_stmts)}")
 
     with psycopg.connect(CONNINFO) as conn:
         with conn.cursor() as cur:
-            cur.execute(clean_sql)
+            # 1. TRUNCATE 所有表（反序，先清子表）
+            truncate_sql = ", ".join(reversed(EXPORT_TABLES))
+            cur.execute(f"TRUNCATE TABLE {truncate_sql} CASCADE;")
+            print("Tables truncated.")
+
+            # 2. 逐条执行 INSERT，便于定位错误
+            ok = 0
+            for i, stmt in enumerate(insert_stmts, 1):
+                try:
+                    cur.execute(stmt)
+                    ok += 1
+                except Exception as e:
+                    # 提取表名用于定位
+                    table = stmt.split()[2] if len(stmt.split()) > 2 else "?"
+                    print(f"[ERROR] Statement {i} (table={table}): {e}")
+                    conn.rollback()
+                    print(f"Rolled back. {ok} rows succeeded before failure.")
+                    sys.exit(1)
+
         conn.commit()
 
-    print("Import complete.")
+    print(f"Import complete. {ok} rows inserted.")
 
 
 if __name__ == "__main__":

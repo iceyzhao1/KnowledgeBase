@@ -47,6 +47,7 @@
 !reset_db.py
 !export_db.py
 !import_db.py
+!db_tables.py
 
 # === But still exclude these within allowlisted dirs ===
 *.sqlite

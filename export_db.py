@@ -49,33 +49,8 @@ CONNINFO = (
     f"sslmode={PG_SSLMODE} gssencmode={PG_GSSENCMODE}"
 )
 
-# ── 导出顺序（父表先导出，导入时也按此顺序） ─────────────────
-EXPORT_TABLES = [
-    # agent_llm_runtime
-    "agent_llm_prompt_templates",
-    "agent_llm_tasks",
-    "agent_llm_requests",
-    "agent_llm_attempts",
-    "agent_llm_results",
-    "agent_llm_events",
-    "agent_llm_model_calls",
-    # mining_runtime
-    "mining_runs",
-    "mining_run_documents",
-    "mining_run_stage_events",
-    # asset_core
-    "asset_source_batches",
-    "asset_documents",
-    "asset_document_snapshots",
-    "asset_document_snapshot_links",
-    "asset_builds",
-    "asset_publish_releases",
-    "asset_build_document_snapshots",
-    "asset_raw_segments",
-    "asset_raw_segment_relations",
-    "asset_retrieval_units",
-    "asset_retrieval_embeddings",
-]
+# ── 表顺序（共享定义） ────────────────────────────────────────
+from db_tables import EXPORT_TABLES
 
 
 def escape_sql(value):
@@ -147,7 +122,7 @@ def main():
                 out.write(f"-- \n")
                 out.write(f"-- Import with: python import_db.py {output_path.name}\n")
                 out.write(f"-- \n\n")
-                out.write(f"BEGIN;\n\n")
+                out.write(f"\n")
 
                 total = 0
                 for table in EXPORT_TABLES:
@@ -155,7 +130,7 @@ def main():
                     total += count
                     print(f"  {table}: {count} rows")
 
-                out.write(f"COMMIT;\n\n")
+                out.write(f"\n")
                 out.write(f"-- Total: {total} rows\n")
 
     print(f"\nExported {total} rows to: {output_path}")
