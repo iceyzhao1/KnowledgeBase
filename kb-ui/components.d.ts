@@ -43,6 +43,7 @@ declare module 'vue' {
     PieChart: typeof import('./src/components/charts/PieChart.vue')['default']
     PipelineFlow: typeof import('./src/components/mining/PipelineFlow.vue')['default']
     PipelineTrace: typeof import('./src/components/search/PipelineTrace.vue')['default']
+    ReloadConfigTab: typeof import('./src/components/settings/ReloadConfigTab.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ServiceHealthCard: typeof import('./src/components/common/ServiceHealthCard.vue')['default']
