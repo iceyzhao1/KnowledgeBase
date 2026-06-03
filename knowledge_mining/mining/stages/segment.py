@@ -7,15 +7,34 @@ v1.3 key points:
 - source_offsets_json includes parser, block_index, line_start, line_end
 - Entity extraction and role classification are NOT done here — deferred to enrich stage
 - Post-processing merges small segments (<100 tokens) with adjacent intro+list/table pairs (Unstructured CompositeElement)
+- Text cleanup: strip markdown bold, <br>, image refs, and inline links from raw_text
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from knowledge_mining.mining.contracts.models import ContentBlock, DocumentProfile, RawSegmentData, SectionNode
 from knowledge_mining.mining.infra.hash_utils import content_hash, normalized_hash
 from knowledge_mining.mining.infra.text_utils import token_count
 from knowledge_mining.mining.infra.text_utils import split_sentences
+
+# Text cleanup patterns — applied to raw_text after block joining
+_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+_BR_TAG_RE = re.compile(r'<br\s*/?>')
+_IMAGE_REF_RE = re.compile(r'!\[[^\]]*\]\([^)]*\)')
+_MD_LINK_RE = re.compile(r'\[([^\]]*)\]\([^)]*\)')
+
+
+def _clean_segment_text(text: str) -> str:
+    """Clean residual markdown/HTML from segment text."""
+    text = _BOLD_RE.sub(r'\1', text)
+    text = _BR_TAG_RE.sub('\n', text)
+    text = _IMAGE_REF_RE.sub('', text)
+    text = _MD_LINK_RE.sub(r'\1', text)
+    # Collapse multiple blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 class DefaultSegmenter:
@@ -364,7 +383,7 @@ def _make_segment(
         primary_block = blocks[0] if blocks else None
     block_type = _schema_block_type(primary_block.block_type if primary_block else "unknown")
 
-    raw_text = "\n\n".join(b.text for b in blocks)
+    raw_text = _clean_segment_text("\n\n".join(b.text for b in blocks))
     norm_text = raw_text.lower().strip()
 
     structure_json = _extract_structure_info(blocks)

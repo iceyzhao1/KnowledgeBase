@@ -276,6 +276,17 @@ def build_retrieval_units(
         seg_key = f"{seg.document_key}#{seg.segment_index}"
         source_seg_id = (seg_ids or {}).get(seg_key)
 
+        # Skip navigation segments (TOC, directory listings) — no retrieval value
+        assessment = seg.metadata_json.get("content_assessment", {})
+        if assessment.get("is_navigation"):
+            continue
+
+        # Skip non-substantive fragments (<20 tokens) — labels like "UPF", "**涉及NF**"
+        # These carry no retrieval value on their own; their section_title already indexes them.
+        seg_tc = seg.token_count if seg.token_count is not None else 0
+        if seg_tc < 20 and not assessment.get("is_substantive", True):
+            continue
+
         # 1. raw_text unit — enriched with section context + optional LLM context
         llm_context = context_map.get(seg_key, "")
         ctx_task_id = ctxer_task_ids.get(seg_key)
