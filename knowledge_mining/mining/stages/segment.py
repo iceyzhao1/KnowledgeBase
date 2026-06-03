@@ -1,7 +1,7 @@
 """Segmentation module: split SectionNode tree into L0 RawSegmentData.
 
-v1.2 key points:
-- Heading text is propagated via section_title on content segments (no independent heading segments)
+v1.3 key points:
+- Headings are metadata (section_title + section_path), NOT independent segments
 - Structural relations are built in relations stage from section_path hierarchy
 - structure_json preserves table columns/rows from ContentBlock.structure
 - source_offsets_json includes parser, block_index, line_start, line_end
@@ -65,8 +65,8 @@ def segment_document(
 ) -> list[RawSegmentData]:
     """Split document section tree into raw segments.
 
-    v1.1: Headings are emitted as independent segments (block_type='heading')
-    so that section_header_of relations can be built in the relations stage.
+    Headings are propagated via section_title and section_path on content segments.
+    The relations stage builds hierarchy from section_path, not from heading segments.
 
     Entity extraction and role classification are deferred to the enrich stage.
     Segments are produced with default semantic_role="unknown" and empty entity_refs_json.
@@ -108,42 +108,15 @@ def _walk_sections(
     current_path = list(parent_path)
     if node.title and node.level > 0:
         current_path.append({"title": node.title, "level": node.level})
-        # Emit heading as independent segment (for relation building)
-        heading_block = ContentBlock(
-            block_type="heading",
-            text=node.title,
-            level=node.level,
-        )
-        segments.append(
-            _make_segment(
-                document_key, current_path, node, [heading_block],
-                len(segments), parser_name,
-            )
-        )
 
     current_group: list[ContentBlock] = []
     block_index = 0
 
     for block in node.blocks:
         if block.block_type == "heading":
-            # Flush current group before starting new section
-            if current_group:
-                segments.append(
-                    _make_segment(
-                        document_key, current_path, node, current_group,
-                        block_index, parser_name,
-                    )
-                )
-                block_index += 1
-                current_group = []
-            # Emit heading as independent segment (PDF/DOCX explicit heading blocks)
-            segments.append(
-                _make_segment(
-                    document_key, current_path, node, [block],
-                    block_index, parser_name,
-                )
-            )
-            block_index += 1
+            # Heading blocks are metadata carried by section_title/section_path.
+            # Skip them here — their text is already in the section hierarchy.
+            continue
         elif block.block_type in ("table", "html_table", "code", "list", "blockquote"):
             if current_group:
                 segments.append(
@@ -215,14 +188,14 @@ def _merge_small_segments(
             and seg.block_type in ("list", "table", "html_table")
             and (prev_tc + seg_tc) <= _MERGE_MAX_TOKENS
             and not (seg.block_type in ("table", "html_table") and seg_tc > _TABLE_MIN_INDEPENDENT_TOKENS)
-        ) if seg.block_type != "heading" else False
+        )
 
-        # Try merge: short current segment into previous (paragraph/list only, never merge tables/code/headings backward)
+        # Try merge: short current segment into previous (paragraph/list only, never merge tables/code backward)
         backward_merge = (
             seg_tc < min_tokens
-            and seg.block_type not in ("table", "html_table", "code", "heading")
+            and seg.block_type not in ("table", "html_table", "code")
             and (prev_tc + seg_tc) <= _MERGE_MAX_TOKENS
-            and prev.block_type not in ("table", "html_table", "code", "heading")
+            and prev.block_type not in ("table", "html_table", "code")
         )
 
         if intro_merge or backward_merge:

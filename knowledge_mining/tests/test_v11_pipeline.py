@@ -249,6 +249,13 @@ class TestIngestion:
 
 
 class TestStructure:
+    def test_heading_text_cleans_markdown_links(self):
+        from knowledge_mining.mining.infra.structure import parse_structure
+        md = '## [适用NF](#ZH-CN_TOPIC_123)\n\nContent here.\n'
+        tree = parse_structure(md)
+        # Single top-level heading gets promoted to root
+        assert tree.title == "适用NF"
+
     def test_parse_heading_tree(self, md_content):
         from knowledge_mining.mining.infra.structure import parse_structure
         tree = parse_structure(md_content)
@@ -271,8 +278,12 @@ class TestSegmentation:
         from knowledge_mining.mining.stages.segment import segment_document
         tree = parse_structure(md_content)
         segments = segment_document(tree, DocumentProfile(document_key="doc:/test.md"))
+        # Headings are metadata (section_title/section_path), not independent segments
         headings = [s for s in segments if s.block_type == "heading"]
-        assert len(headings) >= 4
+        assert len(headings) == 0
+        # But heading info is preserved on content segments via section_title
+        titles = [s.section_title for s in segments if s.section_title]
+        assert len(titles) >= 4
 
     def test_segment_hashes(self, md_content):
         from knowledge_mining.mining.infra.structure import parse_structure
