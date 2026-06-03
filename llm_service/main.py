@@ -15,6 +15,7 @@ from llm_service.pg_schema import ensure_schema
 from llm_service.providers.bigmodel_models import BigModelProvider
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.providers.base import ProviderProtocol
+from llm_service.providers.anthropic import AnthropicProvider
 from llm_service.providers.openai_compatible import OpenAICompatibleProvider
 from llm_service.runtime.model_service import ModelService
 from llm_service.runtime.service import LLMService
@@ -99,14 +100,29 @@ def create_app(
         # Providers — all params from config dict, no defaults
         # Resolve multi-model: if provider.models exists, merge active_model overrides
         active_provider = resolve_active_model_config(cfg)
-        provider = _factory() if _factory else OpenAICompatibleProvider(
-            base_url=active_provider["base_url"],
-            api_key=active_provider["api_key"],
-            model=active_provider.get("model", active_provider.get("active_model", "")),
-            headers=active_provider.get("headers") or {},
-            timeout=active_provider.get("timeout", 30),
-            bypass_proxy=active_provider.get("bypass_proxy", False),
-        )
+        # Select provider implementation based on provider_type
+        provider_type = active_provider.get("provider_type", "openai_compatible")
+        if _factory:
+            provider = _factory()
+        elif provider_type == "anthropic":
+            provider = AnthropicProvider(
+                api_key=active_provider["api_key"],
+                model=active_provider.get("model", active_provider.get("active_model", "")),
+                base_url=active_provider.get("base_url", "https://api.anthropic.com/v1/messages"),
+                api_version=active_provider.get("api_version", "2023-06-01"),
+                headers=active_provider.get("headers") or {},
+                timeout=active_provider.get("timeout", 60),
+                bypass_proxy=active_provider.get("bypass_proxy", False),
+            )
+        else:
+            provider = OpenAICompatibleProvider(
+                base_url=active_provider["base_url"],
+                api_key=active_provider["api_key"],
+                model=active_provider.get("model", active_provider.get("active_model", "")),
+                headers=active_provider.get("headers") or {},
+                timeout=active_provider.get("timeout", 30),
+                bypass_proxy=active_provider.get("bypass_proxy", False),
+            )
         model_provider = (
             model_provider_factory()
             if model_provider_factory
@@ -179,6 +195,7 @@ def create_app(
                 await recovery.start()
                 app.state.worker = worker
                 app.state.worker_concurrency = worker_concurrency
+                app.state.lease_recovery = recovery
         except Exception:
             if recovery:
                 await recovery.stop()
