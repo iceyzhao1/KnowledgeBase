@@ -24,6 +24,8 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
   // ── Shared ──
   const loading = ref(false)
   const saving = ref(false)
+  const reloading = ref(false)
+  const reloadResult = ref<{ ok: boolean; error?: string; config?: Record<string, unknown> } | null>(null)
   const error = ref('')
 
   const systemConfigDirty = computed(() => systemConfigText.value !== systemConfigOriginal.value)
@@ -151,6 +153,20 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
     }
   }
 
+  // ── Reload actions ──
+  async function reloadService(serviceName: string) {
+    if (!selectedDomainId.value) return
+    reloading.value = true
+    reloadResult.value = null
+    try {
+      reloadResult.value = await api.reloadServiceConfig(selectedDomainId.value, serviceName)
+    } catch (err) {
+      reloadResult.value = { ok: false, error: err instanceof Error ? err.message : 'Reload failed' }
+    } finally {
+      reloading.value = false
+    }
+  }
+
   return {
     systemConfigNames,
     selectedSystemConfigName,
@@ -165,6 +181,8 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
     scenarioYamlOriginal,
     loading,
     saving,
+    reloading,
+    reloadResult,
     error,
     systemConfigDirty,
     domainYamlDirty,
@@ -178,5 +196,6 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
     saveDomainYaml,
     deleteDomain,
     saveScenarioYaml,
+    reloadService,
   }
 })

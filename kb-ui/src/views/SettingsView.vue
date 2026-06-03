@@ -19,6 +19,9 @@
         <el-tab-pane label="域详情" name="scenario">
           <DomainDetailTab />
         </el-tab-pane>
+        <el-tab-pane label="配置重载" name="reload">
+          <ReloadConfigTab />
+        </el-tab-pane>
       </el-tabs>
     </div>
   </div>
@@ -30,6 +33,7 @@ import { useControlPlaneStore } from '@/stores/controlPlane'
 import SystemConfigTab from '@/components/settings/SystemConfigTab.vue'
 import DomainManageTab from '@/components/settings/DomainManageTab.vue'
 import DomainDetailTab from '@/components/settings/DomainDetailTab.vue'
+import ReloadConfigTab from '@/components/settings/ReloadConfigTab.vue'
 
 const activeTab = ref('system')
 const store = useControlPlaneStore()
