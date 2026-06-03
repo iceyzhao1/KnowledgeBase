@@ -294,7 +294,6 @@ def build_retrieval_units(
 
         # 2. entity_card units — only if policy enables it
         if profile.retrieval_policy.entity_card != "off":
-            assessment = seg.metadata_json.get("content_assessment", {})
             segment_card_count = 0
             for ref in seg.entity_refs_json:
                 entity_type = ref.get("type", "")

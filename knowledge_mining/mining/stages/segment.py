@@ -21,9 +21,11 @@ from knowledge_mining.mining.infra.text_utils import split_sentences
 
 # Text cleanup patterns — applied to raw_text after block joining
 _BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
-_BR_TAG_RE = re.compile(r'<br\s*/?>')
-_IMAGE_REF_RE = re.compile(r'!\[[^\]]*\]\([^)]*\)')
-_MD_LINK_RE = re.compile(r'\[([^\]]*)\]\([^)]*\)')
+_BR_TAG_RE = re.compile(r'<br\s*/?>', re.IGNORECASE)
+_IMAGE_REF_RE = re.compile(r'!\[.*?\]\([^\)]*\)')
+_IMAGE_REF_STYLE_RE = re.compile(r'!\[.*?\]\[.*?\]')
+_MD_LINK_RE = re.compile(r'\[([^\]]*)\]\((?:[^()]+|\([^()]*\))*\)')
+_COLLAPSE_RE = re.compile(r'\n{3,}')
 
 
 def _clean_segment_text(text: str) -> str:
@@ -31,9 +33,9 @@ def _clean_segment_text(text: str) -> str:
     text = _BOLD_RE.sub(r'\1', text)
     text = _BR_TAG_RE.sub('\n', text)
     text = _IMAGE_REF_RE.sub('', text)
+    text = _IMAGE_REF_STYLE_RE.sub('', text)
     text = _MD_LINK_RE.sub(r'\1', text)
-    # Collapse multiple blank lines
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = _COLLAPSE_RE.sub('\n\n', text)
     return text.strip()
 
 
@@ -56,7 +58,7 @@ class DefaultSegmenter:
 
 _SCHEMA_BLOCK_TYPES = {
     "paragraph", "table", "list", "code", "blockquote",
-    "html_table", "raw_html", "heading", "unknown",
+    "html_table", "raw_html", "unknown",
 }
 
 # Merge thresholds — module-level named constants for discoverability
