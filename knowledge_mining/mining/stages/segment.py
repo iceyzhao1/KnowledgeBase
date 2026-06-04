@@ -1,12 +1,14 @@
 """Segmentation module: split SectionNode tree into L0 RawSegmentData.
 
-v1.3 key points:
+v2.0 key points:
 - Headings are metadata (section_title + section_path), NOT independent segments
 - Structural relations are built in relations stage from section_path hierarchy
 - structure_json preserves table columns/rows from ContentBlock.structure
 - source_offsets_json includes parser, block_index, line_start, line_end
 - Entity extraction and role classification are NOT done here — deferred to enrich stage
 - Post-processing merges small segments (<100 tokens) with adjacent intro+list/table pairs (Unstructured CompositeElement)
+- Cross-section orphan absorption: fragments below min_chunk_tokens merge into parent section (LlamaIndex AutoMerging)
+- Structural breadcrumb: section path hierarchy injected into metadata for free context (Anthropic contextual retrieval)
 - Text cleanup: strip markdown bold, <br>, image refs, and inline links from raw_text
 """
 from __future__ import annotations
@@ -43,7 +45,7 @@ class DefaultSegmenter:
     """Default segmenter wrapping segment_document() for PipelineConfig."""
 
     stage_name = "segment"
-    stage_version = "1"
+    stage_version = "2"
 
     def segment(
         self,
@@ -54,6 +56,7 @@ class DefaultSegmenter:
         return segment_document(
             tree, profile,
             parser_name=kwargs.get("parser_name", "unknown"),
+            domain_profile=kwargs.get("domain_profile"),
         )
 
 _SCHEMA_BLOCK_TYPES = {
@@ -83,6 +86,7 @@ def segment_document(
     profile: DocumentProfile,
     *,
     parser_name: str = "unknown",
+    domain_profile: Any | None = None,
 ) -> list[RawSegmentData]:
     """Split document section tree into raw segments.
 
@@ -91,11 +95,44 @@ def segment_document(
 
     Entity extraction and role classification are deferred to the enrich stage.
     Segments are produced with default semantic_role="unknown" and empty entity_refs_json.
+
+    Pipeline phases:
+    1. Walk sections → raw segments
+    2. Merge small segments within same section (Unstructured CompositeElement)
+    3. Absorb cross-section orphans into parent sections (LlamaIndex AutoMerging)
+    4. Split large segments at paragraph/sentence boundaries
+    5. Inject structural breadcrumb context (Anthropic contextual retrieval, free)
     """
+    # Resolve thresholds from domain_profile if available
+    policy = None
+    if domain_profile is not None and hasattr(domain_profile, "retrieval_policy"):
+        policy = domain_profile.retrieval_policy
+
+    min_chunk = policy.min_chunk_tokens if policy else _DEFAULT_MIN_CHUNK_TOKENS
+    max_chunk = policy.max_chunk_tokens if policy else _SPLIT_MAX_TOKENS
+    cross_section = policy.cross_section_merge if policy else True
+    ctx_mode = policy.structural_context_mode if policy else "breadcrumb"
+
+    # Phase 1: Walk section tree → raw segments
     segments: list[RawSegmentData] = []
     _walk_sections(doc_root, profile.document_key, [], segments, parser_name)
+
+    # Phase 2: Merge small segments within same section
     segments = _merge_small_segments(segments, min_tokens=100)
-    segments = _split_large_segments(segments, max_tokens=_SPLIT_MAX_TOKENS)
+
+    # Phase 3: Absorb cross-section orphans (LlamaIndex AutoMerging pattern)
+    if cross_section:
+        segments = _absorb_orphan_segments(segments, min_chunk, max_chunk)
+
+    # Phase 4: Split large segments at paragraph/sentence boundaries
+    segments = _split_large_segments(segments, max_tokens=max_chunk)
+
+    # Phase 5: Inject structural breadcrumb (free context, no LLM)
+    if ctx_mode == "breadcrumb":
+        doc_title = doc_root.title or ""
+        segments = _inject_structural_context(segments, doc_title)
+
+    # Re-index
     return [
         RawSegmentData(
             document_key=s.document_key,
@@ -246,6 +283,175 @@ def _merge_small_segments(
             merged.append(seg)
 
     return merged
+
+
+# Default threshold for cross-section orphan absorption
+_DEFAULT_MIN_CHUNK_TOKENS = 128
+
+
+def _absorb_orphan_segments(
+    segments: list[RawSegmentData],
+    min_tokens: int = _DEFAULT_MIN_CHUNK_TOKENS,
+    max_tokens: int = 512,
+) -> list[RawSegmentData]:
+    """Absorb cross-section orphans into parent section segments.
+
+    After Phase 2 (within-section merge), some segments remain below
+    min_tokens but can't merge because they're in different sections.
+    This phase walks up the section_path hierarchy to find a merge candidate.
+
+    Algorithm (LlamaIndex AutoMerging inspired):
+    1. Build section_path_tuple → [segment_index] mapping
+    2. Identify orphans: token_count < min_tokens AND block_type not structural
+    3. For each orphan (descending order to avoid index shifts):
+       a. Walk up section_path hierarchy (pop last element)
+       b. At each ancestor level, find nearest segment by index distance
+       c. If combined tokens ≤ max_tokens, merge and remove orphan
+    4. Re-index remaining segments
+    """
+    if not segments:
+        return segments
+
+    # Build section_path → [index] index
+    path_index: dict[tuple, list[int]] = {}
+    for idx, seg in enumerate(segments):
+        path_key = tuple(p.get("title", "") for p in seg.section_path)
+        path_index.setdefault(path_key, []).append(idx)
+
+    # Identify orphans
+    orphan_indices: list[int] = []
+    for idx, seg in enumerate(segments):
+        tc = seg.token_count if seg.token_count is not None else 0
+        if (tc < min_tokens
+                and seg.block_type not in ("table", "html_table", "code")):
+            orphan_indices.append(idx)
+
+    if not orphan_indices:
+        return segments
+
+    # Process orphans in descending order to avoid index shifts
+    # (we're marking removals, not actually removing yet)
+    removed: set[int] = set()
+    merge_log: list[tuple[int, int]] = []  # (orphan_idx, target_idx)
+
+    for orphan_idx in reversed(orphan_indices):
+        if orphan_idx in removed:
+            continue
+
+        orphan = segments[orphan_idx]
+        orphan_tc = orphan.token_count if orphan.token_count is not None else 0
+        section_path = list(orphan.section_path)
+
+        # Walk up section_path hierarchy
+        merged = False
+        while len(section_path) > 0:
+            section_path = section_path[:-1]
+            parent_key = tuple(p.get("title", "") for p in section_path)
+
+            candidate_indices = path_index.get(parent_key, [])
+            # Filter out already-removed segments
+            candidate_indices = [i for i in candidate_indices if i not in removed and i != orphan_idx]
+
+            if not candidate_indices:
+                continue
+
+            # Find nearest candidate by index distance
+            best_idx = min(candidate_indices, key=lambda i: abs(i - orphan_idx))
+            candidate = segments[best_idx]
+            candidate_tc = candidate.token_count if candidate.token_count is not None else 0
+
+            # Check merge feasibility
+            if candidate_tc + orphan_tc > max_tokens:
+                continue
+            # Never merge into table/code blocks
+            if candidate.block_type in ("table", "html_table", "code"):
+                continue
+
+            # Merge orphan into candidate
+            new_text = candidate.raw_text + "\n\n" + orphan.raw_text
+            new_block_type = _pick_block_type(candidate.block_type, orphan.block_type)
+            new_structure = {**(candidate.structure_json or {}), **(orphan.structure_json or {})}
+            meta = dict(candidate.metadata_json)
+            meta["merged_from_orphan"] = True
+            meta["orphan_section_title"] = orphan.section_title
+
+            segments[best_idx] = RawSegmentData(
+                document_key=candidate.document_key,
+                segment_index=candidate.segment_index,
+                block_type=new_block_type,
+                semantic_role=candidate.semantic_role,
+                section_path=candidate.section_path,
+                section_title=candidate.section_title,
+                raw_text=new_text,
+                normalized_text=new_text.lower().strip(),
+                content_hash=content_hash(new_text),
+                normalized_hash=normalized_hash(new_text),
+                token_count=token_count(new_text),
+                structure_json=new_structure,
+                source_offsets_json=candidate.source_offsets_json,
+                entity_refs_json=candidate.entity_refs_json,
+                metadata_json=meta,
+            )
+            removed.add(orphan_idx)
+            merge_log.append((orphan_idx, best_idx))
+            merged = True
+            break
+
+    if not removed:
+        return segments
+
+    # Filter out removed orphans
+    return [seg for idx, seg in enumerate(segments) if idx not in removed]
+
+
+def _inject_structural_context(
+    segments: list[RawSegmentData],
+    doc_title: str,
+) -> list[RawSegmentData]:
+    """Inject structural breadcrumb into each segment's metadata_json.
+
+    Builds a breadcrumb like "[doc_title] > [section1] > [section2] > ..."
+    from the section_path. This provides FREE context (no LLM needed)
+    following the Anthropic contextual retrieval pattern.
+
+    The breadcrumb is consumed by retrieval_units stage to enrich search_text.
+    """
+    result: list[RawSegmentData] = []
+    for seg in segments:
+        parts: list[str] = []
+        for p in seg.section_path:
+            t = p.get("title", "")
+            if t and t not in parts:
+                parts.append(t)
+        # Prepend doc_title if not already covered by section_path
+        if doc_title and doc_title not in parts:
+            parts.insert(0, doc_title)
+        breadcrumb = " > ".join(parts) if parts else ""
+
+        if not breadcrumb:
+            result.append(seg)
+            continue
+
+        meta = dict(seg.metadata_json)
+        meta["structural_context"] = breadcrumb
+        result.append(RawSegmentData(
+            document_key=seg.document_key,
+            segment_index=seg.segment_index,
+            block_type=seg.block_type,
+            semantic_role=seg.semantic_role,
+            section_path=seg.section_path,
+            section_title=seg.section_title,
+            raw_text=seg.raw_text,
+            normalized_text=seg.normalized_text,
+            content_hash=seg.content_hash,
+            normalized_hash=seg.normalized_hash,
+            token_count=seg.token_count,
+            structure_json=seg.structure_json,
+            source_offsets_json=seg.source_offsets_json,
+            entity_refs_json=seg.entity_refs_json,
+            metadata_json=meta,
+        ))
+    return result
 
 
 def _split_large_segments(

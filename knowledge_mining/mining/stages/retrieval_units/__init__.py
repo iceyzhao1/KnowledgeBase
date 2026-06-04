@@ -281,12 +281,6 @@ def build_retrieval_units(
         if assessment.get("is_navigation"):
             continue
 
-        # Skip non-substantive fragments (<20 tokens) — labels like "UPF", "**涉及NF**"
-        # These carry no retrieval value on their own; their section_title already indexes them.
-        seg_tc = seg.token_count if seg.token_count is not None else 0
-        if seg_tc < 20 and not assessment.get("is_substantive", True):
-            continue
-
         # 1. raw_text unit — enriched with section context + optional LLM context
         llm_context = context_map.get(seg_key, "")
         ctx_task_id = ctxer_task_ids.get(seg_key)
@@ -346,13 +340,18 @@ def _make_raw_text_unit(
     # Build enriched search text
     search_parts: list[str] = []
 
-    # Add section context if it adds information not in raw_text
-    section_titles = [
-        p.get("title", "") for p in seg.section_path if p.get("title")
-    ]
-    extra_titles = [t for t in section_titles if t and t not in seg.raw_text]
-    if extra_titles:
-        search_parts.append(" > ".join(extra_titles))
+    # Add structural breadcrumb from segment metadata (free context, no LLM)
+    structural_context = seg.metadata_json.get("structural_context", "")
+    if structural_context and structural_context not in seg.raw_text:
+        search_parts.append(structural_context)
+    else:
+        # Fallback: add section titles not already in raw_text
+        section_titles = [
+            p.get("title", "") for p in seg.section_path if p.get("title")
+        ]
+        extra_titles = [t for t in section_titles if t and t not in seg.raw_text]
+        if extra_titles:
+            search_parts.append(" > ".join(extra_titles))
 
     # Add LLM-generated context (Anthropic pattern: brief context prepended)
     if llm_context:

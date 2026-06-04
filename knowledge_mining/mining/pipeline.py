@@ -358,7 +358,7 @@ def segment_stage(ctx: DocumentContext, cfg: PipelineConfig) -> DocumentContext:
     seg = cfg.segmenter
     if seg is None or ctx.tree is None or ctx.profile is None:
         return ctx
-    segments = seg.segment(ctx.tree, ctx.profile)
+    segments = seg.segment(ctx.tree, ctx.profile, domain_profile=cfg.domain_profile)
     if not segments:
         return ctx.with_updates(segments=tuple(segments))
     from knowledge_mining.mining.stages.relations import build_seg_ids
