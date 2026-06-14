@@ -338,13 +338,36 @@ async def get_run_progress(run_id: str, request: Request) -> dict:
         current_stage_row = await current_stage_cur.fetchone()
         current_stage = current_stage_row["stage"] if current_stage_row else None
 
+        # 全局尾段（run_document_id IS NULL）：落图 + 建库/发布。这些阶段在所有文档
+        # 提交之后才整体跑一次，进度条必须把它们算进去——否则会出现"文档 100%、整轮
+        # 其实还在落图/构建"的误导性满格。
+        global_cur = await conn.execute(
+            "SELECT stage FROM mining_run_stage_events "
+            "WHERE run_id = %s AND run_document_id IS NULL AND status = 'completed' "
+            "GROUP BY stage",
+            [run_id],
+        )
+        global_done_stages = {r["stage"] for r in await global_cur.fetchall()}
+
     total = run["total_documents"] or 0
     completed = status_counts.get("committed", 0)
     failed = status_counts.get("failed", 0)
     skipped = status_counts.get("skipped", 0)
     processing = status_counts.get("processing", 0) + status_counts.get("pending", 0)
 
-    progress_percent = round((completed + failed + skipped) / total * 100, 1) if total else 0.0
+    # 进度 = 文档单元 + 全局尾段单元。每篇文档算 1 个单元，每个全局尾段也算 1 个单元，
+    # 这样"18 篇全提交"只到 ~82%，落图/建库/发布各自完成才继续往上爬到 100%。
+    GLOBAL_TAIL_STAGES = ("graph_write", "assemble_build", "validate_build", "publish_release")
+    done_global = sum(1 for s in GLOBAL_TAIL_STAGES if s in global_done_stages)
+    total_units = total + len(GLOBAL_TAIL_STAGES)
+    done_units = completed + failed + skipped + done_global
+    progress_percent = round(done_units / total_units * 100, 1) if total_units else 0.0
+    # 只有整轮真正结束（status=completed）才显示 100%；尾段还在跑、或尾段被跳过
+    # （如无 active 本体跳过落图）导致分子凑不满时，封顶在 99.9% 以免误导。
+    if run["status"] == "completed":
+        progress_percent = 100.0
+    elif progress_percent >= 100.0:
+        progress_percent = 99.9
 
     return {
         "run_id": run_id,
@@ -356,6 +379,7 @@ async def get_run_progress(run_id: str, request: Request) -> dict:
         "progress_percent": progress_percent,
         "current_stage": current_stage,
         "stage_summary": stage_summary,
+        "global_done_stages": sorted(global_done_stages),
     }
 
 
@@ -718,6 +742,127 @@ async def publish_run(run_id: str, request: Request, body: PublishRunRequest | N
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Publish failed: {e}")
+
+
+@router.get("/{run_id}/trace")
+async def get_run_trace(run_id: str, request: Request) -> dict:
+    """B7 挖掘过程透视：在常规 run 详情之上叠加本体/图谱视角的概览。
+
+    返回 run 状态（含 awaiting_review 的 subloop_stage）+ 两道检查点的待办数 +
+    该 run 落图的对象/边规模，供前端"透明前端"页一屏看清这次挖掘干了什么。
+    """
+    pool = request.app.state.pg_pool
+
+    async with pool.connection() as conn:
+        run_cur = await conn.execute(
+            "SELECT id, domain, status, subloop_stage, ontology_version_id, "
+            "total_documents, committed_count, new_count, updated_count, "
+            "failed_count, skipped_count, started_at, finished_at "
+            "FROM mining_runs WHERE id = %s", [run_id]
+        )
+        run = await run_cur.fetchone()
+        if not run:
+            raise HTTPException(404, f"Run {run_id} not found")
+        domain = run["domain"]
+
+        # 本体确认: 该领域待审本体候选数
+        cand_cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM ontology_candidates "
+            "WHERE domain_id = %s AND status = 'proposed'", [domain]
+        )
+        proposed_candidates = (await cand_cur.fetchone())["n"]
+
+        # 本体线 entity_extract 产出：逃生口候选数（source='escape_hatch'，含待审/已处理）
+        esc_cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM ontology_candidates "
+            "WHERE domain_id = %s AND source = 'escape_hatch'", [domain]
+        )
+        escape_hatch_candidates = (await esc_cur.fetchone())["n"]
+
+        # 实体确认: 该 run 处理快照下的待审 mention 数
+        ment_cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM asset_segment_entity_mentions m "
+            "JOIN mining_run_documents d ON d.document_snapshot_id = m.document_snapshot_id "
+            "WHERE d.run_id = %s AND m.resolve_status = 'pending'", [run_id]
+        )
+        pending_mentions = (await ment_cur.fetchone())["n"]
+
+        # 该 run 落图规模（对象/边按 domain 计；MVP 不按 snapshot 精确切分）
+        ent_cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM ontology_entities WHERE domain_id = %s", [domain]
+        )
+        entity_count = (await ent_cur.fetchone())["n"]
+        rel_cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM ontology_entity_relations WHERE domain_id = %s", [domain]
+        )
+        relation_count = (await rel_cur.fetchone())["n"]
+
+    return {
+        "run_id": run_id,
+        "domain": domain,
+        "status": run["status"],
+        "subloop_stage": run["subloop_stage"],
+        "ontology_version_id": run["ontology_version_id"],
+        "awaiting_review": run["status"] == "awaiting_review",
+        "active_gate": run["subloop_stage"] if run["status"] == "awaiting_review" else None,
+        "counts": {
+            "total_documents": run["total_documents"],
+            "committed": run["committed_count"],
+            "new": run["new_count"],
+            "updated": run["updated_count"],
+            "failed": run["failed_count"],
+            "skipped": run["skipped_count"],
+        },
+        "ontology_proposed_candidates": proposed_candidates,
+        "entity_pending_mentions": pending_mentions,
+        "entity_count": entity_count,
+        "relation_count": relation_count,
+        "escape_hatch_candidates": escape_hatch_candidates,
+    }
+
+
+class ResumeRunRequest(BaseModel):
+    domain: str | None = None
+    publish_on_partial_failure: bool = False
+
+
+@router.post("/{run_id}/resume")
+async def resume_run(run_id: str, request: Request, body: ResumeRunRequest | None = None) -> dict:
+    """B6/B7：人审提交后续跑一个 awaiting_review 的 run。
+
+    重新评估两道检查点：仍有待办 → 保持 awaiting_review 刷新 subloop_stage；
+    都清空 → 从 graph_write 之后续跑（建库 + 发布），不重抽文档。
+    """
+    db_config: MiningDbConfig = request.app.state.db_config
+
+    # Resolve domain: body > run record > fallback
+    resume_domain = body.domain if body and body.domain else None
+    if not resume_domain:
+        pool = request.app.state.pg_pool
+        async with pool.connection() as conn:
+            cur = await conn.execute("SELECT domain FROM mining_runs WHERE id = %s", [run_id])
+            row = await cur.fetchone()
+            if row and row["domain"]:
+                resume_domain = row["domain"]
+    if not resume_domain:
+        resume_domain = "cloud_core_network"
+
+    publish_partial = body.publish_on_partial_failure if body else False
+
+    import asyncio
+    try:
+        from knowledge_mining.mining.jobs.run import resume as resume_run_job
+        result = await asyncio.to_thread(
+            resume_run_job, run_id,
+            domain=resume_domain, db_config=db_config,
+            publish_on_partial_failure=publish_partial,
+        )
+        return result
+    except (ValueError, AssertionError) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error("Resume run failed: %s", e, exc_info=True)
+        raise HTTPException(500, f"Resume failed: {e}")
 
 
 def _utcnow() -> str:
