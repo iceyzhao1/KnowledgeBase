@@ -46,6 +46,34 @@
         {{ miningStore.currentRun.error_message }}
       </div>
 
+      <!-- 人审暂停横幅（B7）-->
+      <div v-if="miningStore.currentRun.status === 'awaiting_review'" class="run-detail__review-banner">
+        <div class="review-banner__main">
+          <div class="review-banner__icon">⏸</div>
+          <div class="review-banner__text">
+            <div class="review-banner__title">挖掘已暂停，等待人工评审</div>
+            <div class="review-banner__sub">
+              <template v-if="trace?.active_gate === 'ontology_review'">
+                本体确认：{{ trace?.ontology_proposed_candidates ?? 0 }} 条待审
+              </template>
+              <template v-else-if="trace?.active_gate === 'entity_review'">
+                实体确认：{{ trace?.entity_pending_mentions ?? 0 }} 条待确认
+              </template>
+              <template v-else>评审完成后可继续</template>
+            </div>
+          </div>
+        </div>
+        <div class="review-banner__actions">
+          <router-link v-if="trace?.active_gate === 'ontology_review'" :to="`/candidates/review?run_id=${props.runId}`">
+            <el-button type="primary">去评审本体候选</el-button>
+          </router-link>
+          <router-link v-else-if="trace?.active_gate === 'entity_review'" :to="`/mentions/review?run_id=${props.runId}`">
+            <el-button type="primary">去确认实体</el-button>
+          </router-link>
+          <el-button type="success" :loading="resuming" @click="handleResume">继续挖掘</el-button>
+        </div>
+      </div>
+
       <!-- Progress Overview Card -->
       <div v-if="miningStore.progress" class="run-detail__progress-card">
         <div class="progress-card__row">
@@ -75,7 +103,15 @@
       <!-- Pipeline Flow -->
       <div class="run-detail__section">
         <h4 class="section-label">Pipeline 阶段</h4>
-        <PipelineFlow :stage-events="miningStore.stages" />
+        <PipelineFlow :stage-events="miningStore.stages" :all-docs-settled="allDocsSettled" />
+        <div v-if="trace" class="ontology-line-stats">
+          <span class="ontology-line-stats__tag">本体线产出</span>
+          <span class="ontology-line-stats__item">实体 <b>{{ trace.entity_count }}</b></span>
+          <span class="ontology-line-stats__item">关系 <b>{{ trace.relation_count }}</b></span>
+          <router-link :to="`/candidates/review?run_id=${props.runId}`" class="ontology-line-stats__item ontology-line-stats__item--link">
+            逃生口候选 <b>{{ trace.escape_hatch_candidates ?? 0 }}</b>
+          </router-link>
+        </div>
       </div>
 
       <!-- Documents Table -->
@@ -151,17 +187,23 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ArrowLeft } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
+import { useMiningApi } from '@/api/mining'
+import type { RunTrace } from '@/types'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import PipelineFlow from '@/components/mining/PipelineFlow.vue'
 
 const props = defineProps<{ runId: string }>()
 const domainStore = useDomainStore()
 const miningStore = useMiningStore()
+const miningApi = useMiningApi()
 
 const activeDocFilter = ref('all')
 const initialLoading = ref(true)
+const trace = ref<RunTrace | null>(null)
+const resuming = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 // ── Formatters ──
@@ -169,6 +211,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 function statusLabel(status: string) {
   const map: Record<string, string> = {
     running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消', pending: '等待中',
+    awaiting_review: '待人审', interrupted: '已中断',
   }
   return map[status] || status
 }
@@ -187,7 +230,9 @@ function actionLabel(action: string) {
 
 function stageLabel(stage: string) {
   const map: Record<string, string> = {
-    parse: '解析', segment: '分段', enrich: '增强', discourse: '语篇分析',
+    parse: '解析', segment: '分段', enrich: '段落理解', entity_extract: '实体抽取',
+    resolve: '实体归一', entity_relations: '关系抽取', graph_write: '落图',
+    discourse: '语篇分析', discourse_relations: '语篇分析',
     retrieval_units: '检索单元构建', embedding: '向量化',
     db_write: '数据写入', commit_segments: '写入分段',
     build_relations: '写入关系', build_retrieval_units: '写入检索单元',
@@ -229,16 +274,27 @@ function formatMs(ms: number) {
 
 // ── Progress card ──
 
-const pctCompleted = computed(() => {
-  const p = miningStore.progress
-  if (!p || !p.total) return 0
-  return Math.round((p.completed / p.total) * 100)
-})
-
+// 红条（失败占比）仍按文档维度展示
 const pctFailed = computed(() => {
   const p = miningStore.progress
   if (!p || !p.total) return 0
   return Math.round((p.failed / p.total) * 100)
+})
+
+// 绿条 = 整轮总进度（含全局尾段，来自后端 progress_percent）减去失败占比，
+// 保证彩条宽度与右侧百分比数字口径一致（文档全提交≠100%）。
+const pctCompleted = computed(() => {
+  const p = miningStore.progress
+  if (!p) return 0
+  return Math.max(0, Math.round(p.progress_percent) - pctFailed.value)
+})
+
+// 全部文档是否已尘埃落定（无处理中、且已提交+失败+跳过≥总数）。
+// 供 PipelineFlow 判断：逐文档阶段的"孤儿 started 事件"不应再把阶段永久钉在运行中。
+const allDocsSettled = computed(() => {
+  const p = miningStore.progress
+  if (!p || !p.total) return false
+  return p.processing === 0 && (p.completed + p.failed + p.skipped) >= p.total
 })
 
 // ── Document filters ──
@@ -272,10 +328,34 @@ const filteredDocs = computed(() => {
 
 // ── Polling ──
 
+async function fetchTrace() {
+  try {
+    trace.value = await miningApi.getRunTrace(props.runId)
+  } catch { /* trace 是叠加视图，失败不影响主流程 */ }
+}
+
+async function handleResume() {
+  resuming.value = true
+  try {
+    const res = await miningApi.resumeRun(props.runId, domainStore.currentDomain)
+    if (res.status === 'awaiting_review') {
+      ElMessage.warning('仍有待审项，请先处理完再继续')
+    } else {
+      ElMessage.success('已继续挖掘')
+    }
+    await pollOnce(false)
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '继续失败')
+  } finally {
+    resuming.value = false
+  }
+}
+
 async function pollOnce(silent = false) {
   await Promise.all([
     miningStore.fetchProgress(props.runId),
     miningStore.fetchRunDetail(props.runId, { silent }),
+    fetchTrace(),
   ])
   initialLoading.value = false
   if (miningStore.currentRun?.status !== 'running' && pollTimer) {
@@ -383,6 +463,25 @@ watch(() => miningStore.documentsPage, () => {
   font-size: 13px;
   border-left: 3px solid var(--kb-danger);
 }
+
+/* 人审暂停横幅 */
+.run-detail__review-banner {
+  background: var(--kb-accent-soft);
+  border: 1px solid var(--kb-accent-medium);
+  border-left: 3px solid var(--kb-accent);
+  border-radius: var(--kb-radius-sm);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.review-banner__main { display: flex; align-items: center; gap: 12px; }
+.review-banner__icon { font-size: 22px; color: var(--kb-accent); }
+.review-banner__title { font-size: 14px; font-weight: 600; color: var(--kb-text-primary); }
+.review-banner__sub { font-size: 12px; color: var(--kb-text-secondary); margin-top: 2px; }
+.review-banner__actions { display: flex; gap: 8px; }
 
 /* Progress card */
 .run-detail__progress-card {
@@ -581,5 +680,48 @@ watch(() => miningStore.documentsPage, () => {
   padding-top: 12px;
   border-top: 1px solid var(--kb-border-light);
   margin-top: 4px;
+}
+
+.ontology-line-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--kb-border-light);
+}
+
+.ontology-line-stats__tag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--kb-accent);
+  background: var(--kb-accent-soft);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.ontology-line-stats__item {
+  font-size: 12px;
+  color: var(--kb-text-secondary);
+}
+
+.ontology-line-stats__item b {
+  color: var(--kb-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ontology-line-stats__item--link {
+  color: var(--kb-accent);
+  text-decoration: none;
+  transition: opacity var(--kb-duration) var(--kb-ease);
+}
+
+.ontology-line-stats__item--link:hover {
+  opacity: 0.7;
+}
+
+.ontology-line-stats__item--link b {
+  color: var(--kb-accent);
 }
 </style>
