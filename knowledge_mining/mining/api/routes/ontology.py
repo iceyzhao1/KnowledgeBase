@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from knowledge_mining.mining.infra.ontology_store import (
     OntologyStore, GraphStore, find_duplicate_type,
 )
+from knowledge_mining.mining.stages.graph_write import scoped_recompute
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,17 @@ class ResolveBatchRequest(BaseModel):
     entity_id: str | None = None  # merge 时所有提及并到同一对象
     domain: str | None = None
     node_type: str | None = None
+
+
+class MergeEntitiesRequest(BaseModel):
+    primary_id: str
+    drop_ids: list[str]
+    domain: str | None = None
+
+
+class RetypeEntityRequest(BaseModel):
+    new_type: str
+    domain: str | None = None
 
 
 # ── 本体版本 + 引种 ──
@@ -289,23 +301,17 @@ async def list_graph_entities(
     }
 
 
-@router.get("/graph/entities/{entity_id}/neighbors")
-async def get_entity_neighbors(
-    entity_id: str, request: Request, hops: int = Query(1, ge=1, le=3),
-) -> dict:
-    """邻域多跳：返回边 + 涉及的对象（节点），供前端力导向图直接渲染。"""
-    _, graph = _stores(request)
+async def _neighbors_payload(graph: GraphStore, entity_id: str, hops: int = 1) -> dict:
+    """构造邻域载荷（center_id/hops/nodes/edges），供端点复用。实体不存在时抛 404。"""
     center = await _run(graph.get_entity, entity_id)
     if not center:
         raise HTTPException(404, f"实体 {entity_id} 不存在")
     edges = await _run(graph.neighbors, entity_id, hops=hops)
-
     node_ids: set[str] = {entity_id}
     for e in edges:
         node_ids.add(e["head_entity_id"])
         node_ids.add(e["tail_entity_id"])
     nodes = await _run(graph.get_entities_by_ids, list(node_ids))
-
     return {
         "center_id": entity_id,
         "hops": hops,
@@ -321,6 +327,49 @@ async def get_entity_neighbors(
             for e in edges
         ],
     }
+
+
+@router.get("/graph/entities/{entity_id}/neighbors")
+async def get_entity_neighbors(
+    entity_id: str, request: Request, hops: int = Query(1, ge=1, le=3),
+) -> dict:
+    """邻域多跳：返回边 + 涉及的对象（节点），供前端力导向图直接渲染。"""
+    _, graph = _stores(request)
+    return await _neighbors_payload(graph, entity_id, hops)
+
+
+@router.post("/graph/entities/merge")
+async def merge_entities_route(body: MergeEntitiesRequest, request: Request) -> dict:
+    """合并实体：被并实体提及改指主实体 → scoped 重算受影响边。返回主实体新邻域。"""
+    _, graph = _stores(request)
+    domain = body.domain or _DEFAULT_DOMAIN
+    affected = await _run(graph.merge_entities, domain, body.primary_id, body.drop_ids)
+    edges = await _run(scoped_recompute, request.app.state.sync_pool, domain, affected)
+    neighbors = await _neighbors_payload(graph, body.primary_id, hops=1)
+    return {"primary_id": body.primary_id, "recomputed_edges": edges,
+            "affected": affected, "neighbors": neighbors}
+
+
+@router.post("/graph/entities/{entity_id}/retype")
+async def retype_entity_route(entity_id: str, body: RetypeEntityRequest, request: Request) -> dict:
+    """改类型：撞名自动并入 → scoped 重算。返回受影响实体新邻域。"""
+    _, graph = _stores(request)
+    domain = body.domain or _DEFAULT_DOMAIN
+    affected = await _run(graph.retype_entity, domain, entity_id, body.new_type)
+    edges = await _run(scoped_recompute, request.app.state.sync_pool, domain, affected)
+    primary = affected[0] if affected else entity_id
+    neighbors = await _neighbors_payload(graph, primary, hops=1)
+    return {"entity_id": entity_id, "primary_id": primary,
+            "recomputed_edges": edges, "neighbors": neighbors}
+
+
+@router.delete("/graph/entities/{entity_id}")
+async def delete_entity_route(entity_id: str, request: Request,
+                              domain: str = _DEFAULT_DOMAIN) -> dict:
+    """删除实体：删实体+提及+相连边（纯减法，无需重算）。"""
+    _, graph = _stores(request)
+    await _run(graph.delete_entity, domain, entity_id)
+    return {"entity_id": entity_id, "deleted": True}
 
 
 @router.get("/graph/evidence/{target_id}")
