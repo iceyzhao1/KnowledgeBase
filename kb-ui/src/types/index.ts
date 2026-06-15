@@ -404,6 +404,13 @@ export interface EntityNeighbors {
   edges: Array<{ id: string; head_entity_id: string; tail_entity_id: string; relation_type: string; confidence?: number | null }>
 }
 
+export interface EntityMutationResult {
+  recomputed_edges?: number
+  affected?: string[]
+  neighbors?: EntityNeighbors
+  primary_id?: string
+}
+
 export interface GraphEvidence {
   id: string
   domain_id: string

@@ -4,6 +4,7 @@ import type {
   UploadConfig, UploadResult,
   RunTrace, OntologyVersion, ActiveOntology, OntologyCandidate,
   PendingMention, GraphEntity, EntityNeighbors, GraphEvidence,
+  EntityMutationResult,
 } from '@/types'
 import type { PaginatedResponse } from '@/types'
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
@@ -285,6 +286,25 @@ export function useMiningApi() {
 
     async getEntityNeighbors(entityId: string, hops = 1): Promise<EntityNeighbors> {
       const { data } = await client.get(`/api/graph/entities/${entityId}/neighbors`, { params: { hops } })
+      return data
+    },
+
+    async mergeEntities(primaryId: string, dropIds: string[], domain?: string): Promise<EntityMutationResult> {
+      const { data } = await client.post('/api/graph/entities/merge', {
+        primary_id: primaryId, drop_ids: dropIds, domain,
+      })
+      return data
+    },
+    async retypeEntity(entityId: string, newType: string, domain?: string): Promise<EntityMutationResult> {
+      const { data } = await client.post(`/api/graph/entities/${entityId}/retype`, {
+        new_type: newType, domain,
+      })
+      return data
+    },
+    async deleteEntity(entityId: string, domain?: string): Promise<{ deleted: boolean }> {
+      const { data } = await client.delete(`/api/graph/entities/${entityId}`, {
+        params: domain ? { domain } : undefined,
+      })
       return data
     },
 
