@@ -94,21 +94,21 @@ function onChartClick(params: any) {
   else if (params.dataType === 'edge') emit('edge-click', params.data.id as string)
 }
 
+function onResize() { chart?.resize() }
+
 onMounted(() => {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
   chart.on('click', onChartClick)
   render()
+  window.addEventListener('resize', onResize)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
   chart?.dispose()
   chart = null
 })
 
 watch(() => [props.nodes, props.edges], render, { deep: true })
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('resize', () => chart?.resize())
-}
 </script>

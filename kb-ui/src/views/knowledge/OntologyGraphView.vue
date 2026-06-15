@@ -159,10 +159,15 @@ function layerLabel(l: string) {
 // ── 实时：轮询 + 重新聚焦刷新 ──
 let timer: ReturnType<typeof setInterval> | null = null
 function onFocus() { loadAll() }
+// 轮询时跳过：标签页不可见、或上一次请求还没回来（避免后台空跑 / 请求叠加）
+function pollTick() {
+  if (document.visibilityState !== 'visible' || loading.value) return
+  loadAll()
+}
 
 onMounted(() => {
   loadAll()
-  timer = setInterval(loadAll, 5000)
+  timer = setInterval(pollTick, 5000)
   window.addEventListener('focus', onFocus)
 })
 onUnmounted(() => {

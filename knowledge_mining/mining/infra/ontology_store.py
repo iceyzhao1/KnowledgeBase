@@ -946,55 +946,69 @@ class GraphStore(_DB):
         drops = [d for d in drop_ids if d and d != primary_id]
         if not drops:
             return [primary_id]
-        # 1) 提及改指主实体
-        self._execute(
-            "UPDATE asset_segment_entity_mentions SET resolved_entity_id = %s "
-            "WHERE resolved_entity_id = ANY(%s)",
-            (primary_id, drops),
-        )
-        # 2) 删被并实体的事实边与实体本身（提及已搬走）
-        self._execute(
-            "DELETE FROM ontology_entity_relations "
-            "WHERE head_entity_id = ANY(%s) OR tail_entity_id = ANY(%s)",
-            (drops, drops),
-        )
-        self._execute(
-            "DELETE FROM ontology_entities WHERE id = ANY(%s) AND domain_id = %s",
-            (drops, domain_id),
-        )
-        # 3) 重算主实体计数（提及行数 / 去重文档数）
-        self._recount_one(domain_id, primary_id)
+        # 多步写入放进同一事务，半路出错整体回滚，避免「提及搬走但实体没删」的半合并脏态。
+        with self.transaction():
+            # 1) 提及改指主实体
+            self._execute(
+                "UPDATE asset_segment_entity_mentions SET resolved_entity_id = %s "
+                "WHERE resolved_entity_id = ANY(%s)",
+                (primary_id, drops),
+            )
+            # 1b) 出处证据也改指主实体（保留 provenance，不留悬空 target_id）
+            self._execute(
+                "UPDATE ontology_evidence_nodes SET target_id = %s "
+                "WHERE target_kind = 'entity' AND target_id = ANY(%s)",
+                (primary_id, drops),
+            )
+            # 2) 删被并实体的事实边与实体本身（提及已搬走）
+            self._execute(
+                "DELETE FROM ontology_entity_relations "
+                "WHERE head_entity_id = ANY(%s) OR tail_entity_id = ANY(%s)",
+                (drops, drops),
+            )
+            self._execute(
+                "DELETE FROM ontology_entities WHERE id = ANY(%s) AND domain_id = %s",
+                (drops, domain_id),
+            )
+            # 3) 重算主实体计数（提及行数 / 去重文档数）
+            self._recount_one(domain_id, primary_id)
         return [primary_id]
 
     def retype_entity(self, domain_id: str, entity_id: str, new_type: str) -> list[str]:
         """改实体 node_type。若新 (node_type, canonical_name) 已有实体 → 并入它（撞唯一键即合并）。
         返回受影响实体 id 列表（普通改类型为 [entity_id]；撞名合并为 [target_id]）。
         """
-        ent = self._fetchone(
-            "SELECT canonical_name, node_type FROM ontology_entities WHERE id=%s AND domain_id=%s",
-            (entity_id, domain_id))
-        if ent is None or ent["node_type"] == new_type:
+        # 取数 + 撞名合并 + 改类型放进同一事务（嵌套调用 merge_entities 复用本事务，不另起 BEGIN）。
+        with self.transaction():
+            ent = self._fetchone(
+                "SELECT canonical_name, node_type FROM ontology_entities WHERE id=%s AND domain_id=%s",
+                (entity_id, domain_id))
+            if ent is None or ent["node_type"] == new_type:
+                return [entity_id]
+            existing = self._fetchone(
+                "SELECT id FROM ontology_entities "
+                "WHERE domain_id=%s AND node_type=%s AND canonical_name=%s",
+                (domain_id, new_type, ent["canonical_name"]))
+            if existing and existing["id"] != entity_id:
+                return self.merge_entities(domain_id, existing["id"], [entity_id])
+            self._execute(
+                "UPDATE ontology_entities SET node_type=%s WHERE id=%s AND domain_id=%s",
+                (new_type, entity_id, domain_id))
             return [entity_id]
-        existing = self._fetchone(
-            "SELECT id FROM ontology_entities "
-            "WHERE domain_id=%s AND node_type=%s AND canonical_name=%s",
-            (domain_id, new_type, ent["canonical_name"]))
-        if existing and existing["id"] != entity_id:
-            return self.merge_entities(domain_id, existing["id"], [entity_id])
-        self._execute(
-            "UPDATE ontology_entities SET node_type=%s WHERE id=%s AND domain_id=%s",
-            (new_type, entity_id, domain_id))
-        return [entity_id]
 
     def delete_entity(self, domain_id: str, entity_id: str) -> None:
-        """删除实体及其提及、相连事实边。纯减法——不改变其它实体对的共现，无需重算。"""
-        self._execute(
-            "DELETE FROM ontology_entity_relations "
-            "WHERE head_entity_id=%s OR tail_entity_id=%s", (entity_id, entity_id))
-        self._execute(
-            "DELETE FROM asset_segment_entity_mentions WHERE resolved_entity_id=%s", (entity_id,))
-        self._execute(
-            "DELETE FROM ontology_entities WHERE id=%s AND domain_id=%s", (entity_id, domain_id))
+        """删除实体及其提及、出处证据、相连事实边。纯减法——不改变其它实体对的共现，无需重算。"""
+        with self.transaction():
+            self._execute(
+                "DELETE FROM ontology_entity_relations "
+                "WHERE head_entity_id=%s OR tail_entity_id=%s", (entity_id, entity_id))
+            self._execute(
+                "DELETE FROM asset_segment_entity_mentions WHERE resolved_entity_id=%s", (entity_id,))
+            self._execute(
+                "DELETE FROM ontology_evidence_nodes "
+                "WHERE target_kind='entity' AND target_id=%s", (entity_id,))
+            self._execute(
+                "DELETE FROM ontology_entities WHERE id=%s AND domain_id=%s", (entity_id, domain_id))
 
     def _recount_one(self, domain_id: str, entity_id: str) -> None:
         """按已确认 mention 重算单个实体的 mention_count / document_count，set 置准。"""

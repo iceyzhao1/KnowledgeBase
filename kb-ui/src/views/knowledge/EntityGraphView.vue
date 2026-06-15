@@ -337,7 +337,9 @@ async function handleRetype() {
   if (!selectedRows.value[0] || !newType.value) return
   const entity = selectedRows.value[0]
   const typeLabel = newType.value === '__untyped__' ? '暂无类型' : newType.value
-  const apiType = newType.value === '__untyped__' ? '' : newType.value
+  // 直接传类型名；选「暂无类型」时传 __untyped__ 哨兵（不能传空串，否则把 node_type 写成 ''，
+  // 该实体会从「未定型 → 本体归纳」流程里丢失）。
+  const apiType = newType.value
 
   try {
     await ElMessageBox.confirm(
