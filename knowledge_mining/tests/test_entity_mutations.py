@@ -1,0 +1,77 @@
+"""实体 mutation（合并/改类型/删除）+ scoped 取数的 store 层测试。连真实 PG。"""
+from __future__ import annotations
+
+import uuid
+from knowledge_mining.mining.infra.ontology_store import OntologyStore, GraphStore
+
+DOMAIN = "cloud_core_network"
+
+
+def _nid() -> str:
+    return uuid.uuid4().hex
+
+
+def _seed_entity(gs: GraphStore, name: str, node_type: str = "concept_x") -> str:
+    eid = _nid()
+    gs._execute(
+        "INSERT INTO ontology_entities (id, domain_id, canonical_name, node_type, layer) "
+        "VALUES (%s, %s, %s, %s, 'concept')",
+        (eid, DOMAIN, name, node_type),
+    )
+    return eid
+
+
+def _seed_snapshot_segment(gs: GraphStore) -> tuple[str, str]:
+    """建一份最小的快照+段落，满足 mention 的外键。返回 (snapshot_id, segment_id)。
+
+    asset_segment_entity_mentions 只外键依赖 asset_document_snapshots 和 asset_raw_segments，
+    无需 asset_source_batches / asset_documents。
+    """
+    snap, seg = _nid(), _nid()
+    gs._execute(
+        "INSERT INTO asset_document_snapshots "
+        "(id, normalized_content_hash, raw_content_hash, mime_type, created_at) "
+        "VALUES (%s, %s, %s, 'text/plain', now()::text)",
+        (snap, snap + "_n", snap + "_r"),
+    )
+    gs._execute(
+        "INSERT INTO asset_raw_segments "
+        "(id, document_snapshot_id, segment_key, segment_index, "
+        " raw_text, normalized_text, content_hash, normalized_hash) "
+        "VALUES (%s, %s, %s, 0, %s, %s, %s, %s)",
+        (seg, snap, seg + "_k", "网络切片由 UPF 承载",
+         "网络切片由 UPF 承载", seg + "_c", seg + "_nh"),
+    )
+    return snap, seg
+
+
+def _seed_mention(gs: GraphStore, *, snap: str, seg: str, entity_id: str, name: str) -> None:
+    gs._execute(
+        "INSERT INTO asset_segment_entity_mentions "
+        "(id, document_snapshot_id, segment_id, node_type, mention_text, canonical_name, "
+        " resolved_entity_id, resolve_status) "
+        "VALUES (%s, %s, %s, 'concept_x', %s, %s, %s, 'human')",
+        (_nid(), snap, seg, name, name, entity_id),
+    )
+
+
+def test_mentions_around_entities_pulls_cooccurring(asset_db) -> None:
+    gs = GraphStore(asset_db.pool)
+    a = _seed_entity(gs, "网络切片")
+    b = _seed_entity(gs, "UPF")
+    c = _seed_entity(gs, "无关实体")
+    snap, seg = _seed_snapshot_segment(gs)
+    _seed_mention(gs, snap=snap, seg=seg, entity_id=a, name="网络切片")
+    _seed_mention(gs, snap=snap, seg=seg, entity_id=b, name="UPF")
+    # c 在另一段，不与 a 同段
+    snap2, seg2 = _seed_snapshot_segment(gs)
+    _seed_mention(gs, snap=snap2, seg=seg2, entity_id=c, name="无关实体")
+    asset_db.commit()
+
+    rows = gs.resolved_mentions_around_entities(DOMAIN, [a])
+    ids = {r["entity_id"] for r in rows}
+    assert a in ids and b in ids        # a 及其同段邻居 b 被带出
+    assert c not in ids                  # 不同段的 c 不在范围内
+    r0 = next(r for r in rows if r["entity_id"] == a)
+    assert set(r0.keys()) >= {"document_snapshot_id", "segment_id", "entity_id",
+                              "node_type", "canonical_name", "quote"}

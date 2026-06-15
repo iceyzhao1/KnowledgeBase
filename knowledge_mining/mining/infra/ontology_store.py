@@ -714,6 +714,36 @@ class GraphStore(_DB):
             (run_id,),
         )
 
+    def resolved_mentions_around_entities(
+        self, domain_id: str, entity_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """scoped 重算取数：给定一组实体，返回它们**所在段落**里的全部已确认 mention，
+        连到各自归一实体的当前 node_type/canonical_name + 段落原文。
+
+        形状与 resolved_mentions_for_run 一致（供 reaggregate_edges 直接消费）。
+        邻居实体由"同段共现"自然带出——这正是 NPMI 需要重算的范围。
+        """
+        if not entity_ids:
+            return []
+        return self._fetchall(
+            """SELECT m.document_snapshot_id, m.segment_id,
+                      e.id AS entity_id, e.node_type AS node_type,
+                      e.canonical_name AS canonical_name,
+                      s.raw_text AS quote
+               FROM asset_segment_entity_mentions m
+               JOIN ontology_entities e ON e.id = m.resolved_entity_id
+               LEFT JOIN asset_raw_segments s ON s.id = m.segment_id
+               WHERE e.domain_id = %s
+                 AND m.resolve_status IN ('auto', 'human')
+                 AND m.segment_id IN (
+                     SELECT DISTINCT m2.segment_id
+                     FROM asset_segment_entity_mentions m2
+                     WHERE m2.resolved_entity_id = ANY(%s)
+                 )
+               ORDER BY m.document_snapshot_id, m.segment_id""",
+            (domain_id, list(entity_ids)),
+        )
+
     def rebind_untyped_entities(
         self, domain_id: str, members: list[tuple[str, str]],
     ) -> int:
