@@ -986,6 +986,16 @@ class GraphStore(_DB):
             (new_type, entity_id, domain_id))
         return [entity_id]
 
+    def delete_entity(self, domain_id: str, entity_id: str) -> None:
+        """删除实体及其提及、相连事实边。纯减法——不改变其它实体对的共现，无需重算。"""
+        self._execute(
+            "DELETE FROM ontology_entity_relations "
+            "WHERE head_entity_id=%s OR tail_entity_id=%s", (entity_id, entity_id))
+        self._execute(
+            "DELETE FROM asset_segment_entity_mentions WHERE resolved_entity_id=%s", (entity_id,))
+        self._execute(
+            "DELETE FROM ontology_entities WHERE id=%s AND domain_id=%s", (entity_id, domain_id))
+
     def _recount_one(self, domain_id: str, entity_id: str) -> None:
         """按已确认 mention 重算单个实体的 mention_count / document_count，set 置准。"""
         self._execute(

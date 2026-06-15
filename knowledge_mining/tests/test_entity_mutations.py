@@ -151,3 +151,23 @@ def test_retype_entity_name_conflict_merges(asset_db) -> None:
         "SELECT resolved_entity_id FROM asset_segment_entity_mentions WHERE segment_id=%s", (seg,))
     assert all(r["resolved_entity_id"] == target for r in m)
     assert target in affected
+
+
+def test_delete_entity_removes_entity_mentions_edges(asset_db) -> None:
+    gs = GraphStore(asset_db.pool)
+    a, b = _seed_entity(gs, "垃圾实体"), _seed_entity(gs, "邻居")
+    snap, seg = _seed_snapshot_segment(gs)
+    _seed_mention(gs, snap=snap, seg=seg, entity_id=a, name="垃圾实体")
+    _seed_edge(gs, a, b)
+    asset_db.commit()
+
+    gs.delete_entity(DOMAIN, a)
+    asset_db.commit()
+    assert gs._fetchone("SELECT 1 FROM ontology_entities WHERE id=%s", (a,)) is None
+    assert gs._fetchall(
+        "SELECT 1 FROM asset_segment_entity_mentions WHERE resolved_entity_id=%s", (a,)) == []
+    assert gs._fetchall(
+        "SELECT 1 FROM ontology_entity_relations WHERE head_entity_id=%s OR tail_entity_id=%s",
+        (a, a)) == []
+    # 邻居还在
+    assert gs._fetchone("SELECT 1 FROM ontology_entities WHERE id=%s", (b,)) is not None
