@@ -889,6 +889,24 @@ class GraphStore(_DB):
             (domain_id, node_type, like, mention_text, limit),
         )
 
+    # -- scoped 重算辅助 --
+
+    def delete_edges_among(self, domain_id: str, entity_ids: list[str]) -> int:
+        """删除两端点都在 entity_ids 内的事实边（scoped 重算前清旧边，无损）。返回删除条数。"""
+        if not entity_ids:
+            return 0
+        ids = list(entity_ids)
+        row = self._fetchone(
+            """WITH del AS (
+                   DELETE FROM ontology_entity_relations
+                   WHERE domain_id = %s
+                     AND head_entity_id = ANY(%s) AND tail_entity_id = ANY(%s)
+                   RETURNING 1
+               ) SELECT count(*) AS n FROM del""",
+            (domain_id, ids, ids),
+        )
+        return int(row["n"]) if row else 0
+
     # -- 邻域遍历（递归 CTE，迁图时只换这里）--
 
     def neighbors(self, entity_id: str, *, hops: int = 1) -> list[dict[str, Any]]:

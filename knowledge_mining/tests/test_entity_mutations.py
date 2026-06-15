@@ -75,3 +75,29 @@ def test_mentions_around_entities_pulls_cooccurring(asset_db) -> None:
     r0 = next(r for r in rows if r["entity_id"] == a)
     assert set(r0.keys()) >= {"document_snapshot_id", "segment_id", "entity_id",
                               "node_type", "canonical_name", "quote"}
+
+
+def _seed_edge(gs: GraphStore, h: str, t: str) -> None:
+    gs._execute(
+        "INSERT INTO ontology_entity_relations "
+        "(id, domain_id, head_entity_id, tail_entity_id, relation_type, source_refs_json) "
+        "VALUES (%s, %s, %s, %s, 'rel', '[\"x\"]'::jsonb)",
+        (_nid(), DOMAIN, h, t),
+    )
+
+
+def test_delete_edges_among_only_inside_set(asset_db) -> None:
+    gs = GraphStore(asset_db.pool)
+    a, b, c = _seed_entity(gs, "A"), _seed_entity(gs, "B"), _seed_entity(gs, "C")
+    _seed_edge(gs, a, b)   # 两端都在 {a,b} → 应删
+    _seed_edge(gs, b, c)   # 一端 c 在集合外 → 应保留
+    asset_db.commit()
+
+    n = gs.delete_edges_among(DOMAIN, [a, b])
+    asset_db.commit()
+    assert n == 1
+    remain = gs._fetchall(
+        "SELECT head_entity_id, tail_entity_id FROM ontology_entity_relations WHERE domain_id=%s",
+        (DOMAIN,))
+    assert len(remain) == 1
+    assert {remain[0]["head_entity_id"], remain[0]["tail_entity_id"]} == {b, c}
