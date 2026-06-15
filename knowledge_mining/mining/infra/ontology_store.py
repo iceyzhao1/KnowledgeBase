@@ -966,6 +966,26 @@ class GraphStore(_DB):
         self._recount_one(domain_id, primary_id)
         return [primary_id]
 
+    def retype_entity(self, domain_id: str, entity_id: str, new_type: str) -> list[str]:
+        """改实体 node_type。若新 (node_type, canonical_name) 已有实体 → 并入它（撞唯一键即合并）。
+        返回受影响实体 id 列表（普通改类型为 [entity_id]；撞名合并为 [target_id]）。
+        """
+        ent = self._fetchone(
+            "SELECT canonical_name, node_type FROM ontology_entities WHERE id=%s AND domain_id=%s",
+            (entity_id, domain_id))
+        if ent is None or ent["node_type"] == new_type:
+            return [entity_id]
+        existing = self._fetchone(
+            "SELECT id FROM ontology_entities "
+            "WHERE domain_id=%s AND node_type=%s AND canonical_name=%s",
+            (domain_id, new_type, ent["canonical_name"]))
+        if existing and existing["id"] != entity_id:
+            return self.merge_entities(domain_id, existing["id"], [entity_id])
+        self._execute(
+            "UPDATE ontology_entities SET node_type=%s WHERE id=%s AND domain_id=%s",
+            (new_type, entity_id, domain_id))
+        return [entity_id]
+
     def _recount_one(self, domain_id: str, entity_id: str) -> None:
         """按已确认 mention 重算单个实体的 mention_count / document_count，set 置准。"""
         self._execute(

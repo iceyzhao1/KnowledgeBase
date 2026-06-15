@@ -122,3 +122,32 @@ def test_merge_entities_repoints_and_drops(asset_db) -> None:
     assert all(r["resolved_entity_id"] == prim for r in m)
     # 返回的受影响集合含主实体
     assert prim in affected
+
+
+def test_retype_entity_simple(asset_db) -> None:
+    gs = GraphStore(asset_db.pool)
+    eid = _seed_entity(gs, "S-NSSAI", node_type="__untyped__")
+    asset_db.commit()
+    affected = gs.retype_entity(DOMAIN, eid, "identifier")
+    asset_db.commit()
+    row = gs._fetchone("SELECT node_type FROM ontology_entities WHERE id=%s", (eid,))
+    assert row["node_type"] == "identifier"
+    assert eid in affected
+
+
+def test_retype_entity_name_conflict_merges(asset_db) -> None:
+    gs = GraphStore(asset_db.pool)
+    target = _seed_entity(gs, "网元", node_type="network_function")
+    moving = _seed_entity(gs, "网元", node_type="__untyped__")  # 同名不同类型
+    snap, seg = _seed_snapshot_segment(gs)
+    _seed_mention(gs, snap=snap, seg=seg, entity_id=moving, name="网元")
+    asset_db.commit()
+
+    affected = gs.retype_entity(DOMAIN, moving, "network_function")  # 撞 (network_function,网元)
+    asset_db.commit()
+    # moving 被并入 target
+    assert gs._fetchone("SELECT 1 FROM ontology_entities WHERE id=%s", (moving,)) is None
+    m = gs._fetchall(
+        "SELECT resolved_entity_id FROM asset_segment_entity_mentions WHERE segment_id=%s", (seg,))
+    assert all(r["resolved_entity_id"] == target for r in m)
+    assert target in affected
