@@ -934,3 +934,48 @@ class GraphStore(_DB):
                   OR r.tail_entity_id IN (SELECT entity_id FROM reach)""",
             (entity_id, hops),
         )
+
+    # -- 实体合并 --
+
+    def merge_entities(
+        self, domain_id: str, primary_id: str, drop_ids: list[str],
+    ) -> list[str]:
+        """把 drop_ids 的提及全部改指 primary_id，删除 drop 实体，重算 primary 计数。
+        返回受影响实体 id 列表（含 primary）——供 scoped_recompute 使用。
+        """
+        drops = [d for d in drop_ids if d and d != primary_id]
+        if not drops:
+            return [primary_id]
+        # 1) 提及改指主实体
+        self._execute(
+            "UPDATE asset_segment_entity_mentions SET resolved_entity_id = %s "
+            "WHERE resolved_entity_id = ANY(%s)",
+            (primary_id, drops),
+        )
+        # 2) 删被并实体的事实边与实体本身（提及已搬走）
+        self._execute(
+            "DELETE FROM ontology_entity_relations "
+            "WHERE head_entity_id = ANY(%s) OR tail_entity_id = ANY(%s)",
+            (drops, drops),
+        )
+        self._execute(
+            "DELETE FROM ontology_entities WHERE id = ANY(%s) AND domain_id = %s",
+            (drops, domain_id),
+        )
+        # 3) 重算主实体计数（提及行数 / 去重文档数）
+        self._recount_one(domain_id, primary_id)
+        return [primary_id]
+
+    def _recount_one(self, domain_id: str, entity_id: str) -> None:
+        """按已确认 mention 重算单个实体的 mention_count / document_count，set 置准。"""
+        self._execute(
+            """UPDATE ontology_entities e SET
+                   mention_count = sub.mc, document_count = sub.dc
+               FROM (
+                   SELECT count(*) AS mc, count(DISTINCT document_snapshot_id) AS dc
+                   FROM asset_segment_entity_mentions
+                   WHERE resolved_entity_id = %s AND resolve_status IN ('auto','human')
+               ) sub
+               WHERE e.id = %s AND e.domain_id = %s""",
+            (entity_id, entity_id, domain_id),
+        )

@@ -101,3 +101,24 @@ def test_delete_edges_among_only_inside_set(asset_db) -> None:
         (DOMAIN,))
     assert len(remain) == 1
     assert {remain[0]["head_entity_id"], remain[0]["tail_entity_id"]} == {b, c}
+
+
+def test_merge_entities_repoints_and_drops(asset_db) -> None:
+    gs = GraphStore(asset_db.pool)
+    prim = _seed_entity(gs, "UPF")
+    dup = _seed_entity(gs, "用户面功能")
+    snap, seg = _seed_snapshot_segment(gs)
+    _seed_mention(gs, snap=snap, seg=seg, entity_id=dup, name="用户面功能")
+    asset_db.commit()
+
+    affected = gs.merge_entities(DOMAIN, prim, [dup])
+    asset_db.commit()
+
+    # 被并实体没了
+    assert gs._fetchone("SELECT 1 FROM ontology_entities WHERE id=%s", (dup,)) is None
+    # 它的提及改指主实体
+    m = gs._fetchall(
+        "SELECT resolved_entity_id FROM asset_segment_entity_mentions WHERE segment_id=%s", (seg,))
+    assert all(r["resolved_entity_id"] == prim for r in m)
+    # 返回的受影响集合含主实体
+    assert prim in affected
