@@ -742,11 +742,26 @@ function flowStepReport(targetSel) {
       <div class="muted small" id="upliftLine" style="margin-top:6px"></div>
       <div id="upliftBody" style="margin-top:12px"></div>
     </div>
+    <div class="card" id="answerMatchCard">
+      <div class="card-h"><h3>答案对照（L2）</h3>
+        <span class="hint">焊死证据包，多个模型各整合答案 → 跟黄金答案比覆盖/准确/矛盾，出模型排行榜</span>
+        <span class="spacer"></span>
+        <button class="btn sm" id="amRunBtn">跑答案对照</button>
+        <button class="btn sm ghost" id="amRefreshBtn">刷新</button>
+      </div>
+      <div class="muted small" style="margin-top:8px">参赛选手（勾选要跑哪些模型）：</div>
+      <div id="amRoster" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:6px"></div>
+      <div class="muted small" id="amLine" style="margin-top:8px"></div>
+      <div id="amBody" style="margin-top:12px"></div>
+    </div>
     <div id="retCases"></div>`;
   loadCriteriaCard(); renderRetrievalCases(); loadProgress(true);
   const urb = $("#upliftRunBtn"); if (urb) urb.onclick = runUplift;
   const ufb = $("#upliftRefreshBtn"); if (ufb) ufb.onclick = loadUplift;
   loadUplift();
+  const amr = $("#amRunBtn"); if (amr) amr.onclick = runAnswerMatch;
+  const amf = $("#amRefreshBtn"); if (amf) amf.onclick = loadAnswerMatch;
+  loadRoster(); loadAnswerMatch();
 }
 
 /* —— L4 增量价值：跑两路对照 + 渲染 —— */
@@ -770,21 +785,45 @@ async function loadUplift() {
   }
 }
 
-async function runUplift() {
+/* L4 对照评测：SSE 订阅四阶段（闭卷作答/判分、用库作答/判分）逐题进度，
+   进度行实时显示「在哪路·哪阶段、第几/共几题、题目」，done 时直接渲染报告。 */
+function runUplift() {
   const btn = $("#upliftRunBtn"); if (!btn || !state.suiteId) return;
+  const cases = (state.suite && state.suite.cases) || [];
+  if (!cases.length) { toast("测试集为空，无题可跑", "err"); return; }
   const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span>跑批中`;
-  const line = $("#upliftLine"); if (line) line.textContent = "正在分别跑「闭卷」与「用库」两路并逐题判分，可能较久…";
-  try {
-    const r = await api(`/api/v1/suites/${state.suiteId}/uplift:run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-    renderUplift(r.metrics || {});
-    if (line) line.textContent = "";
-    toast("对照评测完成");
-  } catch (e) {
-    if (line) line.textContent = "";
-    toast("对照评测失败：" + e.message, "err");
-  } finally {
+  const line = $("#upliftLine");
+  const url = `/api/v1/suites/${state.suiteId}/uplift:run/stream`;
+
+  let total = cases.length, errN = 0;
+  const es = new EventSource(url);
+  const finish = (msg, isErr) => {
+    try { es.close(); } catch (e) {}
     btn.disabled = false; btn.innerHTML = old;
-  }
+    if (msg) { if (line) line.textContent = msg; toast(msg, isErr ? "err" : "ok"); }
+  };
+  es.onmessage = (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
+    if (d.event === "start") {
+      total = d.total || total;
+      if (line) line.innerHTML = `<span class="spin"></span> 准备跑两路对照（${total} 题 × 闭卷/用库 × 作答/判分）…`;
+    } else if (d.event === "case_start") {
+      const short = (d.question || "").slice(0, 28);
+      if (line) line.innerHTML = `<span class="spin"></span> ${esc(d.label || "")}　第 ${d.i + 1}/${d.n} 题：${esc(short)}…` + (errN ? `　(失败 ${errN})` : "");
+    } else if (d.event === "case_error") {
+      errN++;
+      console.warn("对照评测单题失败：", d.case_id, d.error);
+    } else if (d.event === "done") {
+      renderUplift(d.metrics || {});
+      finish(`对照评测完成` + (errN ? `（${errN} 题失败）` : ""));
+    } else if (d.event === "fatal") {
+      finish("对照评测失败：" + (d.error || "未知错误"), true);
+    }
+  };
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) return;
+    finish("对照评测连接中断：请确认 eval-api 已重启并在运行", true);
+  };
 }
 
 function renderUplift(m) {
@@ -832,6 +871,134 @@ function renderUplift(m) {
     + breakdown(m.by_difficulty, "按难度分层增量")
     + breakdown(m.by_type, "按题型分层增量")
     + caseTbl;
+}
+
+/* —— L2 答案对照：花名册勾选 + 跑多模型 + 排行榜下钻 —— */
+const amState = { roster: [] };
+
+async function loadRoster() {
+  const box = $("#amRoster"); if (!box) return;
+  try {
+    const r = await api(`/api/v1/eval-roster`);
+    amState.roster = r.roster || [];
+  } catch (e) { amState.roster = []; }
+  if (!amState.roster.length) { box.innerHTML = `<span class="muted small">没读到花名册</span>`; return; }
+  box.innerHTML = amState.roster.map((e) =>
+    `<label class="muted small" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">
+       <input type="checkbox" class="amPick" value="${esc(e.id)}" ${e.enabled ? "checked" : ""}>
+       ${esc(e.label)} <span class="muted" style="opacity:.6">(${esc(e.channel)})</span>
+     </label>`).join("");
+}
+
+function amSelectedIds() {
+  return Array.from(document.querySelectorAll(".amPick:checked")).map((c) => c.value);
+}
+
+async function loadAnswerMatch() {
+  const body = $("#amBody"); if (!body || !state.suiteId) return;
+  body.innerHTML = `<div class="muted small">加载中…</div>`;
+  try {
+    const r = await api(`/api/v1/suites/${state.suiteId}/answer-match`);
+    renderAnswerMatch(r.metrics || {});
+  } catch (e) {
+    body.innerHTML = `<div class="empty"><div class="h">还没有答案对照结果</div>
+      <div class="muted">勾选要参赛的模型，点「跑答案对照」让它们各基于证据包答一版，再跟黄金答案逐题比。</div></div>`;
+  }
+}
+
+/* L2 答案对照：SSE 订阅「每个模型一段作答/对照判」逐题进度，done 时渲染排行榜。 */
+function runAnswerMatch() {
+  const btn = $("#amRunBtn"); if (!btn || !state.suiteId) return;
+  const cases = (state.suite && state.suite.cases) || [];
+  if (!cases.length) { toast("测试集为空，无题可跑", "err"); return; }
+  const ids = amSelectedIds();
+  if (!ids.length) { toast("先勾选至少一个参赛模型", "err"); return; }
+  const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span>跑批中`;
+  const line = $("#amLine");
+  const url = `/api/v1/suites/${state.suiteId}/answer-match:run/stream?models=${encodeURIComponent(ids.join(","))}`;
+
+  let errN = 0;
+  const es = new EventSource(url);
+  const finish = (msg, isErr) => {
+    try { es.close(); } catch (e) {}
+    btn.disabled = false; btn.innerHTML = old;
+    if (msg) { if (line) line.textContent = msg; toast(msg, isErr ? "err" : "ok"); }
+  };
+  es.onmessage = (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
+    if (d.event === "start") {
+      if (line) line.innerHTML = `<span class="spin"></span> 准备跑 ${(d.models || []).length} 个模型 × ${d.total} 题（作答 → 对照判）…`;
+    } else if (d.event === "case_start") {
+      const short = (d.question || "").slice(0, 28);
+      if (line) line.innerHTML = `<span class="spin"></span> ${esc(d.label || "")}　第 ${d.i + 1}/${d.n} 题：${esc(short)}…` + (errN ? `　(失败 ${errN})` : "");
+    } else if (d.event === "case_error") {
+      errN++;
+      console.warn("答案对照单题失败：", d.case_id, d.error);
+    } else if (d.event === "done") {
+      renderAnswerMatch(d.metrics || {});
+      finish(`答案对照完成` + (errN ? `（${errN} 题失败）` : ""));
+    } else if (d.event === "fatal") {
+      finish("答案对照失败：" + (d.error || "未知错误"), true);
+    }
+  };
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) return;
+    finish("答案对照连接中断：请确认 eval-api 已重启并在运行", true);
+  };
+}
+
+function renderAnswerMatch(m) {
+  const body = $("#amBody"); if (!body) return;
+  const models = (m && m.models) || [];
+  if (!models.length) { body.innerHTML = `<div class="muted small">尚无对照结果。</div>`; return; }
+  const pctv = (v) => `${((v || 0) * 100).toFixed(1)}%`;
+
+  const rows = models.map((mo, idx) => {
+    const hard = mo.hard_errors
+      ? `<span class="badge warn">${mo.hard_errors}</span>` : `<span class="muted">0</span>`;
+    return `<tr class="amRow" data-i="${idx}" style="cursor:pointer">
+      <td class="r">${idx + 1}</td>
+      <td>${esc(mo.label)} <span class="muted" style="opacity:.6">${esc(mo.model || "")}</span></td>
+      <td class="r"><b>${pctv(mo.f1)}</b></td>
+      <td class="r">${pctv(mo.coverage)}</td>
+      <td class="r">${pctv(mo.precision)}</td>
+      <td class="r">${hard}</td>
+      <td class="r">${mo.tokens || 0}</td>
+      <td class="r">${((mo.elapsed_ms || 0) / 1000).toFixed(1)}s</td>
+    </tr>
+    <tr class="amDetail" data-i="${idx}" style="display:none"><td colspan="8">
+      ${renderAmCases(mo.cases || [])}
+    </td></tr>`;
+  }).join("");
+
+  body.innerHTML = `<div class="muted small" style="margin-bottom:6px">模型排行榜（按综合分 F1 降序，点行展开逐题）</div>
+    <table class="tbl"><thead><tr>
+      <th class="r">#</th><th>模型</th><th class="r">综合分</th><th class="r">覆盖度</th>
+      <th class="r">准确度</th><th class="r">硬伤</th><th class="r">token</th><th class="r">时长</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+
+  body.querySelectorAll(".amRow").forEach((tr) => {
+    tr.onclick = () => {
+      const det = body.querySelector(`.amDetail[data-i="${tr.dataset.i}"]`);
+      if (det) det.style.display = det.style.display === "none" ? "" : "none";
+    };
+  });
+}
+
+function renderAmCases(cases) {
+  if (!cases.length) return `<div class="muted small">无逐题明细。</div>`;
+  const pctv = (v) => `${((v || 0) * 100).toFixed(0)}%`;
+  const chips = (arr, cls) => (arr || []).length
+    ? (arr || []).map((x) => `<span class="badge ${cls}" style="margin:1px">${esc(x)}</span>`).join("") : "";
+  return cases.map((c) => `<div style="padding:8px 0;border-top:1px solid var(--line)">
+    <div class="small"><b>${esc(c.question || c.case_id)}</b></div>
+    <div class="muted small" style="margin:4px 0">答：${esc((c.answer || "").slice(0, 200))}</div>
+    <div class="small">覆盖 ${pctv(c.coverage)}　准确 ${pctv(c.precision)}　综合 ${pctv(c.f1)}
+      ${c.has_hard_error ? `<span class="badge warn">含矛盾硬伤</span>` : ""}</div>
+    ${(c.missed_points || []).length ? `<div class="small" style="margin-top:3px">遗漏要点：${chips(c.missed_points, "warn")}</div>` : ""}
+    ${(c.extra_claims || []).length ? `<div class="small" style="margin-top:3px">多余论断：${chips(c.extra_claims, "muted")}</div>` : ""}
+    ${(c.contradictions || []).length ? `<div class="small" style="margin-top:3px">矛盾(硬伤)：${chips(c.contradictions, "warn")}</div>` : ""}
+  </div>`).join("");
 }
 
 function docSourceAi() {

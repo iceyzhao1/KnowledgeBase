@@ -88,6 +88,7 @@ from .db_source import (
 )
 from .importer import ImportError_, parse_retrieval_file, parse_suite_file
 from .llm_client import LLMClient
+from .roster import load_roster
 from .metrics import ReportMetrics, compute_metrics
 from .parser import UnsupportedDocument, parse_document
 from .report import (
@@ -583,6 +584,7 @@ def create_app(
     store = store or create_store(config)
     client = client or LLMClient(config.eval_llm_url, timeout=config.request_timeout)
     scoring = ScoringParams.from_config(config)
+    roster = load_roster(config.roster_env)  # L2 参赛模型花名册（配置驱动）
     app = FastAPI(title="eval-api", version="2.0.0")
 
     # --- projects ---
@@ -1013,6 +1015,36 @@ def create_app(
             raise HTTPException(400, str(exc))
         return {"run_id": summary.run_id, "metrics": summary.metrics}
 
+    @app.get("/api/v1/suites/{sid}/uplift:run/stream")
+    def run_uplift_stream(sid: str):
+        """跑两路对照 + SSE 实时进度：四阶段（闭卷作答/判分、用库作答/判分）逐题推进度。
+
+        前端用 ``EventSource`` 订阅，事件 ``event`` 取值 ``start`` / ``case_start`` /
+        ``case_done`` / ``case_error`` / ``done``（``done`` 带 ``metrics``，可直接渲染报告）。
+        阈值参数走默认（高级项，前端隐藏）。
+        """
+        suite = store.get_suite(sid)
+        if suite is None:
+            raise HTTPException(404, "suite not found")
+        if not suite.cases:
+            raise HTTPException(400, "测试集为空，无题可跑")
+
+        def _sse(obj: dict) -> str:
+            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+        def gen():
+            try:
+                for ev in orchestrator.iter_value_uplift(store, client, config, suite):
+                    yield _sse(ev)
+            except Exception as exc:  # noqa: BLE001 - 把致命错误作为事件发回前端
+                yield _sse({"event": "fatal", "error": str(exc)})
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/api/v1/suites/{sid}/uplift")
     def get_uplift(sid: str):
         """读该测试集最近一次增量价值快照（没有则 404）。"""
@@ -1021,6 +1053,65 @@ def create_app(
             summary = store.latest_run_summary(sid, layer="value")
         if summary is None:
             raise HTTPException(404, "尚无增量价值评测结果")
+        return {"run_id": summary.run_id, "metrics": summary.metrics}
+
+    # --- L2 答案对照层：多模型 × 黄金答案 ---
+    @app.get("/api/v1/eval-roster")
+    def eval_roster():
+        """读参赛模型花名册：前端据此渲染「可勾选哪些模型参赛」。"""
+        return {
+            "roster": [
+                {
+                    "id": e.id, "label": e.label, "channel": e.channel,
+                    "model": e.model, "enabled": e.enabled,
+                }
+                for e in roster
+            ]
+        }
+
+    @app.get("/api/v1/suites/{sid}/answer-match:run/stream")
+    def run_answer_match_stream(sid: str, models: str = "", cache: int = 1):
+        """跑答案对照 + SSE 实时进度：每个模型一段「作答 → 对照判」，逐题推进度。
+
+        ``models`` 为前端勾选的模型 id（逗号分隔），空=花名册里默认参赛的那批。
+        ``cache=1`` 命中上次快照里没变的(模型,题)直接复用；``cache=0`` 强制全跑。
+        前端用 ``EventSource`` 订阅，事件同 uplift（start/case_*/done，done 带 metrics）。
+        """
+        suite = store.get_suite(sid)
+        if suite is None:
+            raise HTTPException(404, "suite not found")
+        if not suite.cases:
+            raise HTTPException(400, "测试集为空，无题可跑")
+
+        selected = [m.strip() for m in models.split(",") if m.strip()] or None
+
+        def _sse(obj: dict) -> str:
+            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+        def gen():
+            try:
+                for ev in orchestrator.iter_answer_match(
+                    store, client, config, suite,
+                    roster=roster, selected_ids=selected, use_cache=bool(cache),
+                ):
+                    yield _sse(ev)
+            except Exception as exc:  # noqa: BLE001 - 把致命错误作为事件发回前端
+                yield _sse({"event": "fatal", "error": str(exc)})
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get("/api/v1/suites/{sid}/answer-match")
+    def get_answer_match(sid: str):
+        """读该测试集最近一次答案对照快照（没有则 404）。"""
+        summary = store.get_run_summary(f"ans_{sid}")
+        if summary is None:
+            summary = store.latest_run_summary(sid, layer="answer_match")
+        if summary is None:
+            raise HTTPException(404, "尚无答案对照评测结果")
         return {"run_id": summary.run_id, "metrics": summary.metrics}
 
     # --- judging ---

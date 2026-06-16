@@ -627,6 +627,13 @@ def test_serves_eval_web_spa(client):
     # Claude 自动跑批前端接线（SSE 实时进度：EventSource 订阅 agent:run/stream）
     assert "agent:run/stream" in app_js.text
     assert "EventSource" in app_js.text
+    # L4 对照评测也走 SSE 进度条（EventSource 订阅 uplift:run/stream）
+    assert "uplift:run/stream" in app_js.text
+    # L2 答案对照前端接线：花名册勾选 + SSE 跑多模型 + 读最近快照
+    assert "eval-roster" in app_js.text
+    assert "answer-match:run/stream" in app_js.text
+    assert "runAnswerMatch" in app_js.text
+    assert "renderAnswerMatch" in app_js.text
     # Phase 0 评测档案：测试集/评估档案从服务端读（localStorage 退为离线兜底）
     assert "syncSuitesFromServer" in app_js.text
     assert "syncRunsFromServer" in app_js.text
@@ -1368,6 +1375,71 @@ def test_run_value_uplift_orchestration(tmp_path):
     assert store.latest_run_summary("s_up", layer="value") is not None
 
 
+def _uplift_stream_client(tmp_path):
+    """eval-api 测试客户端：闭卷路低分、用库路高分（duck-typed eval-llm 经 poster）。"""
+
+    def poster(path, payload):
+        if path == "/run-agent":
+            route = payload.get("route", "kb")
+            return {
+                "answer": f"[{route}] {payload.get('question')}",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                "num_turns": 1, "tool_calls": [], "retrieved_items": [],
+            }
+        if path == "/judge":
+            ans = payload.get("agent_answer", "")
+            score = 0.9 if ans.startswith("[kb]") else 0.2
+            return {
+                "score": score, "verdict": "correct" if score >= 0.8 else "incorrect",
+                "rationale": "", "covered_points": [], "missed_points": [], "usage": {},
+            }
+        if path == "/health":
+            return {"ok": True}
+        return {}
+
+    api_config = ApiConfig(workspace_dir=tmp_path / "workspace", per_type=1)
+    store = Store(api_config)
+    app = create_app(config=api_config, store=store, client=LLMClient(poster=poster))
+    return TestClient(app), store
+
+
+def test_uplift_run_stream_emits_progress_and_persists(tmp_path):
+    """SSE 对照评测：四阶段逐题推进度，done 带 metrics，两路 EvalRun + 快照落库。"""
+    tc, store = _uplift_stream_client(tmp_path)
+    suite = _uplift_suite()
+    store.save_suite(suite)
+    sid = suite.suite_id
+
+    r = tc.get(f"/api/v1/suites/{sid}/uplift:run/stream")
+    assert r.status_code == 200
+    assert "text/event-stream" in r.headers["content-type"]
+
+    events = _parse_sse(r.text)
+    kinds = [e["event"] for e in events]
+    assert kinds[0] == "start" and kinds[-1] == "done"
+    assert events[0]["total"] == 3
+
+    # 四阶段（闭卷/用库 × 作答/判分）都出现，且每阶段逐题
+    stages = {e.get("stage") for e in events if e["event"] == "case_start"}
+    assert stages == {"closed_book_answer", "closed_book_judge", "kb_answer", "kb_judge"}
+    cb_answer = [e for e in events if e.get("stage") == "closed_book_answer" and e["event"] == "case_done"]
+    assert len(cb_answer) == 3
+
+    done = events[-1]
+    assert done["metrics"]["n"] == 3
+    assert done["metrics"]["headline"]["net_uplift"] > 0.5
+
+    # 两路 EvalRun（稳定 id）+ 增量快照都落库
+    assert store.get_run("run_cb_s_up") is not None
+    assert store.get_run("run_kb_s_up") is not None
+    assert store.get_run_summary("uplift_s_up") is not None
+
+
+def test_uplift_run_stream_404_when_suite_missing(tmp_path):
+    tc, _ = _uplift_stream_client(tmp_path)
+    assert tc.get("/api/v1/suites/suite_nope/uplift:run/stream").status_code == 404
+
+
 # --- 评估工作台改造（概念统一 / 黄金退役 / 删项目 / 导入命名 / 编辑）---------
 
 _IMPORT_YAML = (
@@ -1469,3 +1541,234 @@ def test_confirmed_gold_facts_ignores_gate(tmp_path):
         question=case.question, status="draft",
     ))
     assert orchestrator.confirmed_gold_facts(store, case) == ["事实X"]
+
+
+# --- L2 答案对照层：花名册（可配 + 可选） --------------------------------
+
+
+def test_roster_defaults_and_enabled_filter():
+    from runtime_eval.eval_api.roster import (
+        RosterEntry, load_roster, enabled_roster, select_roster,
+    )
+
+    # 默认花名册 = claude_cli 三档，全部参赛
+    default = load_roster(None)
+    assert [e.id for e in default] == ["claude-haiku", "claude-sonnet", "claude-opus"]
+    assert all(e.channel == "claude_cli" for e in default)
+    assert all(e.enabled for e in default)
+
+    # 显式 JSON 覆盖：claude 一档 + 一个 openai 兼容厂商（deepseek），其中一档停赛
+    raw = (
+        '[{"id":"a","label":"A","channel":"claude_cli","model":"sonnet","enabled":true},'
+        '{"id":"ds","label":"DeepSeek","channel":"deepseek","model":"deepseek-chat","enabled":false}]'
+    )
+    parsed = load_roster(raw)
+    assert [e.id for e in parsed] == ["a", "ds"]
+    assert parsed[1].channel == "deepseek"
+    assert [e.id for e in enabled_roster(parsed)] == ["a"]
+
+    # 前端勾选：传 id 列表 → 只跑勾上的；空 → 回退默认参赛
+    assert [e.id for e in select_roster(parsed, ["ds"])] == ["ds"]
+    assert [e.id for e in select_roster(parsed, [])] == ["a"]
+
+
+def test_load_roster_rejects_bad_json():
+    import pytest as _pytest
+    from runtime_eval.eval_api.roster import load_roster
+
+    with _pytest.raises(ValueError):
+        load_roster("{not json]")
+    with _pytest.raises(ValueError):
+        load_roster('{"id":"x"}')  # 不是数组
+
+
+# --- L2 答案对照层：编排 / 门禁 / 缓存 / SSE / 花名册端点 -----------------------
+
+
+class _FakeAnswerClient:
+    """duck-typed LLMClient：按花名册 model 标签给好/坏分，便于验证排行榜与缓存。
+
+    good 档：覆盖=准确=F1=1、无硬伤；bad 档：覆盖=准确=F1=0.5、有矛盾硬伤。
+    记录 answer/judge 调用次数，用于断言缓存命中时不再调模型。
+    """
+
+    def __init__(self):
+        self.answer_calls = 0
+        self.judge_calls = 0
+
+    def answer(self, *, question, evidence, channel="claude_cli", model=""):
+        self.answer_calls += 1
+        return {
+            "answer": f"[{model}] {question} :: {'|'.join(evidence)}",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+    def judge_answer_match(self, *, question, expected_answer, key_points, answer):
+        self.judge_calls += 1
+        good = "[good]" in answer
+        cov = 1.0 if good else 0.5
+        prec = 1.0 if good else 0.5
+        return {
+            "coverage": cov, "precision": prec, "f1": (2 * cov * prec / (cov + prec)),
+            "covered_points": list(key_points) if good else key_points[:1],
+            "missed_points": [] if good else key_points[1:],
+            "correct_claims": ["c"], "extra_claims": [],
+            "contradictions": [] if good else ["与黄金矛盾"],
+            "has_hard_error": (not good),
+            "rationale": "", "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+
+def _answer_match_fixtures(tmp_path, *, with_retrieval=True):
+    from runtime_eval.shared.models import (
+        QuestionType, RetrievalSet, RetrievedItem, SourceRef, TestCase, TestSuite,
+    )
+
+    config = ApiConfig(workspace_dir=tmp_path / "ws")
+    store = Store(config)
+    suite = TestSuite(
+        suite_id="s_ans", project_id="p_ans",
+        cases=[
+            TestCase(
+                id=f"c{i}", question=f"q{i}", question_type=QuestionType.FACTOID,
+                expected_answer="x", key_points=["k1", "k2"], source=SourceRef(doc="d"),
+            )
+            for i in range(2)
+        ],
+    )
+    store.save_suite(suite)
+    if with_retrieval:
+        rset = RetrievalSet(suite_id="s_ans", agent_name="serving")
+        for case in suite.cases:
+            rset.items[case.id] = [RetrievedItem(rank=1, text=f"证据-{case.id}")]
+        store.save_retrieval_set(rset)
+    return config, store, suite
+
+
+def _good_bad_roster():
+    from runtime_eval.eval_api.roster import RosterEntry
+
+    return [
+        RosterEntry(id="bad", label="Bad", channel="claude_cli", model="bad"),
+        RosterEntry(id="good", label="Good", channel="claude_cli", model="good"),
+    ]
+
+
+def test_run_answer_match_leaderboard_and_persist(tmp_path):
+    from runtime_eval.eval_api import orchestrator
+
+    config, store, suite = _answer_match_fixtures(tmp_path)
+    fake = _FakeAnswerClient()
+    summary = orchestrator.run_answer_match(
+        store, fake, config, suite, roster=_good_bad_roster(),
+    )
+
+    assert summary.layer == "answer_match" and summary.kind == "multi_model"
+    assert summary.run_id == "ans_s_ans"
+    models = summary.metrics["models"]
+    # 排行榜按综合分 F1 降序：good 在前
+    assert [m["id"] for m in models] == ["good", "bad"]
+    assert models[0]["f1"] == 1.0 and models[0]["hard_errors"] == 0
+    assert models[1]["f1"] == 0.5 and models[1]["hard_errors"] == 2
+    # 逐题明细留底（含答案 + 缓存指纹）
+    assert len(models[0]["cases"]) == 2
+    assert models[0]["cases"][0]["evidence_fp"] and models[0]["cases"][0]["question_fp"]
+    # 两模型 × 两题 → 各 2 次作答/判分
+    assert fake.answer_calls == 4 and fake.judge_calls == 4
+    assert store.get_run_summary("ans_s_ans") is not None
+
+
+def test_answer_match_gate_blocks_missing_evidence(tmp_path):
+    import pytest as _pytest
+    from runtime_eval.eval_api import orchestrator
+
+    config, store, suite = _answer_match_fixtures(tmp_path, with_retrieval=False)
+    fake = _FakeAnswerClient()
+    with _pytest.raises(RuntimeError) as exc:
+        orchestrator.run_answer_match(store, fake, config, suite, roster=_good_bad_roster())
+    assert "证据" in str(exc.value)
+    assert fake.answer_calls == 0  # 门禁先拦，不调模型
+
+
+def test_answer_match_cache_reuses_prior_snapshot(tmp_path):
+    from runtime_eval.eval_api import orchestrator
+
+    config, store, suite = _answer_match_fixtures(tmp_path)
+    roster = _good_bad_roster()
+
+    first = _FakeAnswerClient()
+    orchestrator.run_answer_match(store, first, config, suite, roster=roster)
+    assert first.answer_calls == 4
+
+    # 二次跑：证据/题目没变 → 缓存全命中，不再调模型
+    second = _FakeAnswerClient()
+    summary = orchestrator.run_answer_match(store, second, config, suite, roster=roster)
+    assert second.answer_calls == 0 and second.judge_calls == 0
+    # 结果与首次一致（仍能算出排行榜）
+    assert [m["id"] for m in summary.metrics["models"]] == ["good", "bad"]
+
+    # cache=False 强制重跑
+    third = _FakeAnswerClient()
+    orchestrator.run_answer_match(store, third, config, suite, roster=roster, use_cache=False)
+    assert third.answer_calls == 4
+
+
+def _answer_match_stream_client(tmp_path):
+    """eval-api 测试客户端：经 poster 驱动 in-process eval-llm（mock provider）跑答案对照。"""
+    from runtime_eval.eval_llm.app import create_app as create_llm_app
+    from runtime_eval.eval_llm.config import LLMConfig
+    from runtime_eval.eval_llm.providers.mock import MockProvider
+
+    llm_app = create_llm_app(
+        config=LLMConfig(provider="mock"), provider=MockProvider(LLMConfig(provider="mock"))
+    )
+    llm_tc = TestClient(llm_app)
+
+    def poster(path, payload):
+        return llm_tc.post(path, json=payload).json()
+
+    api_config = ApiConfig(workspace_dir=tmp_path / "ws")
+    store = Store(api_config)
+    app = create_app(config=api_config, store=store, client=LLMClient(poster=poster))
+    return TestClient(app), store
+
+
+def test_eval_roster_endpoint_lists_default_claude_tiers(tmp_path):
+    tc, _ = _answer_match_stream_client(tmp_path)
+    r = tc.get("/api/v1/eval-roster")
+    assert r.status_code == 200
+    ids = [e["id"] for e in r.json()["roster"]]
+    assert ids == ["claude-haiku", "claude-sonnet", "claude-opus"]
+
+
+def test_answer_match_run_stream_emits_progress_and_persists(tmp_path):
+    from runtime_eval.shared.models import RetrievalSet, RetrievedItem
+
+    tc, store = _answer_match_stream_client(tmp_path)
+    _, store2, suite = _answer_match_fixtures(tmp_path)
+    # 用 stream client 自己的 store 存一份带证据的 suite
+    store.save_suite(suite)
+    rset = RetrievalSet(suite_id=suite.suite_id, agent_name="serving")
+    for case in suite.cases:
+        rset.items[case.id] = [RetrievedItem(rank=1, text=f"证据-{case.id}")]
+    store.save_retrieval_set(rset)
+
+    r = tc.get(f"/api/v1/suites/{suite.suite_id}/answer-match:run/stream?models=claude-haiku")
+    assert r.status_code == 200
+    assert "text/event-stream" in r.headers["content-type"]
+    events = _parse_sse(r.text)
+    kinds = [e["event"] for e in events]
+    assert kinds[0] == "start" and kinds[-1] == "done"
+    assert events[0]["models"] == ["claude-haiku"]  # 只跑勾选的一档
+    done = events[-1]
+    assert [m["id"] for m in done["metrics"]["models"]] == ["claude-haiku"]
+
+    # 读最近快照端点
+    got = tc.get(f"/api/v1/suites/{suite.suite_id}/answer-match")
+    assert got.status_code == 200
+    assert got.json()["run_id"] == f"ans_{suite.suite_id}"
+
+
+def test_answer_match_run_stream_404_when_suite_missing(tmp_path):
+    tc, _ = _answer_match_stream_client(tmp_path)
+    assert tc.get("/api/v1/suites/nope/answer-match:run/stream").status_code == 404

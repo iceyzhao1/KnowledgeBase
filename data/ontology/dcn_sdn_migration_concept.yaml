@@ -1,0 +1,166 @@
+# 本体种子文件：dcn_sdn_migration（数据中心网络搬迁到 SDN）概念层
+#
+# 来源：华为《数据中心网络搬迁到SDN最佳实践》(CloudFabric)。
+# 用途：冷启动引种（bootstrap）本体 v1 的真相源 = 一份"概念词典"。
+#   上传方式：kb-ui 「本体版本」页 →「引种本体」按钮，选本文件即可。
+#   引种后真相源转移到数据库（ontology_* 表）；运行期抽取读 active 版本，
+#   不再回读本文件。本文件与"专家上传的本体文档"同一套 schema。
+#
+# schema 速览（解析见 ontology_bootstrap.py）：
+#   layer        顶层默认层，下面各类型未写 layer 时继承它
+#   node_types   概念对象类型：name / is_strong / definition / examples
+#   relation_types 关系类型：name / is_directed / inverse_name / patterns / definition
+#                  patterns = 允许的 (head 类型, tail 类型) 组合
+#   aliases      别名词典 {规范名: [别名, ...]}，喂归一化，source='seed'
+#
+# 注意：图谱按 head/tail 的字面类型名连线，通配 "*" 连不出真实节点，
+#       所以本文件每对 head/tail 都写成具体类型，保证全部节点类型连通、无孤立点。
+layer: concept
+domain: dcn_sdn_migration
+
+# ── 概念对象类型（9 类）─────────────────────────────────────────
+# is_strong=true 的是"强类型"：抽取时要求更高的确信度，作为图谱主干。
+node_types:
+  - name: device
+    is_strong: true
+    definition: "数据中心物理网络设备及其组网角色（Spine-Leaf 架构），含安全/负载/服务器等"
+    examples: ["Spine", "Border Leaf", "Service Leaf", "Server Leaf", "DCI Leaf", "管理Leaf", "PE", "FW", "LB", "ESX主机"]
+
+  - name: logical_object
+    is_strong: true
+    definition: "SDN 控制器编排出的逻辑网络对象（Overlay 模型），是新网络的业务承载单元"
+    examples: ["Logical Switch", "Logical Port", "Logical Router", "VPC", "VRF", "租户", "子网", "外部网关", "VAS"]
+
+  - name: controller
+    is_strong: true
+    definition: "管控面软件：网络控制器、安全控制器、云平台、虚拟化管理及分析器"
+    examples: ["iMaster NCE-Fabric", "SecoManager", "OpenStack", "APIC", "vCenter", "VMM", "FabricInsight"]
+
+  - name: protocol
+    is_strong: true
+    definition: "网络协议与组网技术（新旧网络的二层/三层/可靠性/路由技术）"
+    examples: ["VXLAN", "EVPN", "BGP", "OSPF", "M-LAG", "vPC", "HSRP", "VRRP", "PVST", "MSTP", "Eth-Trunk", "LACP", "SVF", "FabricPath", "FEX"]
+
+  - name: migration_step
+    is_strong: true
+    definition: "搬迁流程中的操作步骤/动作（按 Step1→Step4 推进）"
+    examples: ["Step1新建网络", "Step2新老网络二层互通", "Step3服务器迁移", "Step4三层网络迁移", "物理服务器迁移", "VM迁移", "控制器模型预创建"]
+
+  - name: legacy_scenario
+    is_strong: false
+    definition: "待搬迁的旧网络组网场景（按典型组网+可靠性协议命名）"
+    examples: ["HSRP+vPC/FEX/FabricPath", "MSTP+VRRP", "PVST+HSRP", "堆叠+Eth-Trunk", "SVF", "多级M-LAG", "ACI"]
+
+  - name: traffic_model
+    is_strong: false
+    definition: "业务流量模型（东西向/南北向、是否跨逻辑路由、是否过墙/过LB）"
+    examples: ["东西向L2互访同LS", "东西向L3互访不跨LR", "跨LR有旁挂墙", "跨LR无旁挂墙", "南北向", "流量过LB(F5)"]
+
+  - name: tool
+    is_strong: false
+    definition: "搬迁配套工具（规划、配置转换、巡检）"
+    examples: ["配置翻译工具", "规划设计工具", "网络巡检工具"]
+
+  - name: concept
+    is_strong: false
+    definition: "上述类型未覆盖的领域概念/术语（场景模式、架构机制、术语等）"
+    examples: ["云网一体化", "计算联动", "机架出租", "Underlay", "Overlay", "搬迁中间态", "双活", "VNI", "北向接口", "南向接口"]
+
+# ── 概念层关系类型（10 种）─────────────────────────────────────
+# patterns = allowed_pairs：限定关系两端各自能是什么类型。
+# 设计目标：9 类节点全部连通、无孤立点（不使用通配 "*"）。
+relation_types:
+  - name: manages
+    is_directed: true
+    inverse_name: managed_by
+    definition: "控制器/云平台纳管物理设备，或控制器之间级联对接"
+    patterns:
+      - {head: controller, tail: device}
+      - {head: controller, tail: controller}
+
+  - name: provisions
+    is_directed: true
+    inverse_name: provisioned_by
+    definition: "控制器编排/自动发放逻辑网络对象"
+    patterns:
+      - {head: controller, tail: logical_object}
+
+  - name: realized_on
+    is_directed: true
+    inverse_name: hosts
+    definition: "逻辑网络对象落地承载在物理设备上"
+    patterns:
+      - {head: logical_object, tail: device}
+
+  - name: uses_protocol
+    is_directed: true
+    definition: "设备或逻辑对象使用某协议/组网技术"
+    patterns:
+      - {head: device, tail: protocol}
+      - {head: logical_object, tail: protocol}
+
+  - name: characterized_by
+    is_directed: true
+    definition: "旧组网场景以哪些特征协议/技术为标志"
+    patterns:
+      - {head: legacy_scenario, tail: protocol}
+
+  - name: migrates
+    is_directed: true
+    definition: "搬迁步骤针对某旧场景，并操作相应的设备/逻辑对象"
+    patterns:
+      - {head: migration_step, tail: legacy_scenario}
+      - {head: migration_step, tail: device}
+      - {head: migration_step, tail: logical_object}
+
+  - name: precedes
+    is_directed: true
+    inverse_name: follows
+    definition: "搬迁步骤的先后顺序（Step1→Step2→Step3→Step4）"
+    patterns:
+      - {head: migration_step, tail: migration_step}
+
+  - name: carries
+    is_directed: true
+    definition: "业务流量模型经由哪些逻辑对象承载/转发"
+    patterns:
+      - {head: traffic_model, tail: logical_object}
+
+  - name: assists
+    is_directed: true
+    definition: "工具辅助某个搬迁步骤（规划/配置转换/巡检）"
+    patterns:
+      - {head: tool, tail: migration_step}
+
+  - name: relates_to
+    is_directed: true
+    definition: "领域概念/部署场景关联到控制器、设备或其他概念"
+    patterns:
+      - {head: concept, tail: controller}
+      - {head: concept, tail: device}
+      - {head: concept, tail: concept}
+
+# ── 别名词典（归一化用：把别名/全称统一到规范名）──────────────────
+# {规范名: [别名1, 别名2, ...]}。中英文全称、缩写都可以放这里。
+aliases:
+  iMaster NCE-Fabric: ["NCE-Fabric", "NCE Fabric", "华为SDN控制器", "Fabric控制器", "网络控制器"]
+  SecoManager: ["安全控制器", "Seco Manager"]
+  CloudFabric: ["华为CloudFabric", "CloudFabric解决方案", "SDN DCN"]
+  VXLAN: ["虚拟扩展局域网", "Virtual eXtensible LAN"]
+  EVPN: ["以太网VPN", "Ethernet VPN"]
+  M-LAG: ["跨设备链路聚合", "Multichassis Link Aggregation Group", "MLAG"]
+  vPC: ["virtual Port Channel", "虚拟端口通道"]
+  Logical Switch: ["LS", "逻辑交换机"]
+  Logical Router: ["LR", "逻辑路由器"]
+  Logical Port: ["LP", "逻辑端口"]
+  VPC: ["虚拟私有云", "Virtual Private Cloud"]
+  VAS: ["增值业务", "Value-Added Service", "增值业务设备"]
+  Border Leaf: ["边界Leaf", "出口Leaf"]
+  Server Leaf: ["服务器Leaf", "接入Leaf"]
+  Service Leaf: ["业务Leaf", "VAS Leaf"]
+  DCI Leaf: ["数据中心互联Leaf", "DCI网关"]
+  vCenter: ["VMware vCenter"]
+  VMM: ["虚拟机管理器", "Virtual Machine Manager"]
+  Underlay: ["物理承载网", "下层网络"]
+  Overlay: ["叠加网络", "上层网络"]
+  云网一体化: ["云网融合", "Cloud-Network Integration"]

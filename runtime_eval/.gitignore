@@ -1,0 +1,7 @@
+.env
+workspace/
+corpus/*
+!corpus/.gitkeep
+!corpus/sample/
+__pycache__/
+*.pyc

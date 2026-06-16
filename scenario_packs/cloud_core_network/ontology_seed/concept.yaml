@@ -1,0 +1,79 @@
+# 本体种子文件：cloud_core_network 概念层
+#
+# 这是引种（bootstrap）本体 v1 的真相源。一层一个文件，MVP 只有 concept.yaml。
+# 由 domain_cloud_core.yaml 的 ontology 段一次性导出 + 人工补 definition/examples/aliases 而来。
+# 引种后真相源转移到 DB（ontology_* 表）；运行期抽取读 active 版本，不再读本文件。
+# 与将来"专家上传的本体文档"同 schema（上传 = 解析这套 YAML 写 ontology_* 表）。
+layer: concept
+domain: cloud_core_network
+
+# 8 类概念对象（来自 domain_cloud_core.yaml ontology.entity_types）
+# is_strong 对应 strong_entity_types：command / network_element / parameter / protocol
+node_types:
+  - name: network_element
+    is_strong: true
+    definition: "5G 核心网网元功能模块（NF），承担会话/移动性/策略等独立功能"
+    examples: ["SMF", "UPF", "AMF", "PCF", "UDM", "NRF", "AUSF", "NSSF"]
+  - name: command
+    is_strong: true
+    definition: "网元配置/查询操作命令，通常形如 动词+对象（ADD/MOD/DEL/SHOW/LST/DSP/REG/DEREG）"
+    examples: ["ADD UPF", "SHOW SMF", "MOD UPF", "DEL AMF", "REG NRF"]
+  - name: parameter
+    is_strong: true
+    definition: "命令或配置项的具体参数，含取值范围/默认值/含义"
+    examples: ["registerIPv4", "bindingIPv4", "heartbeat interval", "session timeout"]
+  - name: protocol
+    is_strong: true
+    definition: "网元/接口间的通信协议规范"
+    examples: ["PFCP", "GTP-U", "GTP-C", "DIAMETER", "HTTP/2", "NAS"]
+  - name: interface
+    is_strong: false
+    definition: "3GPP 定义的网元间标准化参考点（与协议区分：接口是参考点，协议是规范）"
+    examples: ["N4", "N3", "N6", "N7", "N11", "Sxb"]
+  - name: alarm
+    is_strong: false
+    definition: "网元运行告警，通常带告警 ID"
+    examples: ["ALM-XXX-XXX"]
+  - name: feature
+    is_strong: false
+    definition: "产品特性或子特性，通常带特性编码"
+    examples: ["GWFD-XXXXXX", "SA-HTTP Pipeline"]
+  - name: concept
+    is_strong: false
+    definition: "上述类型未覆盖的领域概念/术语（架构、机制、术语等）"
+    examples: ["5GC", "服务化架构", "PDU 会话"]
+
+# 别名词典种子（喂 ontology_alias_dictionary，source='seed'）
+aliases:
+  UPF: ["用户面功能", "User Plane Function"]
+  SMF: ["会话管理功能", "Session Management Function"]
+  AMF: ["接入和移动性管理功能", "Access and Mobility Management Function"]
+  PCF: ["策略控制功能", "Policy Control Function"]
+  UDM: ["统一数据管理", "Unified Data Management"]
+  NRF: ["网络存储功能", "Network Repository Function"]
+
+# 概念层 4 种关系（L2 §6.3）。patterns = allowed_pairs（"*" 表任意类型）
+relation_types:
+  - name: connects_to
+    is_directed: true
+    definition: "网元经接口连接，或网元间直接连接"
+    patterns:
+      - {head: network_element, tail: interface}
+      - {head: network_element, tail: network_element}
+  - name: uses_protocol
+    is_directed: true
+    definition: "接口或网元使用某协议"
+    patterns:
+      - {head: interface, tail: protocol}
+      - {head: network_element, tail: protocol}
+  - name: part_of
+    is_directed: true
+    inverse_name: has_part
+    definition: "从属/组成关系"
+    patterns:
+      - {head: "*", tail: "*"}
+  - name: is_a
+    is_directed: true
+    definition: "类属关系（同类型族）"
+    patterns:
+      - {head: "*", tail: "*"}

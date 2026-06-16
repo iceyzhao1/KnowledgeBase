@@ -1,0 +1,641 @@
+# Scenario pack for the ip_network domain.
+# IP network knowledge base: router/switch command reference, procedures,
+# troubleshooting, and concept documentation.
+#
+# Structure: ontology (shared) + mining (Mining reads this) + serving (Serving reads this)
+
+display_name: "Cloud Core Network (5GC/UDG)"
+
+# ===========================================================================
+# ONTOLOGY — shared entity taxonomy, read by both Mining and Serving
+# ===========================================================================
+
+ontology:
+  entity_types:
+    - command
+    - device
+    - parameter
+    - protocol
+    - interface
+    - alarm
+    - feature
+    - concept
+
+  strong_entity_types:
+    - command
+    - device
+    - parameter
+    - protocol
+
+# ===========================================================================
+# MINING — domain-specific mining pipeline configuration
+# Mining reads ontology + mining only
+# ===========================================================================
+
+mining:
+  # Semantic roles used by enrich stage (LLM output validation)
+  semantic_roles:
+    - concept
+    - parameter
+    - example
+    - note
+    - procedure_step
+    - troubleshooting_step
+    - constraint
+    - alarm
+    - checklist
+
+  # Document types (informational, stored in metadata_json)
+  document_types:
+    - command
+    - feature
+    - procedure
+    - troubleshooting
+    - alarm
+    - constraint
+    - checklist
+    - expert_note
+    - project_note
+    - standard
+    - training
+    - reference
+    - other
+
+  # Semantic role mapping: section title keywords -> core semantic_role
+  role_keyword_rules: []
+
+  # Heading role classification: heading keywords -> heading role
+  heading_role_keywords: []
+
+  # Rule-based extractors (regex)
+  extractor_rules: []
+
+  # Table parameter column names (used by entity extractor for table segments)
+  parameter_column_names:
+    - "参数标识"
+    - "参数名称"
+    - "参数名"
+
+  # Section-title command pattern (used by _add_section_context_entities)
+  section_title_command_pattern: "^(display|reset|ping|tracert|debugging|undo|commit|rollback)\\s+(\\S+)"
+
+  # Retrieval policy
+  retrieval_policy:
+    raw_text: primary
+    generated_question: auxiliary
+    entity_card: "off"
+    table_row: "off"
+    max_questions_per_segment: 1
+    max_entity_cards_per_segment: 0
+    contextual_retrieval: "off"
+    # Discourse / relation thresholds
+    min_confidence: 0.5
+    max_distance: 5
+    discourse_window_size: 15
+    # Question-worthiness thresholds
+    min_questionworthy_tokens: 50
+    not_questionworthy_roles:
+      - navigation
+      - toc
+      - metadata
+    # Segmentation thresholds (v2.0)
+    min_chunk_tokens: 128
+    max_chunk_tokens: 512
+    cross_section_merge: true
+    min_enrich_tokens: 30
+    structural_context_mode: breadcrumb
+
+  # LLM templates
+  llm_templates:
+    - template_key: mining-question-gen
+      template_version: "4"
+      purpose: "从段落内容生成假设性检索问题"
+      system_prompt: "你是IP网络知识库的检索优化助手。你判断段落是否值得生成问题，如果是则生成高质量检索问题。"
+      user_prompt_template: >
+        分析以下技术文档段落：
+
+        段落标题：$title
+        段落内容：$content
+
+        首先评估该段落是否包含值得生成问题的实质性知识：
+        - 如果是目录、导航列表、纯链接/锚点列表：输出 {"questions": []}
+        - 如果是大量空值或占位符的稀疏表格：输出 {"questions": []}
+        - 如果内容过于简短或模糊，无法生成有意义的问题：输出 {"questions": []}
+
+        如果段落确实包含实质性知识，生成 1 个高质量检索问题：
+        - 问题必须能从该段落中找到明确答案
+        - 问题应测试知识理解，而非导航（避免"在哪里找到X"、"文档有哪些章节"）
+        - 问题应覆盖该段落最核心的知识点
+        - 避免生成高度相似或近义的问题：如果该段落的核心概念已经可以从标题直接推断（如标题是"BGP与OSPF的路由重分发"），则生成一个更深入的具体问题（如"BGP引入OSPF路由时需要配置哪些关键属性？"）而非表面的概念问题
+
+        **⚠️ 问题质量要求（必须遵守）**：
+        - 问题应需要分析、推理或综合理解，而非仅从文中提取单个名词或数字
+        - 不要生成答案仅为一个接口名/协议名/设备名的问题（如"PE设备通过哪个协议与P设备交互？"→答案只是"LDP"）
+        - 不要生成仅复述段落内容的问题（如"BGP有哪些功能？"→答案就是罗列功能）
+        - 优先生成"如何"、"为什么"、"在什么条件下"、"有什么区别"类型的问题
+        - 如果段落主要是接口/协议名称的罗列表格，不要对每个接口都生成问题
+
+        **好问题示例**：
+        ✅ "BGP在MPLS VPN中如何为PE设备分配标签并传递路由？" — 需要理解流程细节
+        ✅ "OSPF引入外部路由时Type1和Type2代价的计算有何不同？" — 需要分析和归纳
+        ✅ "IS-IS和OSPF在大规模网络中的收敛速度和扩展性有何差异？" — 需要对比分析
+
+        **差问题示例（不要生成）**：
+        ❌ "BGP支持哪两种路由反射方式？" — 答案就在引言句中
+        ❌ "PE设备通过哪个协议与P设备交互？" — 答案仅为协议名
+        ❌ "OSPF在IP网络中通过哪些功能管理路由？" — 几乎复述了列表内容
+
+        输出一个 JSON 对象，包含 questions 字段（字符串数组）。
+
+        **⚠️ 输出格式要求（必须严格遵守）**：
+        - 必须输出 JSON 对象，以 { 开头，以 } 结尾
+        - questions 字段的值是字符串数组，每个元素直接是问题文本
+        - 无合适问题时 questions 为空数组：{"questions": []}
+        - 禁止输出 JSON Schema 定义
+        - 正确示例：{"questions": ["BGP在MPLS VPN中如何为PE设备分配标签并传递路由？"]}
+        - 空结果示例：{"questions": []}
+        - 错误示例：{"questions": [{"question": "..."}]}（不需要嵌套对象）
+        - 错误示例：{"type": "array", "items": ...}（这是 Schema 定义，不是数据）
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"questions":{"type":"array","items":{"type":"string"}}},"required":["questions"],"additionalProperties":false}'
+
+    - template_key: mining-segment-understanding
+      template_version: "4"
+      purpose: "从段落提取实体、分类语义角色、评估内容质量"
+      system_prompt: "你是IP网络知识库的内容理解助手。分析技术文档段落，提取关键实体、分类语义角色，并评估内容质量。"
+      user_prompt_template: >
+        分析以下技术文档段落：
+
+        段落标题：$section_title
+        内容类型：$block_type
+        段落内容：$text
+
+        输出 JSON 对象，包含：
+        - entities: 实体列表，每个元素包含 type 和 name
+          type 可选值（仅限以下 8 种，禁止使用其他值）：command / device / parameter / protocol / interface / alarm / feature / concept
+
+        **⚠️ entities[].type 与 semantic_role 是两个不同字段，切勿混淆：**
+        - entities[].type 描述实体本身是什么（如"BGP"是 protocol，"PE"是 device）
+        - semantic_role 描述该段落的内容性质（如 procedure_step 表示段落讲的是操作步骤）
+        - 禁止在 entities[].type 中使用 semantic_role 的值（如 procedure_step、troubleshooting_step、checklist、note、example、constraint）
+        - 如果一个事物不是上述 8 种实体类型之一，不要把它放入 entities 列表
+
+        质量指引：
+        - 只提取文档中明确出现、有专有名称的技术实体
+        - 接口（如GE0/0/0、Loopback0）和协议（如BGP、OSPF）是不同类型：接口是设备上的物理或逻辑端口，协议是通信规范
+        - 告警ID（如ALM-XXX-XXX）归为alarm类型
+        - 产品特性编码和子特性（如MPLS TE、Fast Reroute）归为feature类型
+        - 如果无法确定实体类型，不要强行分类
+
+        - semantic_role: 语义角色，根据内容实质选择最匹配的角色：
+          - concept: 概念定义、功能描述、角色说明、架构概述、职责列表、特性介绍
+          - parameter: 参数说明、配置项描述、取值范围
+          - example: 使用示例、配置示例
+          - note: 补充说明、注意事项、参考规范、引用链接
+          - procedure_step: 操作步骤、流程描述、协议交互、配置过程
+          - troubleshooting_step: 故障排查步骤、错误处理
+          - constraint: 限制条件、前置要求、约束说明
+          - alarm: 告警信息
+          - checklist: 检查清单
+          **重要：不要使用 unknown。每个段落都必须根据内容选择一个具体的角色。**
+          **heading 类型分段：如果该标题下讨论的是概念/功能，使用 concept；如果是流程/步骤，使用 procedure_step；如果是参考资料，使用 note。**
+          **参考规范段落：使用 note。**
+          **纯列表段落：如果列表描述的是职责/功能/特性，使用 concept；如果是操作步骤，使用 procedure_step。**
+
+        - document_type: 文档类型提示（command/feature/procedure/troubleshooting/alarm/constraint/checklist/reference/other）
+        - content_assessment: 内容质量评估
+          - is_substantive: 是否包含实质性知识内容（非纯导航、目录、链接列表）
+          - is_navigation: 是否是导航/目录内容
+          - assessment_reason: 一句话说明判断依据
+
+        内容质量评估指引：
+        - 如果段落只是锚点列表、目录索引、纯链接，is_substantive=false, is_navigation=true
+        - 如果段落包含具体的技术描述、参数说明、操作步骤，is_substantive=true
+        - 稀疏表格（大量空值或占位符"-"）视为非实质性内容
+        - 纯标题无内容视为非实质性内容
+
+        输出示例（仅供参考格式，请根据实际内容生成）：
+        {"entities": [{"type": "device", "name": "PE"}, {"type": "protocol", "name": "BGP"}], "semantic_role": "concept", "document_type": "reference", "content_assessment": {"is_substantive": true, "is_navigation": false, "assessment_reason": "包含PE设备BGP核心功能的列表描述"}}
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"},"content_assessment":{"type":"object","properties":{"is_substantive":{"type":"boolean"},"is_navigation":{"type":"boolean"},"assessment_reason":{"type":"string"}},"required":["is_substantive","is_navigation"],"additionalProperties":false}},"required":["entities","semantic_role","document_type","content_assessment"],"additionalProperties":false}'
+
+    - template_key: mining-discourse-relation
+      template_version: "2"
+      purpose: "分析段落间的语篇关系（RST修辞结构理论）"
+      system_prompt: "你是IP网络技术文档的语篇关系分析专家。分析给定段落列表中段落之间的修辞关系，要尽可能识别出不同类型的关系。"
+      user_prompt_template: >
+        分析以下编号段落之间的语篇关系：
+
+        $segments
+
+        对每对有语义关联的段落，判断其修辞关系。可选关系类型（请尽量使用多样化的关系类型）：
+        - ELABORATES: 后文详细阐述前文的概念或描述（如：先定义BGP，再详述其属性）
+        - EVIDENCES: 后文提供证据或数据支持前文的论断
+        - CAUSES: 前文所述操作或事件导致了后文的结果（如：链路震荡导致路由表抖动）
+        - RESULTS_IN: 前文是原因，后文是其产生的结果（如：策略变更→路由撤销）
+        - BACKGROUNDS: 后文提供理解前文所需的背景知识或上下文
+        - CONDITIONS: 后文说明前文操作的前提条件或触发条件
+        - SUMMARIZES: 后文对前文内容进行概括总结
+        - JUSTIFIES: 后文解释前文设计决策或操作的理由
+        - ENABLES: 后文描述使前文操作成为可能的机制或能力（如：LDP使MPLS能为报文分配标签）
+        - CONTRASTS_WITH: 前后文描述不同方案、模式或选项的对比（如：静态路由vs动态路由）
+        - PARALLELS: 前后文描述并列的功能或流程（如：不同协议的邻居建立方式）
+        - SEQUENCES: 后文是前文的后续步骤或时间上的后续事件（如：BGP Open→Keepalive→Established）
+        - UNRELATED: 无明显关系
+
+        **关系识别指引**：
+        - 仔细分析每对段落的语义关系，不要默认使用 ELABORATES
+        - 因果关系：检查是否存在"A导致B"的逻辑（使用 CAUSES 或 RESULTS_IN）
+          例："链路故障"→"OSPF重新收敛" = RESULTS_IN; "BFD检测到链路故障"→"通知上层协议" = CAUSES
+        - 对比关系：检查是否在描述不同的方案或选项（使用 CONTRASTS_WITH）
+          例："eBGP vs iBGP" = CONTRASTS_WITH; "OSPF Area 0 vs 普通区域" = CONTRASTS_WITH
+        - 条件关系：检查是否描述前提条件（使用 CONDITIONS）
+          例："建立BGP邻居"→"需要TCP连接可达" = CONDITIONS
+        - 使能关系：检查是否描述使某个功能成为可能的机制（使用 ENABLES）
+          例："MPLS标签分配" 使 "VPN流量转发隔离" 成为可能 = ENABLES
+        - 并列关系：检查是否描述同一层级的不同功能（使用 PARALLELS）
+          例："IGP路由"和"BGP路由"是路由表的并列来源 = PARALLELS
+        - 顺序关系：检查是否是流程中的先后步骤（使用 SEQUENCES）
+          例："配置接口IP"→"启用路由协议"→"验证邻居" = SEQUENCES
+        - 目标：生成的关系统计中至少应包含 4 种以上的关系类型
+
+        **⚠️ 常见误标警告（务必避免）**：
+        - ❌ 两个段落描述不同的协议交互（如"BGP与OSPF的重分发"和"BGP与LDP的联动"）不是 CONTRASTS_WITH，应该是 PARALLELS
+        - ❌ "参考规范列表"不是前文内容的 EVIDENCES。参考规范是文献引用，不是数据/实验证据
+        - ❌ 如果两个段落只是不同的主题（如"路由策略"和"QoS策略"），不构成对比关系
+
+        输出一个 JSON 对象，包含 relations 字段（数组）。每个 relations 元素包含：
+        - source: 源段落编号（整数）
+        - target: 目标段落编号（整数）
+        - relation: 关系类型（大写）
+        - confidence: 置信度（0.0-1.0）
+
+        只输出有明确关系的段落对，跳过 UNRELATED 的。
+
+        **⚠️ 输出格式要求（必须严格遵守）**：
+        - 必须输出 JSON 对象，以 { 开头，以 } 结尾
+        - relations 字段的值是数组，每个元素是一条关系
+        - 无关系时 relations 为空数组：{"relations": []}
+        - 禁止输出 JSON Schema 定义或格式说明
+        - 正确示例：{"relations": [{"source": 0, "target": 1, "relation": "ELABORATES", "confidence": 0.9}, {"source": 1, "target": 4, "relation": "SEQUENCES", "confidence": 0.85}]}
+        - 空结果示例：{"relations": []}
+        - 错误示例：[{"source": 0, ...}]（这是数组，不是对象）
+        - 错误示例：{"type": "array", "items": ...}（这是 Schema 定义，不是数据）
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"relations":{"type":"array","items":{"type":"object","properties":{"source":{"type":"integer"},"target":{"type":"integer"},"relation":{"type":"string"},"confidence":{"type":"number","minimum":0.0,"maximum":1.0}},"required":["source","target","relation","confidence"],"additionalProperties":false}}},"required":["relations"],"additionalProperties":false}'
+
+    - template_key: mining-contextual-retrieval
+      template_version: "2"
+      purpose: "为每个段落生成上下文描述，增强检索效果"
+      system_prompt: "你是IP网络技术文档的检索上下文定位助手。"
+      user_prompt_template: >
+        文档全文：
+        $document
+
+        段落内容：
+        $segment
+
+        请生成一句 20-40 字的中文上下文标签，说明该段落在文档中的位置和主题。
+        不要复述段落内容，只补充从段落文本中无法直接看出的上下文信息（如所属章节、讨论主题等）。
+        输出 JSON 对象，包含 context 字段。
+
+        输出示例（仅供参考格式，请根据实际内容生成）：
+        {"context": "该段落位于BGP配置章节，讨论MPLS VPN路由传递参数设置"}
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"context":{"type":"string"}},"required":["context"],"additionalProperties":false}'
+
+  # Eval questions (30 golden queries)
+  eval_questions:
+    # --- 命令用法 (8) ---
+    - id: q001
+      question: "如何配置 BGP 的路由反射器？"
+      expected_entities: ["BGP"]
+      expected_evidence_contains: ["BGP", "路由反射"]
+      expected_semantic_role: procedure_step
+      notes: "测试命令流程类检索"
+
+    - id: q002
+      question: "display bgp routing-table 命令怎么用？"
+      expected_entities: ["display bgp routing-table", "BGP"]
+      expected_evidence_contains: ["display", "BGP"]
+      notes: "测试命令实体检索"
+
+    - id: q003
+      question: "ospf 命令的参数有哪些？"
+      expected_entities: ["ospf", "OSPF"]
+      expected_evidence_contains: ["ospf", "OSPF"]
+      expected_semantic_role: parameter
+      notes: "测试命令参数类检索"
+
+    - id: q004
+      question: "peer as-number 命令需要哪些参数？"
+      expected_entities: ["peer as-number", "BGP"]
+      expected_evidence_contains: ["peer", "as-number"]
+      notes: "测试邻居命令参数"
+
+    - id: q005
+      question: "undo ospf 命令有什么限制？"
+      expected_entities: ["undo ospf", "OSPF"]
+      expected_evidence_contains: ["undo", "ospf"]
+      expected_semantic_role: constraint
+      notes: "测试删除命令约束"
+
+    - id: q006
+      question: "如何配置 MPLS LDP 会话？"
+      expected_entities: ["MPLS", "LDP"]
+      expected_evidence_contains: ["MPLS", "LDP", "会话"]
+      notes: "测试协议配置命令"
+
+    - id: q007
+      question: "display isis lsdb 命令输出包含什么信息？"
+      expected_entities: ["display isis lsdb", "IS-IS"]
+      expected_evidence_contains: ["display", "isis", "lsdb"]
+      notes: "测试显示命令"
+
+    - id: q008
+      question: "display ip routing-table 支持哪些查询条件？"
+      expected_entities: ["display ip routing-table"]
+      expected_evidence_contains: ["routing-table"]
+      notes: "测试路由表查询命令"
+
+    # --- 概念解释 (7) ---
+    - id: q009
+      question: "什么是 BGP？它在 IP 网络中起什么作用？"
+      expected_entities: ["BGP"]
+      expected_evidence_contains: ["BGP", "路由"]
+      expected_semantic_role: concept
+      notes: "测试概念解释类"
+
+    - id: q010
+      question: "PE 和 P 设备的区别是什么？"
+      expected_entities: ["PE", "P"]
+      expected_evidence_contains: ["PE", "P", "MPLS"]
+      notes: "测试设备角色对比"
+
+    - id: q011
+      question: "OSPF 负责什么功能？"
+      expected_entities: ["OSPF"]
+      expected_evidence_contains: ["OSPF"]
+      expected_semantic_role: concept
+      notes: "测试单一概念"
+
+    - id: q012
+      question: "Loopback 接口是做什么用的？"
+      expected_entities: ["Loopback"]
+      expected_evidence_contains: ["Loopback"]
+      notes: "测试接口概念"
+
+    - id: q013
+      question: "LDP 协议的作用是什么？"
+      expected_entities: ["LDP"]
+      expected_evidence_contains: ["LDP"]
+      notes: "测试协议概念"
+
+    - id: q014
+      question: "RR 在 BGP 架构中的角色是什么？"
+      expected_entities: ["RR", "BGP"]
+      expected_evidence_contains: ["RR", "BGP"]
+      notes: "测试架构概念"
+
+    - id: q015
+      question: "MPLS VPN 有哪些主要组成设备？"
+      expected_entities: ["PE", "P", "CE"]
+      expected_evidence_contains: ["MPLS", "VPN"]
+      notes: "测试概览类概念"
+
+    # --- 参数说明 (7) ---
+    - id: q016
+      question: "router-id 和 peer 地址有什么区别？"
+      expected_entities: ["router-id"]
+      expected_evidence_contains: ["router-id", "peer"]
+      expected_semantic_role: parameter
+      notes: "测试参数对比"
+
+    - id: q017
+      question: "BGP keepalive interval 参数说明"
+      expected_entities: ["BGP"]
+      expected_evidence_contains: ["keepalive", "interval"]
+      expected_semantic_role: parameter
+      notes: "测试协议参数"
+
+    - id: q018
+      question: "OSPF dead-interval 参数默认值是多少？"
+      expected_entities: ["OSPF"]
+      expected_evidence_contains: ["dead-interval"]
+      expected_semantic_role: parameter
+      notes: "测试参数默认值"
+
+    - id: q019
+      question: "接口 MTU 参数如何配置？"
+      expected_entities: ["MTU"]
+      expected_evidence_contains: ["MTU"]
+      notes: "测试接口参数配置"
+
+    - id: q020
+      question: "BGP 的 holdtime 取值范围是什么？"
+      expected_entities: ["BGP"]
+      expected_evidence_contains: ["holdtime"]
+      expected_semantic_role: parameter
+      notes: "测试参数范围"
+
+    - id: q021
+      question: "OSPF cost 参数有哪些可选值？"
+      expected_entities: ["OSPF"]
+      expected_evidence_contains: ["cost"]
+      notes: "测试参数可选值"
+
+    - id: q022
+      question: "BGP local-preference 属性的含义是什么？"
+      expected_entities: ["BGP"]
+      expected_evidence_contains: ["local-preference"]
+      notes: "测试路由属性含义"
+
+    # --- 流程/排障 (5) ---
+    - id: q023
+      question: "BGP 邻居建立失败如何排查？"
+      expected_entities: ["BGP"]
+      expected_evidence_contains: ["BGP", "邻居"]
+      expected_semantic_role: troubleshooting_step
+      notes: "测试排障流程"
+
+    - id: q024
+      question: "OSPF 邻居卡在 ExStart 状态怎么处理？"
+      expected_entities: ["OSPF"]
+      expected_evidence_contains: ["OSPF", "邻居", "ExStart"]
+      expected_semantic_role: troubleshooting_step
+      notes: "测试邻居故障处理"
+
+    - id: q025
+      question: "MPLS LDP 会话建立的流程是什么？"
+      expected_entities: ["MPLS", "LDP"]
+      expected_evidence_contains: ["LDP", "会话"]
+      expected_semantic_role: procedure_step
+      notes: "测试协议建立流程"
+
+    - id: q026
+      question: "BFD 检测到链路故障的处理步骤？"
+      expected_entities: ["BFD"]
+      expected_evidence_contains: ["BFD", "链路"]
+      notes: "测试故障检测流程"
+
+    - id: q027
+      question: "路由表条目丢失导致流量中断怎么处理？"
+      expected_entities: []
+      expected_evidence_contains: ["路由表", "路由"]
+      expected_semantic_role: troubleshooting_step
+      notes: "测试路由故障"
+
+    # --- 跨文档 (3) ---
+    - id: q028
+      question: "PE 设备上 BGP 与 MPLS 联动配置需要哪些步骤？"
+      expected_entities: ["PE", "BGP", "MPLS"]
+      expected_evidence_contains: ["PE", "BGP", "MPLS"]
+      expected_semantic_role: procedure_step
+      notes: "测试跨协议配置流程"
+
+    - id: q029
+      question: "从 CE 到 PE 的路由引入涉及哪些参数？"
+      expected_entities: ["CE", "PE"]
+      expected_evidence_contains: ["CE", "PE", "路由"]
+      notes: "测试跨设备交互"
+
+    - id: q030
+      question: "路由策略从 PE 下发到 CE 的完整链路是什么？"
+      expected_entities: ["PE", "CE"]
+      expected_evidence_contains: ["PE", "CE", "路由策略"]
+      notes: "测试端到端路由策略链路"
+
+# ===========================================================================
+# SERVING — Serving reads ontology + serving only
+# ===========================================================================
+
+serving:
+  # Custom entity extraction rules applied before the default command regex.
+  extractor_rules:
+    - pattern: "\\b(PE|P|CE|RR|ASBR|ABR|CPE)\\b"
+      entity_type: device
+    - pattern: "\\b(GE|XGE|Eth-Trunk|Loopback|Tunnel|LoopBack)[0-9/]*\\b"
+      entity_type: interface
+    - pattern: "\\b(BGP|OSPF|IS-IS|ISIS|LDP|RSVP|BFD|VRRP|PIM|IGMP|MPLS|GRE|IPSec)\\b"
+      entity_type: protocol
+
+  # Query understanding overrides for the rule-based fallback path.
+  query_understanding:
+    command_regex: "(display|reset|ping|tracert|debugging|undo|commit|rollback)\\s+([a-z][a-z0-9_-]*)"
+    op_map:
+      新增: create
+      添加: create
+      创建: create
+      修改: modify
+      更改: modify
+      编辑: modify
+      删除: undo
+      移除: undo
+      查询: display
+      查看: display
+      显示: display
+      设置: set
+      配置: set
+    network_elements:
+      - PE
+      - P
+      - CE
+      - RR
+      - ASBR
+      - ABR
+      - CPE
+    products:
+      - NE40E
+      - NE9000
+      - CX600
+      - ATN
+
+  # Per-intent retrieval weights and top-k limits.
+  route_policy:
+    default:
+      lexical_bm25:
+        weight: 1.0
+        top_k: 50
+      entity_exact:
+        weight: 1.0
+        top_k: 20
+      dense_vector:
+        weight: 0.8
+        top_k: 50
+
+    command_usage:
+      entity_exact:
+        weight: 1.6
+        top_k: 20
+      lexical_bm25:
+        weight: 1.0
+        top_k: 50
+      dense_vector:
+        weight: 0.4
+        top_k: 20
+
+    concept_lookup:
+      dense_vector:
+        weight: 1.3
+        top_k: 60
+      lexical_bm25:
+        weight: 1.0
+        top_k: 50
+      entity_exact:
+        weight: 0.5
+        top_k: 15
+
+    troubleshooting:
+      lexical_bm25:
+        weight: 1.2
+        top_k: 60
+      entity_exact:
+        weight: 1.1
+        top_k: 30
+      dense_vector:
+        weight: 0.7
+        top_k: 30
+
+    procedure:
+      lexical_bm25:
+        weight: 1.1
+        top_k: 50
+      entity_exact:
+        weight: 1.0
+        top_k: 25
+      dense_vector:
+        weight: 0.8
+        top_k: 40
+
+    comparison:
+      dense_vector:
+        weight: 1.2
+        top_k: 60
+      lexical_bm25:
+        weight: 1.0
+        top_k: 50
+      entity_exact:
+        weight: 0.7
+        top_k: 20
+
+    navigational:
+      entity_exact:
+        weight: 1.5
+        top_k: 10
+      lexical_bm25:
+        weight: 0.8
+        top_k: 20
+      dense_vector:
+        weight: 0.3
+        top_k: 10
+
+    general:
+      lexical_bm25:
+        weight: 1.0
+        top_k: 50
+      dense_vector:
+        weight: 1.0
+        top_k: 50
+      entity_exact:
+        weight: 0.8
+        top_k: 20

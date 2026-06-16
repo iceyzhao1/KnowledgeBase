@@ -7,8 +7,10 @@ Stateless beyond the store + client it is handed.
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from ..shared.models import (
@@ -33,6 +35,7 @@ from ..shared.models import (
 from .config import ApiConfig
 from .db_source import LiveCase
 from .llm_client import LLMClient
+from .roster import RosterEntry, select_roster
 from .store import Store
 from .uplift_metrics import compute_uplift
 
@@ -400,6 +403,32 @@ def run_agent_for_case(
 # --- L4 业务价值层：对照组增量（uplift）----------------------------------
 
 
+def _answer_one(
+    client: LLMClient,
+    case: TestCase,
+    *,
+    route: str,
+    system: str | None = None,
+) -> AgentResponse:
+    """跑单题单路作答，返回内存里的 AgentResponse（不落库）。"""
+
+    started = time.perf_counter()
+    out = client.run_agent(question=case.question, system=system, route=route)
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    usage = TokenUsage(**(out.get("usage") or {}))
+    return AgentResponse(
+        case_id=case.id,
+        answer=str(out.get("answer") or ""),
+        latency_ms=latency_ms,
+        token_usage=usage,
+        raw={
+            "route": route,
+            "tool_calls": out.get("tool_calls") or [],
+            "num_turns": out.get("num_turns", 0),
+        },
+    )
+
+
 def _collect_route(
     client: LLMClient,
     suite: TestSuite,
@@ -418,9 +447,8 @@ def _collect_route(
     agent_tokens = TokenUsage()
     errors: list[dict] = []
     for idx, case in enumerate(suite.cases):
-        started = time.perf_counter()
         try:
-            out = client.run_agent(question=case.question, system=system, route=route)
+            resp = _answer_one(client, case, route=route, system=system)
         except Exception as exc:  # noqa: BLE001 - 单题失败不打断整批
             if idx == 0 and not errors:
                 raise RuntimeError(
@@ -428,23 +456,125 @@ def _collect_route(
                 ) from exc
             errors.append({"case_id": case.id, "error": str(exc)})
             continue
-        latency_ms = (time.perf_counter() - started) * 1000.0
-        usage = TokenUsage(**(out.get("usage") or {}))
-        agent_tokens = agent_tokens + usage
-        rs.responses.append(
-            AgentResponse(
-                case_id=case.id,
-                answer=str(out.get("answer") or ""),
-                latency_ms=latency_ms,
-                token_usage=usage,
-                raw={
-                    "route": route,
-                    "tool_calls": out.get("tool_calls") or [],
-                    "num_turns": out.get("num_turns", 0),
-                },
-            )
-        )
+        agent_tokens = agent_tokens + resp.token_usage
+        rs.responses.append(resp)
     return rs, agent_tokens, errors
+
+
+def iter_value_uplift(
+    store: Store,
+    client: LLMClient,
+    config: ApiConfig,
+    suite: TestSuite,
+    *,
+    baseline_agent: str = "closed-book",
+    treatment_agent: str = "kb-agent",
+    baseline_system: str | None = None,
+    treatment_system: str | None = None,
+    tau_low: float = 0.4,
+    tau_high: float = 0.6,
+    delta: float = 0.1,
+    theta_uplift: float = 0.1,
+    max_regression: float = 0.05,
+    pass_threshold: float | None = None,
+) -> Iterator[dict]:
+    """L4 增量价值（流式）：闭卷裸答(A) vs 用知识库(C)，逐题配对算增量。
+
+    四个阶段顺序跑（闭卷·作答 → 闭卷·判分 → 用库·作答 → 用库·判分），每题前后各 yield
+    一个进度事件供前端画进度条；两路各自判分成稳定 id 的 EvalRun（``run_cb_<sid>`` /
+    ``run_kb_<sid>``）→ ``compute_uplift`` → 落 ``RunSummary(layer='value', kind='uplift')``。
+
+    事件 ``event`` 取值：``start`` / ``case_start`` / ``case_done`` / ``case_error`` /
+    ``done``；``case_*`` 事件带 ``stage``（如 ``closed_book_answer``）、``label``（如
+    「闭卷·作答」）、``route`` / ``i`` / ``n`` / ``case_id`` / ``question``。
+    """
+
+    sid = suite.suite_id
+    cases = suite.cases
+    n = len(cases)
+    threshold = pass_threshold if pass_threshold is not None else config.pass_threshold
+    yield {"event": "start", "total": n, "stages": 4}
+
+    routes = [
+        ("closed_book", baseline_agent, baseline_system, "闭卷", f"run_cb_{sid}"),
+        ("kb", treatment_agent, treatment_system, "用库", f"run_kb_{sid}"),
+    ]
+    runs: dict[str, EvalRun] = {}
+    tokens: dict[str, TokenUsage] = {}
+    errs: dict[str, list[dict]] = {}
+
+    for route, agent_name, system, route_label, run_id in routes:
+        # —— 作答阶段 ——
+        rs = ResponseSet(suite_id=sid, agent_name=agent_name)
+        agent_tokens = TokenUsage()
+        errors: list[dict] = []
+        for i, case in enumerate(cases):
+            yield {
+                "event": "case_start", "stage": f"{route}_answer",
+                "label": f"{route_label}·作答", "route": route,
+                "i": i, "n": n, "case_id": case.id, "question": case.question,
+            }
+            try:
+                resp = _answer_one(client, case, route=route, system=system)
+            except Exception as exc:  # noqa: BLE001 - 单题失败不打断整批
+                if i == 0 and not errors:
+                    raise RuntimeError(f"{route} 路跑批失败（首题即报错）：{exc}") from exc
+                errors.append({"case_id": case.id, "error": str(exc)})
+                yield {
+                    "event": "case_error", "stage": f"{route}_answer",
+                    "case_id": case.id, "error": str(exc),
+                }
+                continue
+            agent_tokens = agent_tokens + resp.token_usage
+            rs.responses.append(resp)
+            yield {
+                "event": "case_done", "stage": f"{route}_answer", "route": route,
+                "i": i, "n": n, "case_id": case.id,
+            }
+
+        # —— 判分阶段 ——
+        run = EvalRun(
+            run_id=run_id, suite_id=sid, project_id=suite.project_id,
+            agent_name=agent_name, backend="eval-llm", pass_threshold=threshold,
+        )
+        for i, case in enumerate(cases):
+            yield {
+                "event": "case_start", "stage": f"{route}_judge",
+                "label": f"{route_label}·判分", "route": route,
+                "i": i, "n": n, "case_id": case.id, "question": case.question,
+            }
+            run.results.append(_judge_one(client, case, rs.by_case(case.id)))
+            yield {
+                "event": "case_done", "stage": f"{route}_judge", "route": route,
+                "i": i, "n": n, "case_id": case.id,
+            }
+        store.save_run(run)
+        runs[route] = run
+        tokens[route] = agent_tokens
+        errs[route] = errors
+
+    report = compute_uplift(
+        runs["closed_book"], runs["kb"], suite,
+        tau_low=tau_low, tau_high=tau_high, delta=delta,
+        theta_uplift=theta_uplift, max_regression=max_regression,
+    )
+    metrics = report.to_metrics_dict()
+    metrics["agent_tokens"] = {
+        "baseline": tokens["closed_book"].total_tokens,
+        "treatment": tokens["kb"].total_tokens,
+    }
+    metrics["errors"] = {"baseline": errs["closed_book"], "treatment": errs["kb"]}
+
+    summary = RunSummary(
+        run_id=f"uplift_{sid}",
+        project_id=suite.project_id,
+        suite_id=sid,
+        layer="value",
+        kind="uplift",
+        metrics=metrics,
+    )
+    store.save_run_summary(summary)
+    yield {"event": "done", "metrics": metrics}
 
 
 def run_value_uplift(
@@ -464,51 +594,274 @@ def run_value_uplift(
     max_regression: float = 0.05,
     pass_threshold: float | None = None,
 ) -> RunSummary:
-    """L4 增量价值：闭卷裸答(A) vs 用知识库(C)，逐题配对算增量。
+    """L4 增量价值（一次性阻塞版）：跑完 :func:`iter_value_uplift` 取回落库的快照。"""
 
-    跑两路 → 各自判分成 EvalRun（稳定 id ``run_cb_<sid>`` / ``run_kb_<sid>``，供逐题
-    对照详情读取）→ ``compute_uplift`` 算 headline 四件套 + 五桶 + 分层 → 落一条
-    ``RunSummary(layer='value', kind='uplift', run_id='uplift_<sid>')``。
+    for _ in iter_value_uplift(
+        store, client, config, suite,
+        baseline_agent=baseline_agent, treatment_agent=treatment_agent,
+        baseline_system=baseline_system, treatment_system=treatment_system,
+        tau_low=tau_low, tau_high=tau_high, delta=delta,
+        theta_uplift=theta_uplift, max_regression=max_regression,
+        pass_threshold=pass_threshold,
+    ):
+        pass
+    return store.get_run_summary(f"uplift_{suite.suite_id}")
+
+
+# --- L2 答案对照层：多模型 × 黄金答案 ------------------------------------
+
+
+def _fingerprint(text: str) -> str:
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _evidence_pack(retrieval: RetrievalSet | None, case_id: str) -> list[str]:
+    """从 RetrievalSet 取某题的证据片段文本（按排名），作为 L2 焊死的作答输入。"""
+
+    if retrieval is None:
+        return []
+    items = retrieval.for_case(case_id) or []
+    return [str(it.text) for it in items if str(it.text).strip()]
+
+
+def _answer_match_gate(suite: TestSuite, retrieval: RetrievalSet | None) -> None:
+    """门禁：每题都得有证据包，缺的直接报错（不静默跳过）。
+
+    L2 焊死证据当输入，没跑过 L1 检索的题没料可喂。缺证据的题列出来，提示先去补检索。
+    """
+
+    missing = [
+        case.id for case in suite.cases if not _evidence_pack(retrieval, case.id)
+    ]
+    if missing:
+        head = "、".join(missing[:5])
+        more = f" 等 {len(missing)} 题" if len(missing) > 5 else ""
+        raise RuntimeError(
+            f"以下题目缺证据包（还没跑过检索）：{head}{more}。请先去补检索，再跑答案对照。"
+        )
+
+
+def _prior_answer_match_cache(summary: RunSummary | None) -> dict[tuple[str, str, str], dict]:
+    """把上一份 ans_<sid> 快照拆成 (模型id, 证据指纹, 问题指纹) -> 逐题明细 的缓存表。
+
+    三者都没变就直接复用旧明细，不重跑该(模型,题)。证据或题目一变 → 键不命中需重跑。
+    """
+
+    cache: dict[tuple[str, str, str], dict] = {}
+    if summary is None:
+        return cache
+    for model in summary.metrics.get("models", []) or []:
+        mid = str(model.get("id", ""))
+        for detail in model.get("cases", []) or []:
+            ev_fp = str(detail.get("evidence_fp", ""))
+            q_fp = str(detail.get("question_fp", ""))
+            if mid and ev_fp and q_fp:
+                cache[(mid, ev_fp, q_fp)] = detail
+    return cache
+
+
+def iter_answer_match(
+    store: Store,
+    client: LLMClient,
+    config: ApiConfig,
+    suite: TestSuite,
+    *,
+    roster: list[RosterEntry],
+    selected_ids: list[str] | None = None,
+    use_cache: bool = True,
+) -> Iterator[dict]:
+    """L2 答案对照（流式）：焊死证据包，花名册里各模型各写一版答案，固定裁判逐题对照黄金。
+
+    每个模型一段「作答 → 对照判」，逐题 yield 进度事件；跑完聚合排行榜（综合分 F1 排序）
+    落 ``RunSummary(layer='answer_match', kind='multi_model', run_id='ans_<sid>')``。
+
+    事件 ``event``：``start`` / ``case_start`` / ``case_done`` / ``case_error`` / ``done``；
+    ``case_*`` 带 ``stage``（如 ``<id>_answer``）、``label``、``model_id`` / ``i`` / ``n``。
     """
 
     sid = suite.suite_id
-    base_rs, base_tokens, base_errors = _collect_route(
-        client, suite, agent_name=baseline_agent, route="closed_book", system=baseline_system
-    )
-    base_run = judge_suite(
-        store, client, config, suite, base_rs,
-        run_id=f"run_cb_{sid}", pass_threshold=pass_threshold,
-    )
-    treat_rs, treat_tokens, treat_errors = _collect_route(
-        client, suite, agent_name=treatment_agent, route="kb", system=treatment_system
-    )
-    treat_run = judge_suite(
-        store, client, config, suite, treat_rs,
-        run_id=f"run_kb_{sid}", pass_threshold=pass_threshold,
-    )
+    cases = suite.cases
+    n = len(cases)
 
-    report = compute_uplift(
-        base_run, treat_run, suite,
-        tau_low=tau_low, tau_high=tau_high, delta=delta,
-        theta_uplift=theta_uplift, max_regression=max_regression,
-    )
-    metrics = report.to_metrics_dict()
-    metrics["agent_tokens"] = {
-        "baseline": base_tokens.total_tokens,
-        "treatment": treat_tokens.total_tokens,
+    retrieval = store.get_retrieval_set(sid)
+    _answer_match_gate(suite, retrieval)  # 门禁：缺证据直接抛
+
+    entries = select_roster(roster, selected_ids)
+    if not entries:
+        raise RuntimeError("没有可参赛的模型（花名册为空或选中的 id 都不存在）")
+
+    prior = store.get_run_summary(f"ans_{sid}") if use_cache else None
+    cache = _prior_answer_match_cache(prior) if use_cache else {}
+
+    yield {"event": "start", "total": n, "models": [e.id for e in entries], "stages": len(entries)}
+
+    models_out: list[dict] = []
+    for entry in entries:
+        started = time.perf_counter()
+        tokens = TokenUsage()
+        hard_errors = 0
+        cov_sum = 0.0
+        prec_sum = 0.0
+        f1_sum = 0.0
+        scored = 0
+        case_details: list[dict] = []
+        errors: list[dict] = []
+
+        for i, case in enumerate(cases):
+            evidence = _evidence_pack(retrieval, case.id)
+            ev_fp = _fingerprint("".join(evidence))
+            q_fp = _fingerprint(case.question)
+            ckey = (entry.id, ev_fp, q_fp)
+
+            # —— 缓存命中：直接复用旧明细，不重跑该(模型,题) ——
+            if use_cache and ckey in cache:
+                detail = dict(cache[ckey])
+                yield {
+                    "event": "case_done", "stage": f"{entry.id}_cached",
+                    "model_id": entry.id, "i": i, "n": n, "case_id": case.id,
+                    "cached": True,
+                }
+                case_details.append(detail)
+                cov_sum += float(detail.get("coverage", 0.0))
+                prec_sum += float(detail.get("precision", 0.0))
+                f1_sum += float(detail.get("f1", 0.0))
+                scored += 1
+                if detail.get("has_hard_error"):
+                    hard_errors += 1
+                continue
+
+            # —— 作答 ——
+            yield {
+                "event": "case_start", "stage": f"{entry.id}_answer",
+                "label": f"{entry.label}·作答", "model_id": entry.id,
+                "i": i, "n": n, "case_id": case.id, "question": case.question,
+            }
+            try:
+                ans = client.answer(
+                    question=case.question, evidence=evidence,
+                    channel=entry.channel, model=entry.model,
+                )
+            except Exception as exc:  # noqa: BLE001 - 单题失败不打断整批
+                if i == 0 and not errors:
+                    raise RuntimeError(
+                        f"模型 {entry.label} 作答失败（首题即报错）：{exc}"
+                    ) from exc
+                errors.append({"case_id": case.id, "stage": "answer", "error": str(exc)})
+                yield {
+                    "event": "case_error", "stage": f"{entry.id}_answer",
+                    "model_id": entry.id, "case_id": case.id, "error": str(exc),
+                }
+                continue
+            answer_text = str(ans.get("answer") or "")
+            tokens = tokens + TokenUsage(**(ans.get("usage") or {}))
+
+            # —— 对照判 ——
+            yield {
+                "event": "case_start", "stage": f"{entry.id}_judge",
+                "label": f"{entry.label}·对照判", "model_id": entry.id,
+                "i": i, "n": n, "case_id": case.id, "question": case.question,
+            }
+            try:
+                verdict = client.judge_answer_match(
+                    question=case.question,
+                    expected_answer=case.expected_answer,
+                    key_points=list(case.key_points),
+                    answer=answer_text,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append({"case_id": case.id, "stage": "judge", "error": str(exc)})
+                yield {
+                    "event": "case_error", "stage": f"{entry.id}_judge",
+                    "model_id": entry.id, "case_id": case.id, "error": str(exc),
+                }
+                continue
+            tokens = tokens + TokenUsage(**(verdict.get("usage") or {}))
+
+            detail = {
+                "case_id": case.id,
+                "question": case.question,
+                "answer": answer_text,
+                "coverage": float(verdict.get("coverage", 0.0)),
+                "precision": float(verdict.get("precision", 0.0)),
+                "f1": float(verdict.get("f1", 0.0)),
+                "covered_points": verdict.get("covered_points", []),
+                "missed_points": verdict.get("missed_points", []),
+                "correct_claims": verdict.get("correct_claims", []),
+                "extra_claims": verdict.get("extra_claims", []),
+                "contradictions": verdict.get("contradictions", []),
+                "has_hard_error": bool(verdict.get("has_hard_error")),
+                "evidence_fp": ev_fp,
+                "question_fp": q_fp,
+            }
+            case_details.append(detail)
+            cov_sum += detail["coverage"]
+            prec_sum += detail["precision"]
+            f1_sum += detail["f1"]
+            scored += 1
+            if detail["has_hard_error"]:
+                hard_errors += 1
+            yield {
+                "event": "case_done", "stage": f"{entry.id}_judge",
+                "model_id": entry.id, "i": i, "n": n, "case_id": case.id,
+            }
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        denom = scored or 1
+        models_out.append({
+            "id": entry.id,
+            "label": entry.label,
+            "channel": entry.channel,
+            "model": entry.model,
+            "coverage": round(cov_sum / denom, 4),
+            "precision": round(prec_sum / denom, 4),
+            "f1": round(f1_sum / denom, 4),
+            "hard_errors": hard_errors,
+            "scored": scored,
+            "tokens": tokens.total_tokens,
+            "elapsed_ms": round(elapsed_ms, 1),
+            "cases": case_details,
+            "errors": errors,
+        })
+
+    # 排行榜：综合分 F1 降序（并列再按覆盖度），排名稳定。
+    models_out.sort(key=lambda m: (m["f1"], m["coverage"]), reverse=True)
+    metrics = {
+        "models": models_out,
+        "roster": [
+            {"id": e.id, "label": e.label, "channel": e.channel, "model": e.model}
+            for e in entries
+        ],
     }
-    metrics["errors"] = {"baseline": base_errors, "treatment": treat_errors}
-
     summary = RunSummary(
-        run_id=f"uplift_{sid}",
+        run_id=f"ans_{sid}",
         project_id=suite.project_id,
         suite_id=sid,
-        layer="value",
-        kind="uplift",
+        layer="answer_match",
+        kind="multi_model",
         metrics=metrics,
     )
     store.save_run_summary(summary)
-    return summary
+    yield {"event": "done", "metrics": metrics}
+
+
+def run_answer_match(
+    store: Store,
+    client: LLMClient,
+    config: ApiConfig,
+    suite: TestSuite,
+    *,
+    roster: list[RosterEntry],
+    selected_ids: list[str] | None = None,
+    use_cache: bool = True,
+) -> RunSummary:
+    """L2 答案对照（一次性阻塞版）：跑完 :func:`iter_answer_match` 取回落库的快照。"""
+
+    for _ in iter_answer_match(
+        store, client, config, suite,
+        roster=roster, selected_ids=selected_ids, use_cache=use_cache,
+    ):
+        pass
+    return store.get_run_summary(f"ans_{suite.suite_id}")
 
 
 # --- retrieval-layer (检索层) orchestration -------------------------------

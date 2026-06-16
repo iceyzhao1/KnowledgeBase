@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>通用知识库测试框架</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<div class="app">
+  <!-- 侧栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">评</div>
+      <div>
+        <div class="t">知识库测试框架</div>
+        <div class="s">Knowledge Base Eval</div>
+      </div>
+    </div>
+    <div class="nav-label">工作台</div>
+    <nav class="nav" id="nav">
+      <div class="navitem" data-page="dashboard">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+        <span>看板总览</span>
+      </div>
+      <div class="navitem" data-page="projects">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span>项目</span>
+      </div>
+      <div class="navitem" data-page="work">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/><circle cx="4" cy="12" r="1.6"/></svg>
+        <span>评估工作台</span>
+      </div>
+      <div class="nav-sep"></div>
+      <div class="navitem" data-page="chat">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>对话试问</span>
+      </div>
+    </nav>
+    <div class="side-foot">
+      <div class="lbl">当前项目</div>
+      <div class="proj-mini none" id="projMini">
+        <span class="dot"></span><span class="nm">未选择项目</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主区 -->
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <div class="page-title" id="pageTitle">看板总览</div>
+        <div class="page-sub" id="pageSub"></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="proj-select">
+        <label for="projSelect">项目</label>
+        <select id="projSelect"><option value="">— 无 —</option></select>
+      </div>
+    </header>
+    <main class="view" id="view"></main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js?v=20260616-answer-match"></script>
+</body>
+</html>

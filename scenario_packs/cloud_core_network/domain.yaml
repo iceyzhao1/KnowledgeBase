@@ -98,12 +98,6 @@ mining:
       - navigation
       - toc
       - metadata
-    # Segmentation thresholds (v2.0)
-    min_chunk_tokens: 128
-    max_chunk_tokens: 512
-    cross_section_merge: true
-    min_enrich_tokens: 30
-    structural_context_mode: breadcrumb
 
   # LLM templates
   llm_templates:
@@ -160,9 +154,9 @@ mining:
       output_schema_json: '{"type":"object","properties":{"questions":{"type":"array","items":{"type":"string"}}},"required":["questions"],"additionalProperties":false}'
 
     - template_key: mining-segment-understanding
-      template_version: "4"
-      purpose: "从段落提取实体、分类语义角色、评估内容质量"
-      system_prompt: "你是通信网络知识库的内容理解助手。分析技术文档段落，提取关键实体、分类语义角色，并评估内容质量。"
+      template_version: "5"
+      purpose: "分类段落语义角色、评估内容质量（实体抽取已拆到 mining-entity-extraction）"
+      system_prompt: "你是通信网络知识库的内容理解助手。分析技术文档段落，分类语义角色并评估内容质量。"
       user_prompt_template: >
         分析以下技术文档段落：
 
@@ -171,21 +165,6 @@ mining:
         段落内容：$text
 
         输出 JSON 对象，包含：
-        - entities: 实体列表，每个元素包含 type 和 name
-          type 可选值（仅限以下 8 种，禁止使用其他值）：command / network_element / parameter / protocol / interface / alarm / feature / concept
-
-        **⚠️ entities[].type 与 semantic_role 是两个不同字段，切勿混淆：**
-        - entities[].type 描述实体本身是什么（如"SMF"是 network_element，"PFCP"是 protocol）
-        - semantic_role 描述该段落的内容性质（如 procedure_step 表示段落讲的是操作步骤）
-        - 禁止在 entities[].type 中使用 semantic_role 的值（如 procedure_step、troubleshooting_step、checklist、note、example、constraint）
-        - 如果一个事物不是上述 8 种实体类型之一，不要把它放入 entities 列表
-
-        质量指引：
-        - 只提取文档中明确出现、有专有名称的技术实体
-        - 接口（如N4、Sxb）和协议（如PFCP、HTTP）是不同类型：接口是3GPP定义的参考点，协议是通信规范
-        - 告警ID（如ALM-XXX-XXX）归为alarm类型
-        - 产品特性编码（如GWFD-XXXXXX）和子特性（如SA-HTTP Pipeline）归为feature类型
-        - 如果无法确定实体类型，不要强行分类
 
         - semantic_role: 语义角色，根据内容实质选择最匹配的角色：
           - concept: 概念定义、功能描述、角色说明、架构概述、职责列表、特性介绍
@@ -215,9 +194,83 @@ mining:
         - 纯标题无内容视为非实质性内容
 
         输出示例（仅供参考格式，请根据实际内容生成）：
-        {"entities": [{"type": "network_element", "name": "SMF"}, {"type": "protocol", "name": "PFCP"}], "semantic_role": "concept", "document_type": "reference", "content_assessment": {"is_substantive": true, "is_navigation": false, "assessment_reason": "包含SMF核心功能的列表描述"}}
+        {"semantic_role": "concept", "document_type": "reference", "content_assessment": {"is_substantive": true, "is_navigation": false, "assessment_reason": "包含SMF核心功能的列表描述"}}
       expected_output_type: json_object
-      output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"name":{"type":"string"}},"required":["type","name"],"additionalProperties":false}},"semantic_role":{"type":"string"},"document_type":{"type":"string"},"content_assessment":{"type":"object","properties":{"is_substantive":{"type":"boolean"},"is_navigation":{"type":"boolean"},"assessment_reason":{"type":"string"}},"required":["is_substantive","is_navigation"],"additionalProperties":false}},"required":["entities","semantic_role","document_type","content_assessment"],"additionalProperties":false}'
+      output_schema_json: '{"type":"object","properties":{"semantic_role":{"type":"string"},"document_type":{"type":"string"},"content_assessment":{"type":"object","properties":{"is_substantive":{"type":"boolean"},"is_navigation":{"type":"boolean"},"assessment_reason":{"type":"string"}},"required":["is_substantive","is_navigation"],"additionalProperties":false}},"required":["semantic_role","document_type","content_assessment"],"additionalProperties":false}'
+
+    - template_key: mining-entity-extraction
+      template_version: "1"
+      purpose: "本体感知的双通道实体抽取：对齐已知类型 + 诚实提议新类型（逃生口）"
+      system_prompt: "你是通信网络知识库的本体实体抽取助手。从技术文档段落抽取关键实体；类型清单仅作参考、不一定完整，发现清单外的重要概念时要诚实标注、提议新类型，而不是勉强归类。"
+      user_prompt_template: >
+        从以下技术文档段落抽取关键技术实体。
+
+        段落标题：$section_title
+        内容类型：$block_type
+        段落内容：$text
+
+        当前本体的实体类型清单（仅作**参考**，**不一定完整**）：$allowed_types
+
+        请按"双通道"输出 JSON 对象：
+
+        【通道 A — entities：对齐已知类型】
+        每个元素：{name, type, confidence}
+        - 仅当实体确属上述清单中的某一类时，才放入 entities，并填该 type；
+        - confidence 取 0~1，表示你对"它属于这个类型"的确信度；
+        - type 只能用清单里的值，不要在这里编造新类型。
+
+        【通道 B — out_of_schema：诚实提议新类型（逃生口）】
+        每个元素：{name, proposed_type, reason, evidence}
+        - 当某概念**重要却不属于清单任何一类**时，放这里，**不要硬塞进最接近的旧类型，也不要丢弃**；
+        - proposed_type：你建议为它新建的类型名（可复用清单语义相近词，也可提全新名）；
+        - reason：为什么清单里没有合适类型；
+        - evidence：原文摘录（一句话即可）。
+
+        **关键原则：宁可标成"新类型待定"放进 out_of_schema，也不要勉强归到最接近的旧类型。**
+        若一个事物既不属于已知类型、也不算重要概念，则两个通道都不放。
+
+        抽取质量指引：
+        - 只抽文档中明确出现、有专有名称的技术实体（如 SMF、PFCP、N4、ALM-XXX-XXX、GWFD-XXXXXX）；
+        - 接口（如 N4、Sxb）和协议（如 PFCP、HTTP）是不同类型：接口是 3GPP 参考点，协议是通信规范；
+        - 对自己不太确定类型的实体，降低 confidence（系统会自动转入复核），不要硬猜。
+
+        输出示例（仅供参考格式）：
+        {"entities": [{"name": "SMF", "type": "network_element", "confidence": 0.95}, {"name": "PFCP", "type": "protocol", "confidence": 0.9}], "out_of_schema": [{"name": "网络切片", "proposed_type": "concept", "reason": "反复出现的核心架构概念，清单无精确对应类型", "evidence": "网络切片为不同业务提供隔离的逻辑网络"}]}
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"entities":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"type":{"type":"string"},"confidence":{"type":"number","minimum":0.0,"maximum":1.0}},"required":["name","type"],"additionalProperties":false}},"out_of_schema":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"proposed_type":{"type":"string"},"reason":{"type":"string"},"evidence":{"type":"string"}},"required":["name","proposed_type"],"additionalProperties":false}}},"required":["entities","out_of_schema"],"additionalProperties":false}'
+
+    - template_key: mining-ontology-induction
+      template_version: "1"
+      purpose: "从人确认的'暂无类型'实体归纳正式本体类型（LLM 调用 2，喂 Gate1 审批）"
+      system_prompt: "你是通信网络知识库的本体归纳助手。给你一批人工已确认为'重要、但暂无类型'的真实实体，请把语义同类的归并成新的实体类型，给出类型名、定义和示例。宁缺毋滥：只在确实成类时提议，不要为孤立概念硬造类型。"
+      user_prompt_template: >
+        下面是人工已确认、但当前本体里**还没有合适类型**的一批实体（已去重、非幻觉）。
+        请把其中**语义属于同一类**的实体归并，为每一类提议一个新的本体类型。
+
+        当前本体已有的类型（避免重复造同义类型）：$existing_types
+
+        待归纳实体清单（每行：规范名 + 模型早先的类型建议 + 一句原文例）：
+        $untyped_entities
+
+        请输出 JSON 对象，字段 new_types 为数组，每个元素：
+        {type_name, definition, examples, members, layer}
+        - type_name：新类型名（简洁的类别名，如 "network_slice"、"signaling_procedure"；
+          若与已有类型其实同义，请直接复用已有类型名，便于后续合并）；
+        - definition：一句话定义这个类型涵盖什么；
+        - examples：2~5 个该类型的代表实体名（从上面清单里选）；
+        - members：**属于该类型的实体规范名列表**（必须严格来自上面清单，逐字照抄，
+          用于系统把这些实体回贴到新类型，不要编造清单外的名字）；
+        - layer：取 "concept"（概念层）或 "instance"（实例层），拿不准填 "concept"。
+
+        重要原则：
+        - 只把**真正同类**的实体放进同一类型；语义不同就分成不同类型或不归类；
+        - 宁可少提类型，也不要把杂七杂八的实体硬塞进一个泛泛的大类；
+        - 一个实体最多归进一个类型；实在不像任何一类的实体可以不放进任何 members。
+
+        输出示例（仅供格式参考）：
+        {"new_types": [{"type_name": "network_slice", "definition": "为不同业务提供隔离的逻辑网络切片", "examples": ["网络切片", "切片实例"], "members": ["网络切片", "切片实例"], "layer": "concept"}]}
+      expected_output_type: json_object
+      output_schema_json: '{"type":"object","properties":{"new_types":{"type":"array","items":{"type":"object","properties":{"type_name":{"type":"string"},"definition":{"type":"string"},"examples":{"type":"array","items":{"type":"string"}},"members":{"type":"array","items":{"type":"string"}},"layer":{"type":"string"}},"required":["type_name","members"],"additionalProperties":false}}},"required":["new_types"],"additionalProperties":false}'
 
     - template_key: mining-discourse-relation
       template_version: "2"

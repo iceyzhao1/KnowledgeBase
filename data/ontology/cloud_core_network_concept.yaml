@@ -1,0 +1,143 @@
+# 本体种子文件：cloud_core_network（5G 核心网）概念层
+#
+# 用途：冷启动引种（bootstrap）本体 v1 的真相源 = 一份"概念词典"。
+#   上传方式：kb-ui 「本体版本」页 →「引种本体」按钮，选本文件即可。
+#   引种后真相源转移到数据库（ontology_* 表）；运行期抽取读 active 版本，
+#   不再回读本文件。本文件与"专家上传的本体文档"同一套 schema。
+#
+# schema 速览（解析见 ontology_bootstrap.py）：
+#   layer        顶层默认层，下面各类型未写 layer 时继承它
+#   node_types   概念对象类型：name / is_strong / definition / examples
+#   relation_types 关系类型：name / is_directed / inverse_name / patterns / definition
+#                  patterns = 允许的 (head 类型, tail 类型) 组合，"*" 表任意
+#   aliases      别名词典 {规范名: [别名, ...]}，喂归一化，source='seed'
+layer: concept
+domain: cloud_core_network
+
+# ── 概念对象类型（8 类）─────────────────────────────────────────
+# is_strong=true 的是"强类型"：抽取时要求更高的确信度，作为图谱主干。
+node_types:
+  - name: network_element
+    is_strong: true
+    definition: "5G 核心网网元功能模块（NF），承担会话/移动性/策略等独立功能"
+    examples: ["SMF", "UPF", "AMF", "PCF", "UDM", "NRF", "AUSF", "NSSF", "SMSF", "UDR"]
+
+  - name: command
+    is_strong: true
+    definition: "网元配置/查询操作命令，通常形如 动词+对象（ADD/MOD/DEL/SHOW/LST/DSP/REG/DEREG）"
+    examples: ["ADD UPF", "SHOW SMF", "MOD UPF", "DEL AMF", "REG NRF", "LST SESSION"]
+
+  - name: parameter
+    is_strong: true
+    definition: "命令或配置项的具体参数，含取值范围/默认值/含义"
+    examples: ["registerIPv4", "bindingIPv4", "heartbeat interval", "session timeout", "MTU"]
+
+  - name: protocol
+    is_strong: true
+    definition: "网元/接口间的通信协议规范"
+    examples: ["PFCP", "GTP-U", "GTP-C", "DIAMETER", "HTTP/2", "NAS", "SCTP", "TCP"]
+
+  - name: interface
+    is_strong: false
+    definition: "3GPP 定义的网元间标准化参考点（与协议区分：接口是参考点，协议是规范）"
+    examples: ["N1", "N2", "N3", "N4", "N6", "N7", "N8", "N10", "N11", "Sxb"]
+
+  - name: alarm
+    is_strong: false
+    definition: "网元运行告警，通常带告警 ID"
+    examples: ["ALM-1234-5678", "ALM-XXX-XXX"]
+
+  - name: feature
+    is_strong: false
+    definition: "产品特性或子特性，通常带特性编码"
+    examples: ["GWFD-123456", "SA-HTTP Pipeline", "N+1 备份"]
+
+  - name: concept
+    is_strong: false
+    definition: "上述类型未覆盖的领域概念/术语（架构、机制、术语等）"
+    examples: ["5GC", "服务化架构", "PDU 会话", "网络切片", "边缘计算"]
+
+# ── 概念层关系类型（8 种）──────────────────────────────────────
+# patterns = allowed_pairs：限定关系两端各自能是什么类型。
+# 注意：图谱按 head/tail 的字面类型名连线，通配 "*" 连不出真实节点，
+#       所以这里每对 head/tail 都写成具体类型，保证 8 类节点全部连通、无孤立点。
+relation_types:
+  - name: connects_to
+    is_directed: true
+    definition: "网元经接口连接，或网元间直接连接"
+    patterns:
+      - {head: network_element, tail: interface}
+      - {head: network_element, tail: network_element}
+
+  - name: uses_protocol
+    is_directed: true
+    definition: "接口或网元使用某协议"
+    patterns:
+      - {head: interface, tail: protocol}
+      - {head: network_element, tail: protocol}
+
+  - name: configures
+    is_directed: true
+    inverse_name: configured_by
+    definition: "命令对网元/接口执行配置或操作（ADD/MOD/DEL/SHOW 等）"
+    patterns:
+      - {head: command, tail: network_element}
+      - {head: command, tail: interface}
+
+  - name: has_parameter
+    is_directed: true
+    inverse_name: parameter_of
+    definition: "命令或网元携带/配置某参数"
+    patterns:
+      - {head: command, tail: parameter}
+      - {head: network_element, tail: parameter}
+
+  - name: raises_alarm
+    is_directed: true
+    inverse_name: alarm_of
+    definition: "网元或特性运行时上报告警"
+    patterns:
+      - {head: network_element, tail: alarm}
+      - {head: feature, tail: alarm}
+
+  - name: supports_feature
+    is_directed: true
+    inverse_name: feature_of
+    definition: "网元支持/承载某产品特性"
+    patterns:
+      - {head: network_element, tail: feature}
+
+  - name: part_of
+    is_directed: true
+    inverse_name: has_part
+    definition: "从属/组成关系（A 是 B 的一部分）"
+    patterns:
+      - {head: network_element, tail: concept}
+      - {head: interface, tail: network_element}
+      - {head: parameter, tail: command}
+      - {head: feature, tail: feature}
+
+  - name: is_a
+    is_directed: true
+    definition: "类属关系（A 是一种 B，同类型族）"
+    patterns:
+      - {head: network_element, tail: concept}
+      - {head: protocol, tail: concept}
+      - {head: concept, tail: concept}
+
+# ── 别名词典（归一化用：把别名/全称统一到规范名）──────────────────
+# {规范名: [别名1, 别名2, ...]}。中英文全称、缩写都可以放这里。
+aliases:
+  UPF: ["用户面功能", "User Plane Function", "用户面"]
+  SMF: ["会话管理功能", "Session Management Function", "会话管理"]
+  AMF: ["接入和移动性管理功能", "Access and Mobility Management Function", "接入与移动性管理"]
+  PCF: ["策略控制功能", "Policy Control Function", "策略控制"]
+  UDM: ["统一数据管理", "Unified Data Management"]
+  NRF: ["网络存储功能", "Network Repository Function", "网络仓库功能"]
+  AUSF: ["鉴权服务器功能", "Authentication Server Function"]
+  NSSF: ["网络切片选择功能", "Network Slice Selection Function"]
+  UDR: ["统一数据仓库", "Unified Data Repository"]
+  PFCP: ["包转发控制协议", "Packet Forwarding Control Protocol"]
+  GTP-U: ["GTP 用户面", "GPRS Tunnelling Protocol User Plane"]
+  5GC: ["5G 核心网", "5G Core", "5G Core Network"]
+  PDU会话: ["PDU 会话", "PDU Session", "分组数据单元会话"]

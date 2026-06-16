@@ -1,0 +1,13 @@
+# runtime_eval 依赖。
+# 大部分核心依赖（fastapi / uvicorn / pydantic / httpx / python-dotenv）已包含在
+# 仓库根 requirements.txt；本文件补齐本框架额外所需。
+
+# 文档上传走 multipart，eval-api 需要它（仓库根未含）。
+python-multipart>=0.0.9
+
+# 导入外部 YAML 用例集（suites:import）。未安装时仅 .json 导入可用。
+pyyaml>=6.0
+
+# Anthropic 直连 Provider（EVAL_LLM_PROVIDER=anthropic）。
+# 未安装时自动回退到 httpx 裸调用 Messages API，可不装。
+anthropic>=0.39 ; extra == "anthropic"

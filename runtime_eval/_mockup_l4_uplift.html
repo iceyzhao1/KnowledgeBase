@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>L4 增量价值 · 设计示例（mockup）</title>
+<style>
+:root{
+  --bg:#f5f6f3; --surface:#fff; --surface-2:#fafbf8;
+  --ink:#1c1f1b; --ink-soft:#3c4039; --muted:#767b71; --faint:#a7aca1;
+  --line:#e7e9e2; --line-strong:#d6d9cf;
+  --accent:#0e7a64; --accent-ink:#0a5b4a; --accent-weak:#e4f2ed; --accent-soft:#f0f8f5;
+  --green:#1f9254; --green-weak:#e3f5ea; --amber:#b4690e; --amber-weak:#fdf2dd;
+  --red:#c4362f; --red-weak:#fbe9e7; --blue:#2563a8; --blue-weak:#e8f0fb;
+  --radius:14px; --radius-sm:9px;
+  --shadow-sm:0 1px 2px rgba(28,31,27,.04),0 1px 3px rgba(28,31,27,.06);
+  --shadow-md:0 4px 14px rgba(28,31,27,.07),0 2px 6px rgba(28,31,27,.05);
+  --font:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  --mono:"Cascadia Code","JetBrains Mono",ui-monospace,"Consolas",monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.5}
+.wrap{max-width:980px;margin:0 auto;padding:26px 22px 60px}
+h1{font-size:18px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:12.5px;margin-bottom:18px}
+
+/* demo toggle bar */
+.demobar{display:flex;align-items:center;gap:10px;background:#fff;border:1px dashed var(--line-strong);
+  border-radius:12px;padding:10px 14px;margin-bottom:22px;font-size:12.5px}
+.demobar b{font-weight:700}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:9px;overflow:hidden}
+.seg button{border:0;background:#fff;color:var(--ink-soft);font:inherit;font-size:12px;font-weight:600;
+  padding:6px 12px;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+
+/* stepper */
+.stepper{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin-bottom:18px}
+.stepper-item{display:flex;align-items:center;gap:11px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;padding:11px 16px;flex:1 1 160px}
+.stepper-item.active{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 1px var(--accent) inset}
+.stepper-num{width:26px;height:26px;border-radius:50%;background:var(--surface-2);color:var(--muted);
+  display:grid;place-items:center;font-size:13px;font-weight:800;flex:none}
+.stepper-item.active .stepper-num{background:var(--accent);color:#fff}
+.stepper-item.done .stepper-num{background:var(--green);color:#fff}
+.stepper-txt .t{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px}
+.stepper-txt .d{font-size:11px;color:var(--muted);margin-top:2px}
+.stepper-arrow{display:grid;place-items:center;color:var(--faint);font-size:16px;flex:none}
+
+/* card */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:20px 22px;box-shadow:var(--shadow-sm);margin-bottom:18px}
+.card-h{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.card-h h3{margin:0;font-size:14.5px;font-weight:700}
+.card-h .hint{font-size:12px;color:var(--muted);font-weight:400}
+.card-h .spacer{flex:1}
+.step-no{width:24px;height:24px;border-radius:7px;background:var(--accent-weak);color:var(--accent-ink);
+  display:grid;place-items:center;font-size:12px;font-weight:800;flex:none}
+
+/* badge */
+.badge{display:inline-flex;align-items:center;gap:5px;border-radius:20px;padding:3px 11px;font-size:11.5px;font-weight:600}
+.badge.ok{background:var(--green-weak);color:var(--green)}
+.badge.warn{background:var(--amber-weak);color:var(--amber)}
+.badge.muted{background:#eef0ea;color:var(--muted)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+
+/* cache strip */
+.cache{display:flex;align-items:center;gap:13px;flex-wrap:wrap;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:11px;padding:13px 15px;margin-bottom:14px}
+.cache .meta{font-size:12px;color:var(--muted)}
+.cache .meta code{font-family:var(--mono);background:#eef0ea;border-radius:5px;padding:1px 6px;color:var(--ink-soft)}
+.cache .spacer{flex:1}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#fff;border:1px solid var(--accent);
+  border-radius:10px;padding:8px 15px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;box-shadow:var(--shadow-sm)}
+.btn:hover{background:var(--accent-ink)}
+.btn.ghost{background:var(--surface);color:var(--ink-soft);border-color:var(--line-strong);box-shadow:none}
+.btn.ghost:hover{background:var(--surface-2);border-color:var(--accent);color:var(--accent-ink)}
+.btn.sm{padding:5px 11px;font-size:12px;border-radius:8px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.note{font-size:11.5px;color:var(--faint)}
+
+/* threshold fields */
+.fields{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field .lbl{font-size:11px;color:var(--muted);font-weight:600}
+.field input{width:78px;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line-strong);
+  border-radius:8px;background:#fff;color:var(--ink)}
+.field input:focus{border-color:var(--accent);outline:none}
+
+/* report */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;position:relative;overflow:hidden}
+.stat::after{content:"";position:absolute;right:-16px;top:-16px;width:54px;height:54px;border-radius:50%;background:var(--accent-soft)}
+.stat .n{font-size:25px;font-weight:800;line-height:1;position:relative}
+.stat .l{font-size:11.5px;color:var(--muted);margin-top:6px;position:relative}
+.stat.up .n{color:var(--green)} .stat.down .n{color:var(--red)} .stat.acc .n{color:var(--accent)}
+.distro{display:flex;height:30px;border-radius:8px;overflow:hidden;border:1px solid var(--line);margin-bottom:8px}
+.distro span{display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.pass{display:inline-flex;align-items:center;gap:6px;font-weight:800;font-size:14px}
+.hr{height:1px;background:var(--line);margin:16px 0}
+.dim{opacity:.4;pointer-events:none}
+.report-empty{color:var(--muted);font-size:12.5px;background:var(--surface-2);border:1px dashed var(--line-strong);
+  border-radius:11px;padding:18px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>评估工作台 · cloud-fabric</h1>
+  <div class="sub">设计示例（mockup）— 第④步「评分报告」拆成「跑对照评测（缓存）」+「生成评估报告」两块</div>
+
+  <div class="demobar">
+    <b>示例状态切换：</b>
+    <span class="note">看缓存在两种情况下界面怎么变 →</span>
+    <span class="seg">
+      <button id="t-fresh" class="on" onclick="setState('fresh')">缓存命中（题目没变）</button>
+      <button id="t-stale" onclick="setState('stale')">题目已变（需重跑）</button>
+      <button id="t-none" onclick="setState('none')">从没跑过</button>
+    </span>
+  </div>
+
+  <!-- stepper -->
+  <div class="stepper">
+    <div class="stepper-item done"><div class="stepper-num">1</div><div class="stepper-txt"><div class="t">导入测试集</div><div class="d">题目入题库</div></div></div>
+    <div class="stepper-arrow">→</div>
+    <div class="stepper-item done"><div class="stepper-num">2</div><div class="stepper-txt"><div class="t">题库题目</div><div class="d">查看 / 编辑</div></div></div>
+    <div class="stepper-arrow">→</div>
+    <div class="stepper-item done"><div class="stepper-num">3</div><div class="stepper-txt"><div class="t">检索取证</div><div class="d">收被测答卷</div></div></div>
+    <div class="stepper-arrow">→</div>
+    <div class="stepper-item active"><div class="stepper-num">4</div><div class="stepper-txt"><div class="t">评分报告</div><div class="d">打分 + 增量价值(L4)</div></div></div>
+  </div>
+
+  <!-- block A: run + cache -->
+  <div class="card">
+    <div class="card-h">
+      <span class="step-no">A</span>
+      <h3>跑对照评测（答案 + 判分）</h3>
+      <span class="hint">闭卷裸答(A) vs 用知识库(C)，逐题作答并判分 · 约 4×题数 次大模型调用</span>
+    </div>
+
+    <div class="cache" id="cacheStrip"><!-- filled by JS --></div>
+
+    <div id="runActions"><!-- filled by JS --></div>
+  </div>
+
+  <!-- block B: report -->
+  <div class="card" id="reportCard">
+    <div class="card-h">
+      <span class="step-no">B</span>
+      <h3>生成评估报告</h3>
+      <span class="hint">读缓存的判分结果算增量价值 · 纯计算不调大模型 · 调阈值即时重算</span>
+    </div>
+
+    <div class="fields">
+      <label class="field"><span class="lbl">τ_low（弱）</span><input value="0.40"></label>
+      <label class="field"><span class="lbl">τ_high（强）</span><input value="0.60"></label>
+      <label class="field"><span class="lbl">δ 显著差</span><input value="0.10"></label>
+      <label class="field"><span class="lbl">θ 增益门槛</span><input value="0.10"></label>
+      <button class="btn" id="reportBtn">生成评估报告</button>
+    </div>
+
+    <div id="reportBody"><!-- filled by JS --></div>
+  </div>
+</div>
+
+<script>
+const REPORT = `
+  <div class="hr"></div>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <span class="pass" style="color:var(--green)">● PASS</span>
+    <span class="note">增益显著（+18.2% ≥ θ 10%）且退步可控（6% ≤ 上限 5%… 触红，见诊断）</span>
+  </div>
+  <div class="stats">
+    <div class="stat up"><div class="n">+18.2%</div><div class="l">净增益（用库 − 闭卷）</div></div>
+    <div class="stat up"><div class="n">24%</div><div class="l">提升率（A→C 变好）</div></div>
+    <div class="stat down"><div class="n">6%</div><div class="l">退步率（A→C 变差）</div></div>
+    <div class="stat acc"><div class="n">0.71</div><div class="l">用库平均分（闭卷 0.53）</div></div>
+  </div>
+  <div style="font-size:12px;font-weight:700;margin:4px 0 7px">五桶分布（100 题）</div>
+  <div class="distro">
+    <span style="flex:0.24;background:var(--green)">救场 24</span>
+    <span style="flex:0.31;background:#5bbf86">增强 31</span>
+    <span style="flex:0.33;background:var(--faint)">无谓 33</span>
+    <span style="flex:0.06;background:var(--amber)">干扰 6</span>
+    <span style="flex:0.06;background:var(--red)">误导 6</span>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--green)"></i>救场=闭卷错·用库对</span>
+    <span><i style="background:#5bbf86"></i>增强=都对但更好</span>
+    <span><i style="background:var(--faint)"></i>无谓=没差别</span>
+    <span><i style="background:var(--amber)"></i>干扰=变差</span>
+    <span><i style="background:var(--red)"></i>误导=闭卷对·用库错</span>
+  </div>
+`;
+
+function setState(s){
+  for(const k of ['fresh','stale','none']) document.getElementById('t-'+k).classList.toggle('on', k===s);
+  const strip = document.getElementById('cacheStrip');
+  const actions = document.getElementById('runActions');
+  const reportBtn = document.getElementById('reportBtn');
+  const reportBody = document.getElementById('reportBody');
+  const reportCard = document.getElementById('reportCard');
+
+  if(s==='fresh'){
+    strip.innerHTML = `
+      <span class="badge ok"><span class="dot"></span>已缓存</span>
+      <span class="meta">题目指纹 <code>a1b2c3d4</code> · 100 题 · 跑于 2026-06-16 14:20</span>
+      <span class="spacer"></span>
+      <span class="note">题目内容未变，无需重跑</span>`;
+    actions.innerHTML = `
+      <button class="btn ghost sm">重跑对照评测（强制，约 400 次调用）</button>
+      <span class="note" style="margin-left:8px">一般不用点；只有想刷新答案时才重跑</span>`;
+    reportCard.classList.remove('dim');
+    reportBtn.disabled = false;
+    reportBody.innerHTML = REPORT;
+  } else if(s==='stale'){
+    strip.innerHTML = `
+      <span class="badge warn"><span class="dot"></span>题目已变</span>
+      <span class="meta">上次 <code>a1b2c3d4</code> → 当前 <code>9f8e7d6c</code> · 缓存失效</span>
+      <span class="spacer"></span>
+      <span class="note">检测到题目/答案/要点改动</span>`;
+    actions.innerHTML = `
+      <button class="btn">跑对照评测（约 400 次调用）</button>
+      <span class="note" style="margin-left:8px">跑完自动缓存，下次题目不变就免跑</span>`;
+    reportCard.classList.add('dim');
+    reportBtn.disabled = true;
+    reportBody.innerHTML = `<div class="report-empty">题目改过了，请先重跑「跑对照评测」生成新缓存，再出报告。</div>`;
+  } else {
+    strip.innerHTML = `
+      <span class="badge muted"><span class="dot"></span>未跑</span>
+      <span class="meta">这个测试集还没跑过对照评测</span>
+      <span class="spacer"></span>
+      <span class="note">第一次要花点时间</span>`;
+    actions.innerHTML = `
+      <button class="btn">跑对照评测（约 400 次调用）</button>
+      <span class="note" style="margin-left:8px">跑完自动缓存</span>`;
+    reportCard.classList.add('dim');
+    reportBtn.disabled = true;
+    reportBody.innerHTML = `<div class="report-empty">还没有缓存的判分结果。先点上面「跑对照评测」。</div>`;
+  }
+}
+setState('fresh');
+</script>
+</body>
+</html>
