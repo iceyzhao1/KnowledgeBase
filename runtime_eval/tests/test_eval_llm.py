@@ -749,3 +749,20 @@ def test_mock_provider_overall_summary_echoes_presence():
     # mock 返回中文文本（非 JSON），且能反映「有 1 层在、2 层未评测」
     assert "评测" in out.text
     assert out.usage.total_tokens > 0
+
+
+def test_summarize_overall_returns_text_and_usage():
+    from runtime_eval.eval_llm import service
+    from runtime_eval.eval_llm.config import LLMConfig
+    from runtime_eval.eval_llm.providers.mock import MockProvider
+
+    out = service.summarize_overall(
+        MockProvider(LLMConfig(provider="mock")),
+        suite_meta={"name": "演示", "total_cases": 5},
+        l1={"pass_rate": 0.6},
+        l2={"models": [{"id": "m", "label": "M", "f1": 0.7}]},
+        l4=None,
+    )
+    assert out["summary"].strip()  # 非空总评正文
+    assert "评测" in out["summary"]
+    assert out["usage"]["total_tokens"] > 0

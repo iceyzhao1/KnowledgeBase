@@ -13,6 +13,7 @@ from .prompts import (
     build_answer_prompt,
     build_generate_prompt,
     build_judge_prompt,
+    build_overall_summary_prompt,
     build_retrieval_judge_prompt,
 )
 from .providers.base import LLMProvider
@@ -361,3 +362,31 @@ def judge_retrieval(
         "rationale": str(payload.get("rationale", "")),
         "usage": result.usage.model_dump(),
     }
+
+
+def summarize_overall(
+    provider: LLMProvider,
+    *,
+    suite_meta: dict,
+    l1: dict | None,
+    l2: dict | None,
+    l4: dict | None,
+    temperature: float = 0.3,
+    max_tokens: int = 2048,
+) -> dict:
+    """综合总评：把三层关键指标交给模型，整合出一段中文整体评价。
+
+    纯 completion（无工具、非 JSON）。返回 ``{summary, usage}``。
+    """
+
+    system, user = build_overall_summary_prompt(
+        suite_meta=suite_meta, l1=l1, l2=l2, l4=l4
+    )
+    result = provider.chat(
+        system=system,
+        user=user,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        json_mode=False,
+    )
+    return {"summary": result.text.strip(), "usage": result.usage.model_dump()}
