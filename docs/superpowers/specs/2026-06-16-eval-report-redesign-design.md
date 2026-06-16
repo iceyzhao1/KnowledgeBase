@@ -12,8 +12,9 @@
 2. **新增综合评分**：页面置顶一张综合卡，把三层结果汇总成关键数 + 状态徽章，并调用一次 `claude -p` 生成一段**自然语言总评**——不只给达标/不达标结论，而是用大白话解释这些指标说明了知识库好在哪、差在哪、该往哪改。
 3. **每个指标加注释**：检索质量/答案质量/增量价值每一段里，每个指标名旁挂一个小说明（hover tooltip + 一行小灰字），点出该指标含义；打分口径卡同理。
 4. **打分口径折叠收尾**：原「评估标准」改名「打分口径」，折叠到页面底部，每个参数配大白话。
+5. **L4 用库路复用第 3 步证据**：增量价值的「用库」一路不再现场重新检索，改为复用第 3 步已检索+已过目的证据包，让模型只做整合——三层锚定同一份证据，更省也更一致（详见 §8）。
 
-非目标：不改三层各自的计算/跑批/SSE 逻辑；不动 L3（后端有但当前页面未单独展示）；不改后端评分口径数值。
+非目标：不动 L1/L2 的计算/跑批/SSE 逻辑；不动 L3（后端有但当前页面未单独展示）；不改后端评分口径数值（阈值/权重）。L4 仅改「用库路怎么拿料作答」，不改 `compute_uplift` 的分桶/阈值逻辑。
 
 ---
 
@@ -124,6 +125,7 @@ L1/L2/L4 代号缩成标题旁的小徽章保留，方便追溯。
 后端：
 - `eval_llm/prompts.py`、`eval_llm/service.py`、`eval_llm/app.py`
 - `eval_api/llm_client.py`、`eval_api/app.py`
+- `eval_api/orchestrator.py`：`iter_value_uplift` 的「用库」路改为复用证据（§8）。
 
 ---
 
@@ -131,6 +133,30 @@ L1/L2/L4 代号缩成标题旁的小徽章保留，方便追溯。
 
 - eval-llm `summarize_overall` 单测：注入 mock provider，断言 prompt 含三层关键数、缺层标注、返回 summary 文本。
 - eval-api `/overall` 单测：注入 poster，三层齐全/缺层/全缺三种路径分别断言 200/200/400，且落 `RunSummary(layer="overall")`。
+- L4 复用证据单测：注入 poster，断言「用库」路调用的是 `answer`（带第 3 步证据）而非 `run-agent`；某题无证据时按空证据作答、不报错；闭卷路仍走 `run-agent(closed_book)`。
 - 前端：起 eval-web，跑通三层后点「生成综合评价」，确认三栏关键数、徽章、中文总评、各指标 tooltip 正常；缺层时显示「未评测」且总评如实说明。
 
 > 注意（来自项目记忆）：测试连的是生产库，conftest 会 TRUNCATE 全表；跑 pytest 前务必确认 DB 目标，不在生产库上跑。
+
+---
+
+## 8. L4「用库」路改为复用第 3 步证据
+
+### 现状
+`iter_value_uplift`（[orchestrator.py:464](../../../runtime_eval/runtime_eval/eval_api/orchestrator.py)）两路都走 `client.run_agent`：
+- 闭卷 A：`run_agent(route="closed_book")` —— 模型用自身知识答，不检索。
+- 用库 C：`run_agent(route="kb")` —— 模型挂 MCP **现场重新检索** + 答。
+
+问题：C 路重新检索的料，跟第 3 步 L1 判过、L2 用过的那份**不是同一份**，既贵又割裂了三层因果。
+
+### 改法
+- **用库 C**：改为复用第 3 步证据。逐题从 `store.get_retrieval_set(sid).items.get(case_id)` 取证据条目（与 L2 答案对照同源，见 [app.py:921](../../../runtime_eval/runtime_eval/eval_api/app.py)），调 `client.answer(question=..., evidence=[it.text...])` 让模型**只整合不检索**。
+- **闭卷 A**：保持 `run_agent(route="closed_book")` 不变（本就不检索，无需动）。
+- **判分/分桶/阈值**：完全不变，`compute_uplift` 原样复用。
+- **边界**：某题第 3 步没有证据（未检索）→ 按空证据作答（等价于闭卷），不报错；建议页面提示"先把第 3 步检索做完再跑 L4"。
+
+### 语义变化（需知晓）
+L4 从「评整套系统（检索+答）用库 vs 闭卷」收窄为「给定第 3 步这份证据，用 vs 不用」。这正是想要的：让 L1（这份料准不准）→ L2（拿这份料谁答得好）→ L4（用这份料比闭卷强多少）锚定**同一份证据**，综合总评的因果链才成立。
+
+### SSE 事件
+`{route}_answer` 阶段事件保持不变（前端进度条无需改），只是后端该阶段内部由「检索+答」变成「读证据+整合」。
