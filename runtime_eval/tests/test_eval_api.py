@@ -634,6 +634,10 @@ def test_serves_eval_web_spa(client):
     assert "answer-match:run/stream" in app_js.text
     assert "runAnswerMatch" in app_js.text
     assert "renderAnswerMatch" in app_js.text
+    # L2 中断续跑：续跑按钮 + cache 开关（开跑=全量 cache=0、续跑=只补没跑完 cache=1）
+    assert "amResumeBtn" in app_js.text
+    assert "resume ? 1 : 0" in app_js.text
+    assert "&cache=" in app_js.text
     # Phase 0 评测档案：测试集/评估档案从服务端读（localStorage 退为离线兜底）
     assert "syncSuitesFromServer" in app_js.text
     assert "syncRunsFromServer" in app_js.text
@@ -1713,6 +1717,50 @@ def test_answer_match_cache_reuses_prior_snapshot(tmp_path):
     assert third.answer_calls == 4
 
 
+def test_answer_match_incremental_save_enables_resume(tmp_path):
+    """中断（生成器消费到一半就停）时，已完成的题应已落库，续跑只补没跑完的。"""
+    from runtime_eval.eval_api import orchestrator
+
+    config, store, suite = _answer_match_fixtures(tmp_path)  # 2 题
+    roster = _good_bad_roster()  # 2 模型（bad 先跑）
+
+    # —— 模拟中断：消费到第一个 case_done 就 break，不再继续 ——
+    first = _FakeAnswerClient()
+    gen = orchestrator.iter_answer_match(store, first, config, suite, roster=roster)
+    for ev in gen:
+        if ev["event"] == "case_done":
+            break
+    gen.close()
+
+    # 中断时已完成的部分必须已经落库（旧逻辑只在最后落库 → 这里会是 None）
+    snap = store.get_run_summary("ans_s_ans")
+    assert snap is not None
+    assert first.answer_calls >= 1
+
+    # —— 续跑：cache 命中已完成的题，只补没跑完的，调用次数 < 全跑(4) ——
+    second = _FakeAnswerClient()
+    summary = orchestrator.run_answer_match(store, second, config, suite, roster=roster)
+    assert second.answer_calls < 4
+    # 最终结果完整：两模型都在榜，各 2 题明细
+    assert sorted(m["id"] for m in summary.metrics["models"]) == ["bad", "good"]
+    assert all(len(m["cases"]) == 2 for m in summary.metrics["models"])
+
+
+def test_answer_match_emits_resume_event_with_counts(tmp_path):
+    """已有完整快照后再跑：应发 resume 事件，告知已完成数 / 总数。"""
+    from runtime_eval.eval_api import orchestrator
+
+    config, store, suite = _answer_match_fixtures(tmp_path)  # 2 题
+    roster = _good_bad_roster()  # 2 模型 → 共 4 个(模型,题)对
+    orchestrator.run_answer_match(store, _FakeAnswerClient(), config, suite, roster=roster)
+
+    events = list(
+        orchestrator.iter_answer_match(store, _FakeAnswerClient(), config, suite, roster=roster)
+    )
+    resume = [e for e in events if e["event"] == "resume"]
+    assert resume and resume[0]["done"] == 4 and resume[0]["total"] == 4
+
+
 def _answer_match_stream_client(tmp_path):
     """eval-api 测试客户端：经 poster 驱动 in-process eval-llm（mock provider）跑答案对照。"""
     from runtime_eval.eval_llm.app import create_app as create_llm_app
@@ -1772,3 +1820,23 @@ def test_answer_match_run_stream_emits_progress_and_persists(tmp_path):
 def test_answer_match_run_stream_404_when_suite_missing(tmp_path):
     tc, _ = _answer_match_stream_client(tmp_path)
     assert tc.get("/api/v1/suites/nope/answer-match:run/stream").status_code == 404
+
+
+def test_llm_client_summarize_overall_posts_to_endpoint():
+    from runtime_eval.eval_api.llm_client import LLMClient
+
+    seen = {}
+
+    def poster(path: str, payload: dict) -> dict:
+        seen["path"] = path
+        seen["payload"] = payload
+        return {"summary": "一段总评", "usage": {"total_tokens": 3}}
+
+    out = LLMClient(poster=poster).summarize_overall(
+        suite_meta={"name": "T", "total_cases": 2},
+        l1={"pass_rate": 0.5}, l2=None, l4=None,
+    )
+    assert seen["path"] == "/overall-summary"
+    assert seen["payload"]["suite_meta"]["name"] == "T"
+    assert seen["payload"]["l2"] is None
+    assert out["summary"] == "一段总评"

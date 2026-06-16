@@ -202,3 +202,22 @@ class LLMClient:
             {"question": question, "system": system, "route": route},
             timeout=timeout or max(self.timeout, 900),
         )
+
+    def summarize_overall(
+        self,
+        *,
+        suite_meta: dict,
+        l1: dict | None,
+        l2: dict | None,
+        l4: dict | None,
+    ) -> dict:
+        """综合总评：把三层关键指标交给 eval-llm 整合一段中文整体评价。
+
+        含模型推理、可能走代理，默认放宽超时（同 judge/answer 级别）。
+        """
+
+        return self._post(
+            "/overall-summary",
+            {"suite_meta": suite_meta, "l1": l1, "l2": l2, "l4": l4},
+            timeout=max(self.timeout, 900),
+        )
