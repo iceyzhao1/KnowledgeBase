@@ -140,6 +140,7 @@ L1/L2/L4 代号缩成标题旁的小徽章保留，方便追溯。
 - eval-llm `summarize_overall` 单测：注入 mock provider，断言 prompt 含三层关键数、缺层标注、返回 summary 文本。
 - eval-api `/overall` 单测：注入 poster，三层齐全/缺层/全缺三种路径分别断言 200/200/400，且落 `RunSummary(layer="overall")`。
 - L4 复用证据单测：注入 poster，断言「用库」路调用的是 `answer`（带第 3 步证据）而非 `run-agent`；某题无证据时按空证据作答、不报错；闭卷路仍走 `run-agent(closed_book)`。
+- L4 边跑边入库单测：把 `iter_value_uplift` 当生成器逐 event 消费，在用库路判分进行到一半时断言 DB 里已能 `get_run_summary(uplift_<sid>)` 取到**部分**增量（n 小于总题数、随消费递增），且 `run_cb_/run_kb_` run 也已逐题落库。
 - 前端：起 eval-web，跑通三层后点「生成综合评价」，确认三栏关键数、徽章、中文总评、各指标 tooltip 正常；缺层时显示「未评测」且总评如实说明。
 
 > 注意（来自项目记忆）：测试连的是生产库，conftest 会 TRUNCATE 全表；跑 pytest 前务必确认 DB 目标，不在生产库上跑。
@@ -166,3 +167,25 @@ L4 从「评整套系统（检索+答）用库 vs 闭卷」收窄为「给定第
 
 ### SSE 事件
 `{route}_answer` 阶段事件保持不变（前端进度条无需改），只是后端该阶段内部由「检索+答」变成「读证据+整合」。
+
+---
+
+## 9. L4 边跑边入库（与 L1/L2 对齐）
+
+### 现状（问题）
+`iter_value_uplift` 是**每路答完才存 run、最后才存汇总**（[orchestrator.py:551](../../../runtime_eval/runtime_eval/eval_api/orchestrator.py)、:576）：判分循环里只 yield 进度、不落库，整跑完才 `save_run` + `save_run_summary(uplift_<sid>)`。中途崩了已判的题全白跑，DB 里看不到任何 L4 进度——这跟 L1（逐题 upsert）、L2（逐模型逐题 upsert）不一致。
+
+### 改法：逐题 upsert
+利用「`compute_uplift` 只配对两路都判了的题、未配对自动跳过」这一既有特性，把落库下沉到判分循环里：
+- **闭卷 A 路判分循环**：每判完一题就 `store.save_run(run_cb)`（覆盖式 upsert，run_id 稳定 `run_cb_<sid>`）——第一路进度即时落库。
+- **用库 C 路判分循环**：每判完一题，
+  1. `store.save_run(run_kb)` 存原始判分；
+  2. 用「闭卷整路 + 用库已判部分」调 `compute_uplift` 得**部分增量**，`store.save_run_summary(RunSummary(run_id=uplift_<sid>, layer="value"))` 覆盖式刷新——增量汇总随每题配对成功而增长。
+- 最后那次 `save_run` / `save_run_summary` 保留（幂等，作收尾），`done` 事件照常带最终 metrics。
+
+### 性质
+- **崩溃可续看**：任何时刻 DB 里都是"到目前为止"的 L4 真实进度；闭卷阶段已有原始 run，用库阶段每配对一题汇总就更新一次。
+- **不改口径**：`compute_uplift` 的分桶/阈值/难度加权一行不动，只是被更频繁地调用（纯内存函数，开销小）；`save_*` 都是稳定 run_id 的 upsert，不会堆垃圾。
+- **续跑（跳过已判题）不在本次范围**——本次只做"边跑边写"，不做 L2 那种 use_cache 续跑；如需另开任务。
+
+> 注意：本节与 §8（用库路复用证据）同改 `iter_value_uplift`，实现时一并完成、一并测试。
