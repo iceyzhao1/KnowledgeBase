@@ -310,7 +310,7 @@ OVERALL_SUMMARY_SYSTEM = """\
 def _overall_layer_line(name: str, metrics: dict | None, fields: list[tuple[str, str]]) -> str:
     """渲染一层的关键数；metrics 为 None 时标「未评测」。"""
 
-    if not metrics:
+    if metrics is None:
         return f"- {name}：未评测"
     parts = []
     for label, key in fields:
@@ -343,7 +343,7 @@ def build_overall_summary_prompt(
 
     # 答案质量：取排行榜第一名（综合分 F1 最高）
     l2_line = "- 答案质量：未评测"
-    if l2 and l2.get("models"):
+    if l2 is not None and l2.get("models"):
         best = max(l2["models"], key=lambda m: m.get("f1", 0.0))
         l2_line = (
             f"- 答案质量：最佳模型={best.get('label') or best.get('id')}"
@@ -352,7 +352,7 @@ def build_overall_summary_prompt(
 
     # 增量价值：净增量 + 是否值得建
     l4_line = "- 增量价值：未评测"
-    if l4:
+    if l4 is not None:
         head = l4.get("headline") or {}
         l4_line = (
             f"- 增量价值：净增量={head.get('net_uplift')}"
