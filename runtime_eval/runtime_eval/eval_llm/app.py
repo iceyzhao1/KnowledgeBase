@@ -71,6 +71,15 @@ class JudgeAnswerIn(BaseModel):
     answer: str = ""
 
 
+class OverallSummaryIn(BaseModel):
+    """综合总评：三层关键指标 + 测试集元信息（缺层传 None）。"""
+
+    suite_meta: dict = Field(default_factory=dict)
+    l1: dict | None = None
+    l2: dict | None = None
+    l4: dict | None = None
+
+
 def create_app(
     env_file: str | None = None,
     *,
@@ -190,6 +199,21 @@ def create_app(
             )
         except RuntimeError as exc:
             raise HTTPException(502, f"答案对照判调用大模型失败：{exc}")
+
+    @app.post("/overall-summary")
+    def overall_summary(body: OverallSummaryIn):
+        try:
+            return service.summarize_overall(
+                provider,
+                suite_meta=body.suite_meta,
+                l1=body.l1,
+                l2=body.l2,
+                l4=body.l4,
+                temperature=config.temperature,
+                max_tokens=config.anthropic_max_tokens,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(502, f"生成综合总评调用大模型失败：{exc}")
 
     return app
 

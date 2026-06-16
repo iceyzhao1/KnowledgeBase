@@ -766,3 +766,21 @@ def test_summarize_overall_returns_text_and_usage():
     assert out["summary"].strip()  # 非空总评正文
     assert "评测" in out["summary"]
     assert out["usage"]["total_tokens"] > 0
+
+
+def test_overall_summary_endpoint_returns_summary():
+    config = LLMConfig(provider="mock")
+    app = create_app(config=config, provider=MockProvider(config))
+    r = TestClient(app).post(
+        "/overall-summary",
+        json={
+            "suite_meta": {"name": "演示", "total_cases": 4},
+            "l1": {"pass_rate": 0.5},
+            "l2": None,
+            "l4": None,
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["summary"].strip()
+    assert body["usage"]["total_tokens"] > 0
