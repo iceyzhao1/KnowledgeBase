@@ -1,7 +1,7 @@
 // kb-ui/src/views/knowledge/ontologyGraph.ts
 // 本体图谱的图数据构造：把 active 本体 + 待审候选转成节点/边。
 // 本体的边是人写的（relation_types.allowed_pairs），不是算出来的——这里只做展开，不做任何重算。
-import type { ActiveOntology, OntologyCandidate } from '@/types'
+import type { ActiveOntology, OntologyCandidate, OntologyNodeType, OntologyRelationType } from '@/types'
 
 export interface OntoGraphNode {
   id: string            // = 类型名（allowed_pairs 里 head/tail 引用的就是类型名）
@@ -29,7 +29,7 @@ export interface OntoGraphData {
   edges: OntoGraphEdge[]
 }
 
-function parseExamples(raw: unknown): string[] {
+export function parseExamples(raw: unknown): string[] {
   let ex: unknown = raw
   if (typeof ex === 'string') {
     try { ex = JSON.parse(ex) } catch { ex = [] }
@@ -38,7 +38,7 @@ function parseExamples(raw: unknown): string[] {
 }
 
 export function buildOntologyGraph(
-  active: ActiveOntology,
+  active: Pick<ActiveOntology, 'node_types' | 'relation_types'>,
   candidates: OntologyCandidate[] = [],
   showCandidates = false,
 ): OntoGraphData {
@@ -115,4 +115,105 @@ export function buildOntologyGraph(
   }
 
   return { nodes, edges }
+}
+
+// ── 本地可编辑模型 + 增删纯函数（编辑器用）──
+// 约定：所有函数都返回"新模型"（浅拷贝顶层 + 拷贝被改的数组），不修改入参，
+// 便于单测断言与 Vue 重新渲染。校验（重名/端点存在性）放在调用方（View）里做，这里只做变换。
+
+export interface EditableOntology {
+  node_types: OntologyNodeType[]
+  relation_types: OntologyRelationType[]
+}
+
+export function cloneModel(m: EditableOntology): EditableOntology {
+  return {
+    node_types: m.node_types.map(n => ({ ...n })),
+    relation_types: m.relation_types.map(r => ({
+      ...r,
+      allowed_pairs_json: (r.allowed_pairs_json || []).map(p => ({ ...p })),
+    })),
+  }
+}
+
+export interface NewNodeInput {
+  name: string
+  layer: string
+  isStrong: boolean
+  definition?: string
+}
+
+/** 新建节点类型。id 留空字符串（后端 add_node_type 会生成正式 id，保存时忽略本地 id）。 */
+export function addNode(model: EditableOntology, input: NewNodeInput): EditableOntology {
+  const next = cloneModel(model)
+  next.node_types.push({
+    id: '',
+    name: input.name,
+    layer: input.layer || 'concept',
+    is_strong: !!input.isStrong,
+    definition: input.definition || null,
+    examples_json: [],
+  })
+  return next
+}
+
+/** 删除节点类型，并连带删除所有边类型里以它为 head 或 tail 的 pair。 */
+export function removeNode(model: EditableOntology, name: string): EditableOntology {
+  const next = cloneModel(model)
+  next.node_types = next.node_types.filter(n => n.name !== name)
+  next.relation_types = next.relation_types.map(r => ({
+    ...r,
+    allowed_pairs_json: (r.allowed_pairs_json || []).filter(
+      p => p.head !== name && p.tail !== name,
+    ),
+  }))
+  return next
+}
+
+export interface NewRelationTypeInput {
+  name: string
+  isDirected: boolean
+  inverseName?: string
+  definition?: string
+}
+
+/** 新建关系类型（空 allowed_pairs，建完后可通过 addEdge 往里加边）。 */
+export function addRelationType(model: EditableOntology, input: NewRelationTypeInput): EditableOntology {
+  const next = cloneModel(model)
+  next.relation_types.push({
+    id: '',
+    name: input.name,
+    layer: 'concept',
+    is_directed: !!input.isDirected,
+    inverse_name: input.inverseName || null,
+    allowed_pairs_json: [],
+    definition: input.definition || null,
+  })
+  return next
+}
+
+/** 给某个已存在的关系类型加一条边（head→tail 的 pair）。已存在同 pair 则原样返回。 */
+export function addEdge(
+  model: EditableOntology, relationName: string, head: string, tail: string,
+): EditableOntology {
+  const next = cloneModel(model)
+  const rel = next.relation_types.find(r => r.name === relationName)
+  if (!rel) return next
+  const pairs = rel.allowed_pairs_json || (rel.allowed_pairs_json = [])
+  if (pairs.some(p => p.head === head && p.tail === tail)) return next
+  pairs.push({ head, tail })
+  return next
+}
+
+/** 删除一条边（关系类型 relationName 下 head→tail 的 pair）。参数与 addEdge 对称。 */
+export function removeEdge(
+  model: EditableOntology, relationName: string, head: string, tail: string,
+): EditableOntology {
+  const next = cloneModel(model)
+  const rel = next.relation_types.find(r => r.name === relationName)
+  if (!rel) return next
+  rel.allowed_pairs_json = (rel.allowed_pairs_json || []).filter(
+    p => !(p.head === head && p.tail === tail),
+  )
+  return next
 }

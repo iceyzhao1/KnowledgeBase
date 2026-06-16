@@ -44,10 +44,44 @@ def test_case_and_space_insensitive_match() -> None:
 
 
 def test_low_df_type_denoised() -> None:
-    # 单文档单提及的孤立概念 → DF=1 < 2，丢弃
-    entities = [_ent("e1", "某私有部件", docs=1, mentions=1)]
+    # 语料够大（有实体跨 2 篇）时，仅 1 篇支持的孤立类型 → DF=1 < 阈值 2，丢弃。
+    entities = [
+        _ent("e1", "网络切片", docs=2, mentions=5),   # 撑起 corpus_df=2
+        _ent("e2", "某私有部件", docs=1, mentions=1),  # 孤立单文档概念
+    ]
     llm = {"new_types": [{"type_name": "vendor_widget", "members": ["某私有部件"]}]}
     assert _build_type_candidates(entities, llm, min_df=2) == []
+
+
+def test_single_doc_corpus_not_denoised() -> None:
+    # 回归：单文档跑里所有确认实体都 docs=1，corpus_df=1 → 阈值自适应降到 1，
+    # 不能把人已确认的真实体全丢光（否则永远无法新建本体——用户报的 bug）。
+    entities = [
+        _ent("e1", "SST", docs=1, mentions=2),
+        _ent("e2", "S-NSSAI", docs=1, mentions=2),
+    ]
+    llm = {"new_types": [{
+        "type_name": "network_slice_identifier",
+        "members": ["SST", "S-NSSAI"],
+    }]}
+    cands = _build_type_candidates(entities, llm, min_df=2)
+    assert len(cands) == 1
+    assert cands[0].type_name == "network_slice_identifier"
+
+
+def test_single_doc_singleton_type_still_surfaces() -> None:
+    # 即便 LLM 把单文档实体拆成单成员类型（DF=1），单文档语料下也应放行交人审，
+    # 而非静默丢弃——这正是用户那次跑被全量误丢的根因。
+    entities = [
+        _ent("e1", "PLMN", docs=1, mentions=1),
+        _ent("e2", "NSI", docs=1, mentions=1),
+    ]
+    llm = {"new_types": [
+        {"type_name": "network_id", "members": ["PLMN"]},
+        {"type_name": "slice_instance", "members": ["NSI"]},
+    ]}
+    cands = _build_type_candidates(entities, llm, min_df=2)
+    assert {c.type_name for c in cands} == {"network_id", "slice_instance"}
 
 
 def test_unmatched_members_drop_type() -> None:

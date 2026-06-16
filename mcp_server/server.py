@@ -16,13 +16,13 @@ from mcp_server.schemas import (
 )
 
 mcp = FastMCP(
-    "cloud-core-knowledge",
+    "cloud_core_network",
     instructions="""\
-你是云核心网知识证据底座。
+你是IP网络知识证据底座。
 
 ## 何时使用
-当用户问云核心网相关的概念、网元、接口、协议、参数、配置、故障、对比分析等问题时调用。
-纯翻译润色、与云核心网无关的问题不需要调用。
+当用户问IP网络相关的概念、设备、接口、协议、参数、配置、故障、对比分析等问题时调用。
+纯翻译润色、与IP网络无关的问题不需要调用。
 
 ## 调用流程
 1. health_check() — 检查知识库是否可用。不可用时不要编造知识。
@@ -82,9 +82,9 @@ def search_knowledge(
     entities: list[dict] | None = None,
     debug: bool = False,
 ) -> dict:
-    """检索云核心网知识库，返回证据包。输入用户问题即可。
+    """检索IP网络知识库，返回证据包。输入用户问题即可。
 
-    何时使用：用户问云核心网相关的概念、网元、接口、协议、参数、配置、故障、对比分析等问题时调用。纯翻译润色、与云核心网无关的问题不需要调用。
+    何时使用：用户问IP网相关的概念、网元、接口、协议、参数、配置、故障、对比分析等问题时调用。纯翻译润色、与IP网络无关的问题不需要调用。
 
     如何理解证据包：
     返回的 items 中每条证据有 evidence_role 字段：
@@ -120,7 +120,7 @@ def search_knowledge(
     Args:
         query: 用户原问题
         domain: 知识域，默认 cloud_core_network
-        scope: 产品/网元等约束，如 {"products":["UDG"],"network_elements":["SMF"]}
+        scope: 产品/网元等约束，如 {"products":["CX600"],"network_elements":["PE"]}
         entities: 已识别实体列表，每个元素含 name, type
         debug: 是否返回检索过程诊断信息
     """

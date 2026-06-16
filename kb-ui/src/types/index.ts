@@ -73,6 +73,7 @@ export interface MiningRunDocument {
   error_summary?: string
   current_stage?: string | null
   duration_ms?: number | null
+  file_size?: number | null
   started_at?: string
   finished_at?: string
   document_snapshot_id?: string | null
@@ -348,6 +349,14 @@ export interface OntologyRelationType {
 }
 
 export interface ActiveOntology {
+  domain: string
+  version: OntologyVersion | null
+  node_types: OntologyNodeType[]
+  relation_types: OntologyRelationType[]
+}
+
+// 草稿编辑器：GET /ontology/draft 返回 / PUT 提交载荷，结构与 ActiveOntology 同构
+export interface OntologyDraft {
   domain: string
   version: OntologyVersion | null
   node_types: OntologyNodeType[]

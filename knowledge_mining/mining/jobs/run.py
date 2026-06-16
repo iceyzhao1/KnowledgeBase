@@ -316,9 +316,17 @@ def resume(
         run_data = runtime_db.get_run(run_id)
         if run_data is None:
             raise ValueError(f"Run {run_id} not found")
-        if run_data["status"] != "awaiting_review":
+        # 可续跑的两种入口：
+        #   ① 人审暂停（awaiting_review）——正常路径；
+        #   ② 收尾阶段中断、卡在 running/done 的恢复——两道 Gate 已审完、stage 推进到 done，
+        #      但 _finalize 过程中进程异常退出（finished_at 仍为空）。允许重新进来把收尾幂等地跑完。
+        status = run_data["status"]
+        stage = run_data.get("subloop_stage")
+        is_resumable = status == "awaiting_review" or (status == "running" and stage == "done")
+        if not is_resumable:
             raise ValueError(
-                f"Run {run_id} status is {run_data['status']}, expected awaiting_review")
+                f"Run {run_id} status is {status}"
+                f"{f'/{stage}' if stage else ''}, expected awaiting_review (or running/done for recovery)")
 
         domain = run_data.get("domain") or domain
         profile = load_domain_pack(domain)
@@ -769,14 +777,32 @@ def _run_pipeline(
     )
     asset_db.commit()
 
-    # Build pipeline config with pluggable operators (profile-driven)
+    # 本体线总开关（开始时检测一次）：该领域未引种本体（无 active 版本）→
+    # 关掉本体线的所有阶段——每文档的 entity_extract / resolve / entity_relations，
+    # 以及全局的 graph_write / ontology_induction / finalize_graph 和两道人审 Gate。
+    # 篇章线（parse→segment→enrich→discourse→retrieval_units→embedding→db_write）
+    # 不受影响，照常跑出检索库。
+    from knowledge_mining.mining.infra.ontology_store import OntologyStore
+    has_ontology = OntologyStore(asset_db.pool).active_version(profile.domain_id) is not None
+    if not has_ontology:
+        logger.info(
+            "Domain '%s' has no active ontology; skipping all ontology-line stages "
+            "(entity_extract, resolve, entity_relations, graph_write, induction, finalize, review gates).",
+            profile.domain_id,
+        )
+
+    # Build pipeline config with pluggable operators (profile-driven).
+    # 本体线算子在无本体时置 None：对应的 streaming 阶段自带 `if X is None: return ctx`
+    # 的短路，于是退化成零成本的直通，不发起任何 LLM/DB 调用。
     pipeline_config = PipelineConfig(
         parser_factory=create_parser,
         segmenter=DefaultSegmenter(),
         enricher=llm.get("enricher"),
-        entity_extractor=llm.get("entity_extractor"),
-        resolver=_init_resolver(asset_db, profile),
-        entity_relation_builder=_init_relation_builder(asset_db, profile),
+        entity_extractor=llm.get("entity_extractor") if has_ontology else None,
+        resolver=_init_resolver(asset_db, profile) if has_ontology else None,
+        entity_relation_builder=(
+            _init_relation_builder(asset_db, profile) if has_ontology else None
+        ),
         question_generator=llm.get("question_generator"),
         embedding_generator=embedding_generator,
         discourse_relation_builder=llm.get("discourse_relation_builder"),
@@ -827,6 +853,7 @@ def _run_pipeline(
             raw_content_hash=doc.raw_content_hash,
             normalized_content_hash=doc.normalized_content_hash,
             action=action,
+            metadata_json={"file_size": doc.file_size},
         ))
         runtime_db.commit()
 
@@ -889,14 +916,25 @@ def _run_pipeline(
     ctxs: list[DocumentContext] = []
     if work_items:
         config = pipeline_config
+        # 本体线的逐文档阶段（entity_extract / resolve）仅在有 active 本体时入列。
+        # 无本体时直接不挂这两个阶段——否则即便算子为 None 走直通，_worker 仍会发
+        # start/end 事件，UI 会把它们显示成"已完成"（几百毫秒直通），与关系抽取/落图
+        # 的"等待中"不一致。不入列 → 不发事件 → UI 显示"等待中"。
+        ontology_stages: list[tuple] = []
+        if has_ontology:
+            ontology_stages = [
+                ("entity_extract",   lambda ctx: entity_extract_stage(ctx, config),  max_workers),
+                ("resolve",          lambda ctx: resolve_stage(ctx, config),         max_workers),
+            ]
         stages = [
             ("parse",            lambda ctx: parse_stage(ctx, config),           1),
-            ("segment",          lambda ctx: segment_stage(ctx, config),         1),
+            ("segment",          lambda ctx: segment_stage(ctx, config),         1,
+             lambda ctx: f"segments={len(ctx.segments or ())}"),
             ("enrich",           lambda ctx: enrich_stage(ctx, config),          max_workers),
-            ("entity_extract",   lambda ctx: entity_extract_stage(ctx, config),  max_workers),
-            ("resolve",          lambda ctx: resolve_stage(ctx, config),         max_workers),
+            *ontology_stages,
             ("discourse",        lambda ctx: discourse_stage(ctx, config),       min(max_workers, 2)),
-            ("retrieval_units",  lambda ctx: retrieval_units_stage(ctx, config), max_workers),
+            ("retrieval_units",  lambda ctx: retrieval_units_stage(ctx, config), max_workers,
+             lambda ctx: f"units={len(ctx.retrieval_units or ())}"),
             ("embedding",        lambda ctx: embedding_stage(ctx, config),       max_workers),
             ("db_write",         lambda ctx: db_write_stage(ctx, config),        1),
         ]
@@ -927,7 +965,8 @@ def _run_pipeline(
             skipped_count += 1
 
     # Phase 1d: 全局落图（B5）。仅当本领域已引种本体（有 active 版本）才跑，否则跳过。
-    _run_graph_write(asset_db, tracker, run_id, ctxs, profile.domain_id)
+    if has_ontology:
+        _run_graph_write(asset_db, tracker, run_id, ctxs, profile.domain_id)
 
     counts = {
         "committed_count": committed_count, "new_count": new_count,
@@ -936,8 +975,8 @@ def _run_pipeline(
     }
 
     # Phase 1e: 反转闸序的两检查点编排（L2 §15.1）。phase1_only 跳过全部人审，直接建库。
-    if not phase1_only:
-        from knowledge_mining.mining.infra.ontology_store import OntologyStore
+    # 无 active 本体时本体线整体关闭：跳过两道 Gate + 归纳 + 终态建图，直接进建库/发布。
+    if not phase1_only and has_ontology:
 
         def _pause(gate: str) -> dict[str, Any]:
             av = OntologyStore(asset_db.pool).active_version(profile.domain_id)

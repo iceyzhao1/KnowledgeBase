@@ -18,14 +18,42 @@ class LlmRuntimeDB:
         self._pool = pool
 
     @classmethod
-    def from_conninfo(cls, conninfo: str, *, pool_min: int = 2, pool_max: int = 10) -> "LlmRuntimeDB":
-        """Create adapter from a connection string."""
+    def from_conninfo(
+        cls,
+        conninfo: str,
+        *,
+        pool_min: int = 2,
+        pool_max: int = 10,
+        connect_timeout: int = 10,
+        max_idle: float = 60.0,
+        max_lifetime: float = 600.0,
+    ) -> "LlmRuntimeDB":
+        """Create adapter from a connection string.
+
+        Resilience knobs (added to keep a shared PostgreSQL server from being
+        exhausted by idle connections, and to fail fast instead of stalling
+        30s when the server can no longer accept new connections):
+
+        - ``connect_timeout``: cap each TCP/connect attempt (seconds). Without
+          it a saturated server makes the pool hang until the 30s getconn
+          timeout, surfacing as ``PoolTimeout``. Passed through to libpq.
+        - ``max_idle``: close idle connections above ``pool_min`` after this
+          many seconds, returning them to the shared server instead of holding
+          them open forever (the root cause of the 100-connection exhaustion).
+        - ``max_lifetime``: recycle every connection after this long so even a
+          busy pool periodically releases and re-establishes its connections.
+        - ``check``: validate a connection before handing it out; a broken or
+          server-closed connection is transparently discarded and replaced.
+        """
         pool = AsyncConnectionPool(
             conninfo,
             min_size=pool_min,
             max_size=pool_max,
             open=False,
-            kwargs={"row_factory": dict_row},
+            max_idle=max_idle,
+            max_lifetime=max_lifetime,
+            check=AsyncConnectionPool.check_connection,
+            kwargs={"row_factory": dict_row, "connect_timeout": connect_timeout},
         )
         return cls(pool)
 

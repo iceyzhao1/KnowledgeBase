@@ -49,7 +49,12 @@
                     <tr v-for="(m, i) in membersOf(row)" :key="i">
                       <td>{{ m.name }}</td>
                       <td class="rev-member-heat">{{ m.document_count ?? 0 }}篇/{{ m.mention_count ?? 0 }}次</td>
-                      <td class="rev-member-quote">{{ m.quote ? `「${m.quote}」` : '—' }}</td>
+                      <td class="rev-member-quote">
+                        <template v-if="m.quote">「<template
+                          v-for="(p, j) in quoteParts(m)" :key="j"
+                        ><b v-if="p.bold" class="rev-member-mark">{{ p.text }}</b><template v-else>{{ p.text }}</template></template>」</template>
+                        <template v-else>—</template>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -109,9 +114,13 @@
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button type="success" size="small" text @click="accept(row)">通过</el-button>
-            <el-button type="primary" size="small" text @click="rename(row)">改名通过</el-button>
-            <el-button type="danger" size="small" text @click="reject(row)">拒绝</el-button>
+            <!-- 只有待审（proposed）候选可操作；已通过/已拒绝的不再允许重复处理 -->
+            <template v-if="row.status === 'proposed'">
+              <el-button type="success" size="small" text @click="accept(row)">通过</el-button>
+              <el-button type="primary" size="small" text @click="rename(row)">改名通过</el-button>
+              <el-button type="danger" size="small" text @click="reject(row)">拒绝</el-button>
+            </template>
+            <span v-else class="text-muted">已处理</span>
           </template>
         </el-table-column>
       </el-table>
@@ -159,6 +168,7 @@ type Member = {
   document_count?: number
   mention_count?: number
   quote?: string
+  mention?: string   // 该实体在片段中的提及原文，用于加粗
 }
 
 function payloadOf(row: OntologyCandidate): Payload {
@@ -179,6 +189,20 @@ function payloadArr(row: OntologyCandidate, key: string): string[] {
 function membersOf(row: OntologyCandidate): Member[] {
   const v = payloadOf(row)['members']
   return Array.isArray(v) ? (v as Member[]) : []
+}
+// 把原文片段按"成员实体提及"切成几段，提及那段加粗（不用 v-html，避免 XSS）
+function quoteParts(m: Member): { text: string; bold: boolean }[] {
+  const q = m.quote || ''
+  const mention = m.mention || ''
+  if (!mention) return [{ text: q, bold: false }]
+  const idx = q.indexOf(mention)
+  if (idx < 0) return [{ text: q, bold: false }]
+  const parts: { text: string; bold: boolean }[] = []
+  if (idx > 0) parts.push({ text: q.slice(0, idx), bold: false })
+  parts.push({ text: mention, bold: true })
+  const rest = q.slice(idx + mention.length)
+  if (rest) parts.push({ text: rest, bold: false })
+  return parts
 }
 
 async function load() {
@@ -270,4 +294,5 @@ watch(() => domainStore.currentDomain, load)
 .rev-member-table td { padding: 4px 6px; border-bottom: 1px solid var(--kb-border-light); color: var(--kb-text-secondary); }
 .rev-member-heat { width: 90px; }
 .rev-member-quote { color: var(--kb-text-secondary); }
+.rev-member-mark { color: var(--kb-text-primary); font-weight: 700; background: var(--kb-accent-soft); border-radius: 3px; padding: 0 2px; }
 </style>

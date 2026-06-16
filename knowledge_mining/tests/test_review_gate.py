@@ -191,11 +191,16 @@ def test_recount_aggregates_mentions_and_dedups_docs() -> None:
 
 
 class _FakeOntoRec(OntologyStore):
-    def __init__(self) -> None:
+    def __init__(self, status: str = "proposed") -> None:
         self.executed: list[tuple[str, tuple]] = []
+        self._status = status
 
     def _execute(self, sql, params=()):  # type: ignore[override]
         self.executed.append((sql, params))
+
+    def _fetchone(self, sql, params=()):  # type: ignore[override]
+        # 幂等保护读当前状态：返回构造的状态行
+        return {"status": self._status}
 
 
 def test_review_candidate_accept_with_rename() -> None:
@@ -211,6 +216,15 @@ def test_review_candidate_reject() -> None:
     store.review_candidate("c1", action="reject")
     sql, params = store.executed[0]
     assert "rejected" in params
+
+
+def test_review_candidate_already_decided_rejected() -> None:
+    """幂等保护：已 accepted/rejected 的候选不允许重复裁决（防前端误点/并发重复提交）。"""
+    import pytest
+    store = _FakeOntoRec(status="accepted")
+    with pytest.raises(ValueError, match="already accepted"):
+        store.review_candidate("c1", action="reject")
+    assert store.executed == []  # 没有发出 UPDATE
 
 
 # ---- Gate2：GraphStore mention 裁决 ----

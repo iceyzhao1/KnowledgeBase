@@ -1,7 +1,7 @@
 # 本体概念层 MVP — 实施计划 〔L3 · 落地〕
 
-> 日期：2026-06-08（2026-06-09 重构为 L3 实施计划）
-> 状态：实施计划（按啥顺序做、做到什么算完）
+> 日期：2026-06-08（2026-06-09 重构为 L3 实施计划；2026-06-15 按实际落地校准：闸序反转、阶段链补全、清单勾选）
+> 状态：**B0–B7 + N1–N5 已落地（挖掘侧）；B8 检索侧未做、本期不动**；本文 §5–§7 已按实际运行行为校准（实体确认在前、本体确认在后）
 > 范围：knowledge_mining（挖掘侧）· databases（PG）· kb-ui（前端）· agent_serving（检索侧）· 单领域 cloud_core_network
 > 上游：`docs/plans/ontology/ontology-L2-impl-design.md`（L2 蓝图，"每批要实现成什么样"的依据）
 
@@ -74,7 +74,7 @@ L1 §11.3 把三个"第一波具体怎么落"的取舍下沉到 L3 定稿。现�
 
 | 批次 | 目标（做什么） | 依赖 | 主要文件改动 | 验收（done =） | 实现依据 |
 |---|---|---|---|---|---|
-| **B0 管线可组合化地基** | 定义 `PipelineStage` Protocol + `StageWrapper`，`PipelineConfig.stages` 可配置插拔 | — | `mining/contracts/protocols.py`（加 Protocol）、`mining/pipeline.py`（StageWrapper + 按 config 组装）、`mining/infra/mining_config.py`（stages 配置） | 现有逐文档阶段（parse→segment→enrich→relations→retrieval_units→embedding→db_write）全部包成 Stage、经 config 跑通；插入一个空 Stage 默认关、可开关 | L2 §5 |
+| **B0 管线可组合化地基** | 定义 `PipelineStage` Protocol + `StageWrapper`，`PipelineConfig.stages` 可配置插拔 | — | `mining/contracts/protocols.py`（加 Protocol）、`mining/pipeline.py`（StageWrapper + 按 config 组装）、`mining/infra/mining_config.py`（stages 配置） | 现有逐文档阶段（parse→segment→enrich→entity_extract→resolve→discourse→retrieval_units→embedding→db_write）全部包成 Stage、经 config 跑通；插入一个空 Stage 默认关、可开关〔实际链：见 `jobs/run.py` stages 列表〕 | L2 §5 |
 | **B1 建表 + 薄接口 + 引种** | 全部新表 DDL + 迁移；`OntologyStore`/`GraphStore` 的 PG 实现；`bootstrap_ontology` + 种子文件 | B0 | `mining/infra/pg_schema.py`（新表）、迁移脚本、`mining/infra/db.py` 或新 `stores/`（两个 Store）、`scenario_packs/cloud_core_network/ontology_seed/concept.yaml`（新）、CLI `bootstrap-ontology` | 跑引种 → DB 出现 active v1 + 8 节点类型 + 4 关系类型 + 别名种子；重复跑幂等不重复建；`GraphStore.neighbors()` 对空图不报错 | L2 §3 / §4 / §10 |
 | **B2 entity_extract 受本体约束 + 逃生口**〔原 enrich，后拆出独立阶段，见 L4 §16〕 | 实体抽取读 active `ontology_node_types`（不再读 domain.yaml）；**双通道 prompt**（喂类型表，对齐已知类型 / 提议新类型）；输出 `out_of_schema` | B1 | 新 `mining/stages/entity_extract/__init__.py`（拆出）+ `mining/stages/enrich/__init__.py`（瘦身回篇章本职） | 抽出的 mention 都属当前 active 的 8 类；`out_of_schema` 项进 `ontology_candidates(source='escape_hatch')`，不混进正式实体；enrich 不再产实体 | L2 §6.1 |
 | **B3 resolve 3 层归一 + 人审分流** | Tier1 精确 + 别名词典归一；不确定 → `pending`（Tier2 默认关） | B1 | 新 `mining/stages/resolve/__init__.py`、`pipeline.py`/`jobs/run.py` 注册 | 每个 mention 带 `canonical_name` + `resolve_status`；命中别名→`auto`，未命中→`pending`（进 实体确认） | L2 §6.2 |
@@ -118,22 +118,22 @@ B0 ──► B1 ──┬──► B2 ─┐
 ### 5.1 用户视角（一条主线）
 1. 选领域 `cloud_core_network`，上传一篇文档，点「开始挖掘」。
 2. 看挖掘进度条逐阶段推进；**挖掘过程透视页**实时摊开 §2.3 的四样（标签/边/冲突/不确定项）。
-3. 进度停在 **「等待评审」**（`awaiting_review`，本次是 本体确认）→ 跳**本体评审页**：候选类型/关系 + 证据 + 打分，逐条 通过/改名/拒绝，提交。
-4. 进度继续，再停在 **「等待评审」**（本次是 实体确认）→ 跳**实体确认页**：pending mention + 系统合并建议，逐条 合并到已有/新建/丢弃，提交。
+3. 进度停在 **「等待评审」**（`awaiting_review`，**本次是 实体确认**）→ 跳**实体确认页**：pending mention（含「暂无类型」/有歧义项）+ 系统合并建议，逐条 合并到已有/新建/确认为实体（暂无类型）/丢弃，提交。
+4. 进度继续，系统用确认过的实体归纳类型候选；若有候选，再停在 **「等待评审」**（**本次是 本体确认**）→ 跳**本体评审页**：候选类型 + 结构化成员证据 + 打分（含重复提示 `duplicate_of`），逐条 通过/改名/拒绝，提交。
 5. 挖掘完成 → **知识图谱浏览页**：本篇抽到的对象与边、本次领域本体的新增项，点对象看邻域 + 出处回链。
 
-> 同一个 `awaiting_review` 状态在第 3、4 步出现两次，前端靠 `mining_runs.subloop_stage`（`ontology_review` / `entity_review`）决定跳哪个评审页。
+> 同一个 `awaiting_review` 状态在第 3、4 步出现两次，前端靠 `mining_runs.subloop_stage`（**先 `entity_review` 后 `ontology_review`**）决定跳哪个评审页。**闸序反转（N4）**：先把脏实体让人确认干净，再用干净实体归纳类型候选交人审——避免在脏实体上提议类型。
 
 ### 5.2 页面与文件落点（B7）
 | 页面 | 落点 | 复用/新建 |
 |---|---|---|
-| 挖掘过程透视 | `views/mining/RunDetailView.vue` 扩展 | 复用现有 run 详情 |
-| 本体评审（本体确认） | `views/knowledge/` 新页 | 新建 |
-| 实体确认（实体确认） | `views/knowledge/` 新页 | 新建 |
-| 知识图谱浏览 | `views/knowledge/GraphView.vue` | 复用现有 |
-| 本体版本 | `views/knowledge/` 新页 | 新建（含「引种」按钮） |
+| 挖掘过程透视 | `views/mining/RunDetailView.vue`（run 级，含 `awaiting_review` 暂停横幅 + 跳转）+ `views/mining/RunDocumentDetailView.vue`（逐文档阶段/`output_summary`） | 复用 + 扩展 |
+| 实体确认（实体确认） | `views/knowledge/MentionReviewView.vue`，路由 `/mentions/review?run_id=…` | 新建 |
+| 本体评审（本体确认） | `views/knowledge/OntologyReviewView.vue`，路由 `/candidates/review?run_id=…` | 新建 |
+| 知识图谱浏览 | `views/knowledge/GraphView.vue` + `EntityGraphView.vue` | 复用现有 |
+| 本体版本 | `views/knowledge/OntologyView.vue` | 新建（含「引种」按钮） |
 
-API 端点清单见 **L2 §9**；前端走现有 `api/mining.ts` / `controlPlane.ts` 模式新增。
+> 透视页的暂停横幅按 `trace.active_gate`（`entity_review` / `ontology_review`）显示待审条数并给出对应跳转按钮。API 端点清单见 **L2 §9**；前端走现有 `api/mining.ts` / `controlPlane.ts` 模式新增。
 
 ---
 
@@ -141,12 +141,17 @@ API 端点清单见 **L2 §9**；前端走现有 `api/mining.ts` / `controlPlane
 
 复用现有 `mining_runs.status` 协作式检查点（与现有 `_check_cancelled` 同款模式），**不空转占线程**：
 
-1. **暂停**：全局阶段（graph_write 后）检查——有 `ontology_candidates.status='proposed'` 或 `mentions.resolve_status='pending'` → 落盘待审数据，置 `status='awaiting_review'` + 写 `subloop_stage`，**任务退出**。无异常 → 直接 publish（**自动放行**，人审非必经）。
-2. **轮询**：kb-ui 轮询 run 状态，遇 `awaiting_review` 按 `subloop_stage` 弹对应评审页。
-3. **恢复**：人提交后调 `POST /mining/runs/{id}/resume` → 写回人审结果 → 置 `status='running'` → 后端据 `subloop_stage` **跳过已完成步骤、从该检查点之后续跑**。
+全局落图（graph_write 全局A）后按 **反转闸序**（N4，L2 §15.1）顺序检查两道 Gate：
 
-- 检查点取值：`ontology_review`（本体评审）→ `entity_review`（实体确认）→ `done`。
+1. **第一道·实体确认**：有 `mentions.resolve_status='pending'`（含「暂无类型」/有歧义）→ 落盘待审，置 `status='awaiting_review'` + `subloop_stage='entity_review'`，**任务退出**。
+2. **第二道·本体确认**：pending 清空后，先跑全局B `ontology_induction` 用确认实体归纳类型候选；若产出 `ontology_candidates.status='proposed'` → 置 `subloop_stage='ontology_review'`，**任务退出**。
+3. **快速通道**：两道 Gate 都无 → 不暂停，直接收尾建图（回贴类型 + 建边，`_finalize_graph`）再建库/发布（**自动放行**，人审非必经）。
+4. **轮询**：kb-ui 轮询 run 状态，遇 `awaiting_review` 按 `subloop_stage` 弹对应评审页。
+5. **恢复**：人提交后调 `POST /mining/runs/{id}/resume` → 写回人审结果 → 后端**幂等地重新评估两道 Gate**：仍有待审则刷新 `subloop_stage` 继续等；都清空则从检查点之后续跑（回贴 + 终态建边 + 建库 + 发布），不重抽文档。
+
+- 检查点取值（实际链式）：`entity_review`（实体确认）→ `ontology_review`（本体评审）→ `done`。
 - 字段定义见 L2 §3.6（`subloop_stage` / `ontology_version_id`）。
+- 事实边在两道 Gate 通过、类型回贴之后才由 `_finalize_graph` 从 DB 已确认 mention 重聚合建立（全局A 阶段只落实体/mention/出处/关系候选，不建边）。
 - 本体确认 通过后可触发**增量回灌**；MVP 先用"全量重跑代表性子集"兜底，真增量后置（§8）。
 
 ---
@@ -157,8 +162,8 @@ API 端点清单见 **L2 §9**；前端走现有 `api/mining.ts` / `controlPlane
 
 1. **引种**：`bootstrap_ontology` → active v1（8 类型 + 4 关系 + 别名）。
 2. **首篇抽取**：上传 `5G核心网基础` 一篇 → 透视页能看到标签/边/不确定项。
-3. **本体确认**：若有逃生口候选 → 评审页可通过/拒绝 → 升 v2（或本篇无候选则自动放行，符合预期）。
-4. **实体确认**：pending mention → 确认页能合并/新建 → 回写 canonical。
+3. **实体确认（第一道）**：pending mention（含「暂无类型」/有歧义）→ 确认页能合并/新建/确认为实体（暂无类型）→ 回写 canonical。
+4. **本体确认（第二道）**：实体确认清空后系统归纳类型候选；若有候选 → 评审页可通过/改名/拒绝 → 升 v2 → 成员实体回贴新类型（或无候选则自动放行，符合预期）。
 5. **落图**：DB 中 `ontology_entities` / `ontology_entity_relations` 有数据，每条边 `source_refs` 非空、可追到原文片段。
 6. **跨篇累积**：再传 `SMF` / `UPF` 两篇 → SMF 与 UPF 之间经 N4（`connects_to`）+ PFCP（`uses_protocol`）连通。
 7. **检索闭环**：查"SMF 涉及哪些接口和对应协议" → 经实体链接 + 两跳邻域返回 N4/PFCP 等 + 出处回链。
@@ -184,16 +189,16 @@ API 端点清单见 **L2 §9**；前端走现有 `api/mining.ts` / `controlPlane
 
 ## 9. 落地任务清单（对应批次，可勾选）
 
-- [ ] **B0** 管线可组合化地基（Stage Protocol + StageWrapper + 可配 stages）〔依据 L2 §5〕
-- [ ] **B1** 建表 + `OntologyStore`/`GraphStore` + `bootstrap_ontology` + 种子文件〔依据 L2 §3/§4/§10〕
-- [ ] **B2** entity_extract 受本体约束 + 逃生口（双通道；原寄生 enrich，后拆独立阶段，见 L4 §16）〔依据 L2 §6.1〕
-- [ ] **B3** resolve 3 层归一 + 人审分流〔依据 L2 §6.2〕
-- [ ] **B4** entity_relations pattern 约束 + 五道质量闸〔依据 L2 §6.3/§6.3.1〕
-- [ ] **B5** graph_write 全局落图 + 出处 + 幂等〔依据 L2 §6.4〕
-- [ ] **B6** 暂停/恢复 + 两道检查点（`subloop_stage` 断点）〔依据 L2 §7/§3.6〕
-- [ ] **B7** kb-ui 五页面 + 后端 API〔依据 L2 §8/§9〕
-- [ ] **B8** 检索侧消费（实体链接 + 邻域 + 出处回链）〔依据 L2 §11〕
-- [ ] **M4** 端到端联调（三主题子集，§7 八条全过）
+- [x] **B0** 管线可组合化地基（Stage Protocol + StageWrapper + 可配 stages）〔依据 L2 §5〕
+- [x] **B1** 建表 + `OntologyStore`/`GraphStore` + `bootstrap_ontology` + 种子文件〔依据 L2 §3/§4/§10〕
+- [x] **B2** entity_extract 受本体约束 + 逃生口（双通道；原寄生 enrich，后拆独立阶段，见 L4 §16）〔依据 L2 §6.1；通道 B 后被 N1 改为 pending mention〕
+- [x] **B3** resolve 3 层归一 + 人审分流〔依据 L2 §6.2〕
+- [x] **B4** entity_relations pattern 约束 + 五道质量闸〔依据 L2 §6.3/§6.3.1；建边时机后被 N4/N5 后移到本体确认之后〕
+- [x] **B5** graph_write 全局落图 + 出处 + 幂等〔依据 L2 §6.4；后拆全局A（实体/mention/候选）+ `_finalize_graph`（终态建边）〕
+- [x] **B6** 暂停/恢复 + 两道检查点（`subloop_stage` 断点）〔依据 L2 §7/§3.6；闸序后被 N4 反转为 entity_review→ontology_review〕
+- [x] **B7** kb-ui 五页面 + 后端 API〔依据 L2 §8/§9〕
+- [ ] **B8** 检索侧消费（实体链接 + 邻域 + 出处回链）〔依据 L2 §11〕 — **未做**：`agent_serving` 现有 `graph_expander.py` 是 RST 段落关系扩展，非本体概念图通道；本期不动检索侧
+- [ ] **M4** 端到端联调（三主题子集，§7）— 挖掘侧链路已通；§7 第 7 条「检索闭环」依赖 B8，未做
 
 ---
 

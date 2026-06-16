@@ -77,6 +77,34 @@ class PromoteRequest(BaseModel):
     note: str | None = None
 
 
+class DraftNodeTypeModel(BaseModel):
+    name: str
+    layer: str = "concept"
+    is_strong: bool = False
+    definition: str | None = None
+    examples_json: list = []
+
+
+class DraftRelationTypeModel(BaseModel):
+    name: str
+    layer: str = "concept"
+    is_directed: bool = True
+    inverse_name: str | None = None
+    allowed_pairs_json: list = []
+    definition: str | None = None
+
+
+class SaveDraftRequest(BaseModel):
+    domain: str | None = None
+    node_types: list[DraftNodeTypeModel] = []
+    relation_types: list[DraftRelationTypeModel] = []
+    created_by: str | None = None
+
+
+class PublishDraftRequest(BaseModel):
+    domain: str | None = None
+
+
 class ResolveMentionRequest(BaseModel):
     action: str                 # merge | new | reject
     entity_id: str | None = None
@@ -163,7 +191,7 @@ async def list_ontology_candidates(
     每条 node_type 候选附 duplicate_of：与当前 active 本体的现有类型判重，命中则为
     现有类型名（前端显示红色"疑似重复"徽标），无则 None。relation_type 暂不判重。
     """
-    onto, _ = _stores(request)
+    onto, graph = _stores(request)
     rows = await _run(onto.list_candidates, domain, status=status)
     node_types = await _run(onto.active_node_types, domain)
     existing = [_existing_type_for_dup(n) for n in node_types]
@@ -175,6 +203,27 @@ async def list_ontology_candidates(
         else:
             d["duplicate_of"] = None
         items.append(d)
+
+    # 读时补"各自的"成员原文片段：按实体提及位置开窗，避免多个成员实体共用同一段摘录。
+    # 同时覆盖历史候选里已落库的旧摘录（无需重跑 LLM 归纳）。mention 字段供前端在片段中加粗。
+    member_ids: list[str] = []
+    for d in items:
+        if d.get("kind") != "node_type":
+            continue
+        for m in (d.get("payload_json") or {}).get("members") or []:
+            if m.get("entity_id"):
+                member_ids.append(m["entity_id"])
+    if member_ids:
+        quotes = await _run(graph.member_quotes, member_ids)
+        for d in items:
+            if d.get("kind") != "node_type":
+                continue
+            for m in (d.get("payload_json") or {}).get("members") or []:
+                q = quotes.get(m.get("entity_id"))
+                if q:
+                    m["quote"] = q["quote"]
+                    m["mention"] = q["mention"]
+
     return {"domain": domain, "status": status, "items": items}
 
 
@@ -204,6 +253,63 @@ async def promote_candidates(body: PromoteRequest, request: Request) -> dict:
         created_by=body.created_by, note=body.note,
     )
     return {"domain": domain, "new_version_id": new_vid, "promoted": new_vid is not None}
+
+
+# ── 本体图谱编辑器：草稿 / 发布 ──
+
+@router.get("/ontology/draft")
+async def get_ontology_draft(request: Request, domain: str = _DEFAULT_DOMAIN) -> dict:
+    """取该领域 draft 版本及其点/边类型。无 draft → version=null、空列表（前端据此从 active 克隆）。"""
+    onto, _ = _stores(request)
+    draft = await _run(onto.get_draft_version, domain)
+    if not draft:
+        return {"domain": domain, "version": None, "node_types": [], "relation_types": []}
+    node_types = await _run(onto.node_types_for_version, draft["id"])
+    rel_types = await _run(onto.relation_types_for_version, draft["id"])
+    return {
+        "domain": domain,
+        "version": dict(draft),
+        "node_types": [dict(n) for n in node_types],
+        "relation_types": [dict(r) for r in rel_types],
+    }
+
+
+@router.put("/ontology/draft")
+async def save_ontology_draft(body: SaveDraftRequest, request: Request) -> dict:
+    """整份覆盖式保存草稿：后端 get-or-create draft 版本 → 清空旧类型 → 按提交内容重写。"""
+    onto, _ = _stores(request)
+    domain = body.domain or _DEFAULT_DOMAIN
+    node_types = [
+        {"name": n.name, "layer": n.layer, "is_strong": n.is_strong,
+         "definition": n.definition, "examples": n.examples_json}
+        for n in body.node_types
+    ]
+    relation_types = [
+        {"name": r.name, "layer": r.layer, "is_directed": r.is_directed,
+         "inverse_name": r.inverse_name, "allowed_pairs": r.allowed_pairs_json,
+         "definition": r.definition}
+        for r in body.relation_types
+    ]
+    try:
+        draft_vid = await _run(
+            onto.replace_draft, domain, node_types, relation_types,
+            created_by=body.created_by,
+        )
+    except Exception as e:
+        logger.error("save ontology draft failed: %s", e, exc_info=True)
+        raise HTTPException(400, f"保存草稿失败：{e}")
+    return {"domain": domain, "draft_version_id": draft_vid}
+
+
+@router.post("/ontology/draft/publish")
+async def publish_ontology_draft(body: PublishDraftRequest, request: Request) -> dict:
+    """发布：把 draft 激活为新 active（旧 active → superseded）。无 draft → 400。"""
+    onto, _ = _stores(request)
+    domain = body.domain or _DEFAULT_DOMAIN
+    new_vid = await _run(onto.publish_draft, domain)
+    if new_vid is None:
+        raise HTTPException(400, "没有可发布的草稿，请先保存草稿")
+    return {"domain": domain, "new_version_id": new_vid}
 
 
 # ── Gate2 mention 裁决 ──

@@ -66,7 +66,7 @@ rerank:
   bypass_proxy: false
   headers: {}
 worker:
-  concurrency: 1
+  concurrency: 3
   poll_interval: 1.0
 task:
   default_max_attempts: 3

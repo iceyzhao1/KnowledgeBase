@@ -63,13 +63,21 @@ def _build_type_candidates(
     llm_result：{"new_types": [{type_name, definition, examples, members:[实体规范名...], layer}]}。
     members 用规范名回指实体（大小写/空白不敏感匹配），落候选时换成 entity_id 供 N5 回贴。
     DF = 该类型成员实体覆盖的文档数（按实体 document_count 取并集近似——同名实体已在
-    Gate2 归并，故各成员文档集基本不重叠，求和是合理上界）。DF < min_df 丢弃。
+    Gate2 归并，故各成员文档集基本不重叠，求和是合理上界）。DF < 阈值丢弃。
+
+    阈值自适应（修正单文档跑被全量误丢的 bug）：min_df 是"语料够大时"的去噪目标，
+    但语料只有 1 篇时，任何类型都不可能覆盖 ≥2 篇——硬卡 min_df=2 会把人已确认的
+    真实体全部丢光、永远无法升类型。故按确认实体覆盖的最大文档数 corpus_df 兜底封顶：
+    effective_min_df = min(min_df, max(corpus_df, 1))。语料 ≥2 篇时去噪不变。
     """
     by_name: dict[str, dict[str, Any]] = {}
+    corpus_df = 0
     for e in entities:
         cn = (e.get("canonical_name") or "").strip().lower()
         if cn:
             by_name[cn] = e
+        corpus_df = max(corpus_df, int(e.get("document_count") or 0))
+    effective_min_df = min(min_df, max(corpus_df, 1))
 
     out: list[TypeCandidate] = []
     for nt in llm_result.get("new_types", []) or []:
@@ -108,8 +116,8 @@ def _build_type_candidates(
             support += mc
         if not member_ids:
             continue
-        if df < min_df:
-            logger.info("induction: drop low-DF type %r (df=%d < %d)", type_name, df, min_df)
+        if df < effective_min_df:
+            logger.info("induction: drop low-DF type %r (df=%d < %d)", type_name, df, effective_min_df)
             continue
         out.append(TypeCandidate(
             type_name=type_name,

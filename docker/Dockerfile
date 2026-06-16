@@ -36,10 +36,16 @@ FROM python:3.11-slim
 # ── 换国内 Debian 源加速 ──
 RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
 
+# ── 时区：日志时间戳按北京时间显示 ──
+ENV TZ=Asia/Shanghai
+
 # ── 运行时系统依赖 ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libpq-dev supervisor nginx \
     openjdk-21-jre-headless p7zip-full \
+    libreoffice-writer \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -59,6 +65,9 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "httpx>=0.27" \
     "psycopg[binary,pool]>=3.1" \
     "pdfminer.six>=20231228" \
+    "python-docx>=1.1" \
+    "python-multipart>=0.0.9" \
+    "jieba>=0.42" \
     "fastmcp>=2.0"
 
 # ── 从构建阶段复制产物 ──

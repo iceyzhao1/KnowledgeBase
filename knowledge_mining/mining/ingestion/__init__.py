@@ -18,6 +18,7 @@ from knowledge_mining.mining.ingestion.preprocessing import (
     html_to_markdown,
 )
 from knowledge_mining.mining.ingestion.pdf_preprocessing import pdf_to_text
+from knowledge_mining.mining.ingestion.doc_preprocessing import doc_to_docx
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,10 @@ def ingest_directory(
             content_bytes = file_path.read_bytes()
             raw_hash = compute_raw_hash(content_bytes)
             metadata_json: dict[str, Any] = {}
+            # Path the parser opens. Differs from file_path only for .doc, which
+            # is converted to a sidecar .docx; provenance (source_uri/relative_
+            # path/file_name) still points at the original .doc.
+            parse_path = file_path
 
             if ext in PREPROCESS_EXTENSIONS:
                 # .chm / .hdx — extract + convert to markdown on the fly.
@@ -148,8 +153,28 @@ def ingest_directory(
                     summary["unparsed_documents"] += 1
                     metadata_json["source_format"] = "html"
                     metadata_json["preprocess_error"] = f"{type(e).__name__}: {e}"
+            elif ext == ".doc":
+                # Legacy binary .doc — python-docx cannot read it ("Package not
+                # found"). Convert to .docx (LibreOffice/Word backend) so it
+                # flows through the structural DocxParser instead of being
+                # flattened to plain text.
+                try:
+                    parse_path = doc_to_docx(file_path)
+                    file_type = "docx"  # converted, will use DocxParser
+                    content = ""  # docx parsed from file, like native .docx
+                    summary["parsed_documents"] += 1
+                    metadata_json["source_format"] = "doc"
+                except Exception as e:
+                    logger.warning(
+                        "doc->docx conversion failed for %s: %s; registering without content",
+                        file_path, e,
+                    )
+                    content = ""
+                    summary["unparsed_documents"] += 1
+                    metadata_json["source_format"] = "doc"
+                    metadata_json["preprocess_error"] = f"{type(e).__name__}: {e}"
             elif ext in DOCX_EXTENSIONS:
-                # .doc / .docx — binary; DocxParser reads file_path directly.
+                # .docx — zip package; DocxParser reads file_path directly.
                 content = ""
                 summary["parsed_documents"] += 1
                 metadata_json["source_format"] = ext.lstrip(".")
@@ -163,13 +188,14 @@ def ingest_directory(
             normalized_hash = compute_snapshot_hash(content) if content else raw_hash
 
             doc = RawFileData(
-                file_path=str(file_path),
+                file_path=str(parse_path),
                 relative_path=str(rel_path).replace("\\", "/"),
                 file_name=file_path.name,
                 file_type=file_type,
                 content=content,
                 raw_content_hash=raw_hash,
                 normalized_content_hash=normalized_hash,
+                file_size=len(content_bytes),
                 source_uri=str(file_path),
                 source_type=batch_params.default_source_type,
                 document_type=batch_params.default_document_type,

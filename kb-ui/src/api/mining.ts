@@ -2,7 +2,7 @@ import type {
   MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
   KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation,
   UploadConfig, UploadResult,
-  RunTrace, OntologyVersion, ActiveOntology, OntologyCandidate,
+  RunTrace, OntologyVersion, OntologyNodeType, OntologyRelationType, ActiveOntology, OntologyDraft, OntologyCandidate,
   PendingMention, GraphEntity, EntityNeighbors, GraphEvidence,
   EntityMutationResult,
 } from '@/types'
@@ -254,6 +254,25 @@ export function useMiningApi() {
 
     async promoteCandidates(domain?: string): Promise<{ new_version_id: string | null; promoted: boolean }> {
       const { data } = await client.post('/api/ontology/promote', domain ? { domain } : {})
+      return data
+    },
+
+    // 本体图谱编辑器：草稿读 / 整份覆盖式存 / 发布
+    async getOntologyDraft(domain?: string): Promise<OntologyDraft> {
+      const { data } = await client.get('/api/ontology/draft', { params: domain ? { domain } : undefined })
+      return data
+    },
+
+    async saveOntologyDraft(
+      domain: string,
+      payload: { node_types: OntologyNodeType[]; relation_types: OntologyRelationType[] },
+    ): Promise<{ domain: string; draft_version_id: string }> {
+      const { data } = await client.put('/api/ontology/draft', { domain, ...payload })
+      return data
+    },
+
+    async publishOntologyDraft(domain: string): Promise<{ domain: string; new_version_id: string }> {
+      const { data } = await client.post('/api/ontology/draft/publish', { domain })
       return data
     },
 

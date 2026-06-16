@@ -223,7 +223,7 @@ async def get_run_documents(
         cur = await conn.execute(
             f"SELECT d.id, d.run_id, d.document_key, d.action, d.status, "
             f"d.document_id, d.document_snapshot_id, d.error_message, "
-            f"d.raw_content_hash, d.normalized_content_hash "
+            f"d.raw_content_hash, d.normalized_content_hash, d.metadata_json "
             f"FROM mining_run_documents d WHERE {where} "
             f"ORDER BY d.document_key LIMIT %s OFFSET %s",
             params + [page_size, offset],
@@ -271,6 +271,9 @@ async def get_run_documents(
             doc["document_name"] = dk.replace("doc:/", "", 1) if dk.startswith("doc:/") else dk
             doc["current_stage"] = stage_lookup.get(doc["id"])
             doc["duration_ms"] = duration_lookup.get(doc["id"])
+            # file_size: 摄取时存进 metadata_json 的原始文件字节大小（JSONB → dict）
+            meta = doc.pop("metadata_json", None) or {}
+            doc["file_size"] = meta.get("file_size") if isinstance(meta, dict) else None
             documents.append(doc)
 
     return {
@@ -832,37 +835,59 @@ async def resume_run(run_id: str, request: Request, body: ResumeRunRequest | Non
 
     重新评估两道检查点：仍有待办 → 保持 awaiting_review 刷新 subloop_stage；
     都清空 → 从 graph_write 之后续跑（建库 + 发布），不重抽文档。
+
+    **异步执行**：续跑要跑 LLM 归纳 + 建库发布，可能耗时数分钟。若同步等结果，
+    上游网关会先超时（504），用户重试又撞上已变更的状态（400）。所以这里只做快速校验，
+    重活丢后台线程，立即返回 status=resuming，让前端轮询 run 状态看进度（与初始挖掘一致）。
     """
     db_config: MiningDbConfig = request.app.state.db_config
+    pool = request.app.state.pg_pool
 
-    # Resolve domain: body > run record > fallback
-    resume_domain = body.domain if body and body.domain else None
-    if not resume_domain:
-        pool = request.app.state.pg_pool
-        async with pool.connection() as conn:
-            cur = await conn.execute("SELECT domain FROM mining_runs WHERE id = %s", [run_id])
-            row = await cur.fetchone()
-            if row and row["domain"]:
-                resume_domain = row["domain"]
-    if not resume_domain:
-        resume_domain = "cloud_core_network"
+    # 快速读当前 run 状态（同时拿 domain，避免再查一次）
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT domain, status, subloop_stage, finished_at FROM mining_runs WHERE id = %s",
+            [run_id],
+        )
+        row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(404, f"Run {run_id} not found")
+
+    resume_domain = (body.domain if body and body.domain else None) or row["domain"] or "cloud_core_network"
+    status = row["status"]
+    stage = row["subloop_stage"]
+    finished = row["finished_at"]
+
+    # 已完成：别报错，直接告诉前端"无需继续"——重试已跑完的 run 不应是错误。
+    if status == "completed":
+        return {"run_id": run_id, "status": "completed", "message": "该 run 已完成，无需继续"}
+
+    # 可续跑：① 人审暂停；② 收尾中断卡在 running/done（finished_at 仍空）的恢复。
+    resumable = status == "awaiting_review" or (status == "running" and stage == "done" and finished is None)
+    if not resumable:
+        raise HTTPException(
+            400, f"Run {run_id} 当前状态为 {status}{f'/{stage}' if stage else ''}，无法继续挖掘")
 
     publish_partial = body.publish_on_partial_failure if body else False
 
-    import asyncio
-    try:
-        from knowledge_mining.mining.jobs.run import resume as resume_run_job
-        result = await asyncio.to_thread(
-            resume_run_job, run_id,
-            domain=resume_domain, db_config=db_config,
-            publish_on_partial_failure=publish_partial,
-        )
-        return result
-    except (ValueError, AssertionError) as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        logger.error("Resume run failed: %s", e, exc_info=True)
-        raise HTTPException(500, f"Resume failed: {e}")
+    # 防并发：和初始挖掘共用一把锁，避免续跑与新挖掘互相踩。
+    if not _run_lock.acquire(blocking=False):
+        raise HTTPException(409, "已有挖掘任务在进行中，请稍候再试")
+
+    def _resume_in_thread():
+        try:
+            from knowledge_mining.mining.jobs.run import resume as resume_run_job
+            resume_run_job(
+                run_id, domain=resume_domain, db_config=db_config,
+                publish_on_partial_failure=publish_partial,
+            )
+        except Exception as e:
+            logger.error("Resume run failed: %s", e, exc_info=True)
+        finally:
+            _run_lock.release()
+
+    threading.Thread(target=_resume_in_thread, daemon=True).start()
+    return {"run_id": run_id, "status": "resuming", "message": "已开始继续挖掘，请稍候查看进度"}
 
 
 def _utcnow() -> str:

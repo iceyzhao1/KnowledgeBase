@@ -43,15 +43,21 @@ function render() {
   const nodes = props.nodes.map(n => ({
     id: n.id,
     name: n.name,
-    symbolSize: n.isStrong ? 46 : 36,
-    symbol: 'roundRect',
+    // 小圆点：名字不再塞进图形内，所以图形可以小一些
+    symbolSize: n.isStrong ? 18 : 13,
+    symbol: 'circle',
     itemStyle: n.isCandidate
       ? { color: '#fff7ed', borderColor: CANDIDATE_COLOR, borderWidth: 2, borderType: 'dashed' as const }
       : { color: colorOf(n.layer), borderColor: colorOf(n.layer), borderWidth: 1 },
     label: {
-      show: true, fontSize: 12,
-      color: n.isCandidate ? CANDIDATE_COLOR : '#fff',
-      fontWeight: n.isStrong ? 700 : 400 as const,
+      show: true,
+      // 名字标签移到圆点下方、不裁切，长中文名完整显示
+      position: 'bottom' as const,
+      distance: 6,
+      fontSize: 12,
+      color: n.isCandidate ? CANDIDATE_COLOR : 'var(--kb-text-primary)',
+      fontWeight: (n.isStrong ? 700 : 400) as const,
+      overflow: 'none' as const,
     },
   }))
 

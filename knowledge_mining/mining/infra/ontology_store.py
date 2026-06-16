@@ -190,6 +190,88 @@ class OntologyStore(_DB):
             (domain_id,),
         )
 
+    # -- 草稿版本（人工编辑器）--
+
+    def get_draft_version(self, domain_id: str) -> dict[str, Any] | None:
+        """取该领域 status='draft' 的本体版本（约定每领域至多一个 draft，取最新）。"""
+        return self._fetchone(
+            "SELECT * FROM ontology_versions WHERE domain_id = %s AND status = 'draft' "
+            "ORDER BY version_no DESC LIMIT 1",
+            (domain_id,),
+        )
+
+    def node_types_for_version(self, version_id: str) -> list[dict[str, Any]]:
+        """按 version_id 读点类型（active_node_types 只按 active 读，这里补按 id 读）。"""
+        return self._fetchall(
+            "SELECT * FROM ontology_node_types WHERE ontology_version_id = %s ORDER BY name",
+            (version_id,),
+        )
+
+    def relation_types_for_version(self, version_id: str) -> list[dict[str, Any]]:
+        """按 version_id 读边类型。"""
+        return self._fetchall(
+            "SELECT * FROM ontology_relation_types WHERE ontology_version_id = %s ORDER BY name",
+            (version_id,),
+        )
+
+    def delete_version_types(self, version_id: str) -> None:
+        """删一个版本名下的全部点/边类型（供 replace_draft 的"清空+重写"复用）。"""
+        self._execute(
+            "DELETE FROM ontology_node_types WHERE ontology_version_id = %s", (version_id,))
+        self._execute(
+            "DELETE FROM ontology_relation_types WHERE ontology_version_id = %s", (version_id,))
+
+    def replace_draft(
+        self,
+        domain_id: str,
+        node_types: list[dict[str, Any]],
+        relation_types: list[dict[str, Any]],
+        *,
+        created_by: str | None = None,
+    ) -> str:
+        """整份覆盖式保存草稿：事务内 get-or-create draft → 清空旧类型 → 按提交内容重写。
+
+        node_types 每项键：name, layer, is_strong, definition, examples（list）。
+        relation_types 每项键：name, layer, is_directed, inverse_name, allowed_pairs（list[{head,tail}]）, definition。
+        返回 draft 版本 id。
+        """
+        with self.transaction():
+            draft = self.get_draft_version(domain_id)
+            if draft is None:
+                vid = self.create_version(
+                    domain_id, version_no=self.next_version_no(domain_id),
+                    status="draft", source="human_edit", created_by=created_by,
+                )
+            else:
+                vid = draft["id"]
+                self.delete_version_types(vid)
+            for nt in node_types:
+                self.add_node_type(
+                    vid, name=nt["name"], layer=nt.get("layer", "concept"),
+                    is_strong=nt.get("is_strong", False), definition=nt.get("definition"),
+                    examples=nt.get("examples") or [],
+                )
+            for rt in relation_types:
+                self.add_relation_type(
+                    vid, name=rt["name"], layer=rt.get("layer", "concept"),
+                    is_directed=rt.get("is_directed", True),
+                    inverse_name=rt.get("inverse_name"),
+                    allowed_pairs=rt.get("allowed_pairs") or [],
+                    definition=rt.get("definition"),
+                )
+            return vid
+
+    def publish_draft(self, domain_id: str) -> str | None:
+        """发布：把该领域 draft 激活为新 active（旧 active 自动转 superseded）。
+
+        无 draft → 返回 None（路由转 400）。
+        """
+        draft = self.get_draft_version(domain_id)
+        if draft is None:
+            return None
+        self.activate_version(draft["id"], domain_id)
+        return draft["id"]
+
     # -- 别名词典 --
 
     def upsert_alias(
@@ -319,6 +401,13 @@ class OntologyStore(_DB):
         """
         if action not in ("accept", "reject"):
             raise ValueError(f"unknown review action: {action!r}")
+        # 幂等保护：已裁决（accepted/rejected）的候选不允许重复操作——防前端误点或并发重复提交。
+        cur = self._fetchone(
+            "SELECT status FROM ontology_candidates WHERE id = %s", (candidate_id,))
+        if cur is None:
+            raise ValueError(f"candidate {candidate_id} not found")
+        if cur["status"] != "proposed":
+            raise ValueError(f"candidate {candidate_id} already {cur['status']}, cannot review again")
         status = "accepted" if action == "accept" else "rejected"
         parts = ["status = %s"]
         params: list[Any] = [status]
@@ -533,6 +622,58 @@ class GraphStore(_DB):
                LIMIT %s""",
             (domain_id, UNTYPED_NODE_TYPE, limit),
         )
+
+    def member_quotes(
+        self, entity_ids: list[str], *, window: int = 80,
+    ) -> dict[str, dict[str, str]]:
+        """为每个成员实体取一条"包含该实体提及"的原文片段（围绕提及位置开窗）。
+
+        本体确认页按实体展示各自的原文摘录。早先的实现给每个实体取它首条提及所在 segment 的
+        前 300 字，多个实体若首次共现在同一段（如开头的列举句），摘录就完全一样。这里改成：
+        优先选 raw_text 中确实出现该实体 mention_text 的片段，再以提及位置为中心开窗截取，
+        于是即便共用一段，各实体也会落在自己提及附近的不同窗口上，互不相同。
+
+        返回 {entity_id: {"quote": 片段, "mention": 提及原文}}；mention 供前端在片段中加粗。
+        """
+        if not entity_ids:
+            return {}
+        uniq = list(dict.fromkeys(e for e in entity_ids if e))
+        if not uniq:
+            return {}
+        placeholders = ",".join(["%s"] * len(uniq))
+        rows = self._fetchall(
+            f"""SELECT DISTINCT ON (m.resolved_entity_id)
+                       m.resolved_entity_id AS entity_id,
+                       m.mention_text       AS mention,
+                       s.raw_text           AS raw_text,
+                       POSITION(m.mention_text IN s.raw_text) AS pos
+                FROM asset_segment_entity_mentions m
+                JOIN asset_raw_segments s ON s.id = m.segment_id
+                WHERE m.resolved_entity_id IN ({placeholders})
+                  AND COALESCE(m.mention_text, '') <> ''
+                  AND COALESCE(s.raw_text, '') <> ''
+                ORDER BY m.resolved_entity_id,
+                         (POSITION(m.mention_text IN s.raw_text) > 0) DESC,
+                         LENGTH(s.raw_text) ASC""",
+            tuple(uniq),
+        )
+        out: dict[str, dict[str, str]] = {}
+        for r in rows:
+            text = r.get("raw_text") or ""
+            mention = r.get("mention") or ""
+            pos = int(r.get("pos") or 0) - 1  # POSITION 1-based；0=未找到 → -1
+            if pos < 0:
+                quote = text[: window * 2]
+            else:
+                start = max(0, pos - window)
+                end = min(len(text), pos + len(mention) + window)
+                quote = text[start:end]
+                if start > 0:
+                    quote = "…" + quote
+                if end < len(text):
+                    quote = quote + "…"
+            out[r["entity_id"]] = {"quote": quote.strip(), "mention": mention}
+        return out
 
     # -- 事实边（出处强制非空）--
 

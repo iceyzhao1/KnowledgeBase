@@ -74,6 +74,24 @@
         </div>
       </div>
 
+      <!-- 收尾中断恢复横幅：两道评审已审完、stage 推进到 done，但建库/发布过程异常退出，
+           run 卡在 running 不动（finished_at 仍为空）。给一个重试入口幂等地把收尾跑完。 -->
+      <div
+        v-else-if="miningStore.currentRun.status === 'running' && miningStore.currentRun.subloop_stage === 'done' && !miningStore.currentRun.finished_at"
+        class="run-detail__review-banner"
+      >
+        <div class="review-banner__main">
+          <div class="review-banner__icon">⚠</div>
+          <div class="review-banner__text">
+            <div class="review-banner__title">评审已完成，但建库收尾似乎中断了</div>
+            <div class="review-banner__sub">点「继续挖掘」可重新把建库与发布跑完（可安全重试）</div>
+          </div>
+        </div>
+        <div class="review-banner__actions">
+          <el-button type="success" :loading="resuming" @click="handleResume">继续挖掘</el-button>
+        </div>
+      </div>
+
       <!-- Progress Overview Card -->
       <div v-if="miningStore.progress" class="run-detail__progress-card">
         <div class="progress-card__row">
@@ -141,6 +159,11 @@
           <el-table-column label="文件名" min-width="200">
             <template #default="{ row }">
               <span class="doc-name">{{ docDisplayName(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="大小" width="100">
+            <template #default="{ row }">
+              <span class="duration-text">{{ row.file_size != null ? formatFileSize(row.file_size) : '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="状态" width="120">
@@ -272,6 +295,12 @@ function formatMs(ms: number) {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+}
+
 // ── Progress card ──
 
 // 红条（失败占比）仍按文档维度展示
@@ -340,10 +369,14 @@ async function handleResume() {
     const res = await miningApi.resumeRun(props.runId, domainStore.currentDomain)
     if (res.status === 'awaiting_review') {
       ElMessage.warning('仍有待审项，请先处理完再继续')
+    } else if (res.status === 'completed') {
+      ElMessage.success('该 run 已完成')
     } else {
-      ElMessage.success('已继续挖掘')
+      // resuming：续跑已在后台开始（建库/发布耗时较久），开始轮询看进度
+      ElMessage.success('已开始继续挖掘，正在后台运行…')
     }
-    await pollOnce(false)
+    // 给后台线程一点时间把状态翻成 running 再轮询，避免第一拍还停在旧状态导致轮询过早停止
+    setTimeout(() => startPolling(), 1500)
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : '继续失败')
   } finally {
