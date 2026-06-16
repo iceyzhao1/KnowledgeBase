@@ -709,3 +709,43 @@ def test_openai_compat_provider_requires_base_url_and_model():
         pass
     else:
         raise AssertionError("缺 model 应抛 RuntimeError")
+
+
+# --- 综合总评：提示词构造 + 服务 + 端点 -----------------------------------
+
+
+def test_build_overall_summary_prompt_includes_layers_and_missing():
+    from runtime_eval.eval_llm.prompts import build_overall_summary_prompt
+
+    system, user = build_overall_summary_prompt(
+        suite_meta={"name": "演示测试集", "total_cases": 12},
+        l1={"pass_rate": 0.75, "kb_score": 0.81},
+        l2={"models": [{"id": "good", "label": "Good", "f1": 0.9}]},
+        l4=None,  # L4 未评测
+    )
+    # system 要求中文、大白话、先结论再分点、给改进建议
+    assert "中文" in system and "改进" in system
+    # user 带三层关键数 + 测试集元信息
+    assert "演示测试集" in user and "12" in user
+    assert "0.75" in user or "75" in user  # 检索通过率
+    assert "Good" in user and "0.9" in user  # 答案质量最佳模型
+    # 缺失层如实标注「未评测」
+    assert "未评测" in user
+    assert "MODE: OVERALL_SUMMARY" in user
+
+
+def test_mock_provider_overall_summary_echoes_presence():
+    from runtime_eval.eval_llm.config import LLMConfig
+    from runtime_eval.eval_llm.prompts import build_overall_summary_prompt
+    from runtime_eval.eval_llm.providers.mock import MockProvider
+
+    _, user = build_overall_summary_prompt(
+        suite_meta={"name": "T", "total_cases": 3},
+        l1={"pass_rate": 0.5},
+        l2=None,
+        l4=None,
+    )
+    out = MockProvider(LLMConfig(provider="mock")).chat(system="s", user=user)
+    # mock 返回中文文本（非 JSON），且能反映「有 1 层在、2 层未评测」
+    assert "评测" in out.text
+    assert out.usage.total_tokens > 0

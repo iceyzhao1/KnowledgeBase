@@ -288,3 +288,86 @@ def build_retrieval_judge_prompt(
         f"{RETRIEVAL_JUDGE_SCHEMA}"
     )
     return RETRIEVAL_JUDGE_SYSTEM, user
+
+
+# --- 综合总评（把三层结果捏成一段中文评语） --------------------------------
+
+OVERALL_SUMMARY_SYSTEM = """\
+你是一名知识库评测的「班主任」。下面给你一个知识库测试集在三层评测（检索质量、
+答案质量、增量价值）上的关键指标。请用**中文、大白话**给出一段整体评价，要求：
+
+1. 先用一句话给结论：这个知识库目前整体行不行、值不值得用。
+2. 再分点解释每一层的关键指标说明了什么——避免堆术语，把"召回/净增量"这类词
+   翻译成运维同学听得懂的话。
+3. 指出知识库的强项与弱项分别在哪。
+4. 给出可执行的改进建议（比如该补哪类文档、该调检索深度还是该补黄金答案）。
+5. 若某一层显示「未评测」，如实说明该层还没跑，不要编造该层结论。
+
+只输出这段评价正文，不要输出 JSON、不要加标题党，分点用中文短句即可。
+"""
+
+
+def _overall_layer_line(name: str, metrics: dict | None, fields: list[tuple[str, str]]) -> str:
+    """渲染一层的关键数；metrics 为 None 时标「未评测」。"""
+
+    if not metrics:
+        return f"- {name}：未评测"
+    parts = []
+    for label, key in fields:
+        val = metrics.get(key)
+        if val is not None:
+            parts.append(f"{label}={val}")
+    body = "；".join(parts) if parts else "（无关键数）"
+    return f"- {name}：{body}"
+
+
+def build_overall_summary_prompt(
+    *,
+    suite_meta: dict,
+    l1: dict | None,
+    l2: dict | None,
+    l4: dict | None,
+) -> tuple[str, str]:
+    """把三层关键指标整理成「综合总评」的 (system, user) 提示词。
+
+    l1/l2/l4 为各层 RunSummary.metrics（缺层传 None）。本函数只做防御性抽取与
+    格式化，不做计算；抽不到的字段略过。
+    """
+
+    name = str(suite_meta.get("name") or "未命名测试集")
+    total = suite_meta.get("total_cases")
+
+    l1_line = _overall_layer_line(
+        "检索质量", l1, [("通过率", "pass_rate"), ("KB综合分", "kb_score")]
+    )
+
+    # 答案质量：取排行榜第一名（综合分 F1 最高）
+    l2_line = "- 答案质量：未评测"
+    if l2 and l2.get("models"):
+        best = max(l2["models"], key=lambda m: m.get("f1", 0.0))
+        l2_line = (
+            f"- 答案质量：最佳模型={best.get('label') or best.get('id')}"
+            f"；综合分F1={best.get('f1')}"
+        )
+
+    # 增量价值：净增量 + 是否值得建
+    l4_line = "- 增量价值：未评测"
+    if l4:
+        head = l4.get("headline") or {}
+        l4_line = (
+            f"- 增量价值：净增量={head.get('net_uplift')}"
+            f"；胜率={head.get('win_rate')}"
+            f"；是否值得建={'是' if l4.get('value_pass') else '否'}"
+        )
+
+    user = (
+        "MODE: OVERALL_SUMMARY\n"
+        f"测试集：{name}\n"
+        f"总题数：{total}\n\n"
+        "==== 三层关键指标 ====\n"
+        f"{l1_line}\n"
+        f"{l2_line}\n"
+        f"{l4_line}\n\n"
+        "请按系统提示给出这个知识库的整体中文评价："
+    )
+    return OVERALL_SUMMARY_SYSTEM, user

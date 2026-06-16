@@ -38,6 +38,8 @@ class MockProvider:
             return ChatResult(text=self._judge(user), usage=usage)
         if "MODE: ANSWER" in user:
             return ChatResult(text=self._answer(user), usage=usage)
+        if "MODE: OVERALL_SUMMARY" in user:
+            return ChatResult(text=self._overall_summary(user), usage=usage)
         return ChatResult(text=self._generate(user), usage=usage)
 
     def _answer(self, user: str) -> str:
@@ -46,6 +48,16 @@ class MockProvider:
         evidence = self._numbered_block(user, "EVIDENCE")
         body = "；".join(evidence) if evidence else "证据不足，无法回答。"
         return f"[mock-answer] 针对「{question}」，依据证据整合如下：{body}"
+
+    def _overall_summary(self, user: str) -> str:
+        # 离线确定性总评：统计 user 里有几层标了「未评测」，回显一段中文评语，
+        # 便于端到端测试有可断言的自然语言内容（不触网、不调真模型）。
+        missing = user.count("未评测")
+        return (
+            "[mock-总评] 这个知识库整体表现一般。"
+            f"三层评测中有 {missing} 层尚未评测，建议补齐后再做整体判断。"
+            "已评测的层里，检索与答案质量是后续优化重点。"
+        )
 
     def _generate(self, user: str) -> str:
         # Pull the requested types from the request section only (before the
