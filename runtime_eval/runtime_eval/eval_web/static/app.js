@@ -267,7 +267,6 @@ async function renderDashboard() {
       <div class="stat accent"><div class="n">${suites.length}</div><div class="l">测试集</div><div class="sub">本项目已建</div></div>
       <div class="stat"><div class="n">${totalCases}</div><div class="l">累计用例</div><div class="sub">已标注 ${totalAnnot}</div></div>
       <div class="stat"><div class="n" id="docCount">…</div><div class="l">已解析文档</div></div>
-      <div class="stat"><div class="n" id="goldCount">…</div><div class="l">黄金库条目</div><div class="sub">可跨测试集复用</div></div>
     </div>
     <div class="grid cols-2">
       <div class="card">
@@ -308,7 +307,6 @@ async function renderDashboard() {
 
   // 异步补两个计数
   api(`/api/v1/projects/${pid}/documents`).then((d) => { const el = $("#docCount"); if (el) el.textContent = d.length; }).catch(() => { const el = $("#docCount"); if (el) el.textContent = "—"; });
-  api(`/api/v1/projects/${pid}/gold`).then((g) => { const el = $("#goldCount"); if (el) el.textContent = g.records.length; }).catch(() => { const el = $("#goldCount"); if (el) el.textContent = "—"; });
 }
 async function renderProjects() {
   const v = $("#view"); v.className = "view wide";
