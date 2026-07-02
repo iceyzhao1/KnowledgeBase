@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 
+from telecom_eval.api.config import select_default_model_ids
 from telecom_eval.api.schemas import CreateRunRequest
 
 router = APIRouter()
@@ -7,6 +8,14 @@ router = APIRouter()
 
 @router.post("/runs")
 def create_run(payload: CreateRunRequest, request: Request) -> dict:
+    defaults = select_default_model_ids(request.app.state.config)
+    if not payload.answer_model_id or not payload.judge_model_id:
+        payload = payload.model_copy(
+            update={
+                "answer_model_id": payload.answer_model_id or defaults["answer_model_id"],
+                "judge_model_id": payload.judge_model_id or defaults["judge_model_id"],
+            }
+        )
     run = request.app.state.evaluation_service.create_run(payload, execute_immediately=False)
     request.app.state.evaluation_queue_service.enqueue(run["run_id"])
     return run

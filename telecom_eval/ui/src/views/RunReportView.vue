@@ -13,6 +13,19 @@
     <template v-if="report">
       <RunStatusPanel :run="report.run" class="mb" />
 
+      <el-card v-if="!isPendingRun && hasModelInfo" shadow="never" class="mb">
+        <template #header><span>大模型配置</span></template>
+        <el-descriptions :column="3" border size="small">
+          <el-descriptions-item label="回答模型">{{ report.run.answer_model_id || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="判分模型">{{ report.run.judge_model_id || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="是否同模">
+            <el-tag :type="report.run.same_answer_and_judge_model ? 'warning' : 'success'" size="small">
+              {{ report.run.same_answer_and_judge_model ? '是' : '否' }}
+            </el-tag>
+          </el-descriptions-item>
+        </el-descriptions>
+      </el-card>
+
       <el-alert
         v-if="isPendingRun"
         type="info"
@@ -124,6 +137,9 @@ const pollTimer = ref<number | null>(null)
 
 const runStatus = computed(() => String(report.value?.run?.status ?? ''))
 const isPendingRun = computed(() => runStatus.value === 'queued' || runStatus.value === 'running')
+const hasModelInfo = computed(() =>
+  Boolean(report.value?.run?.answer_model_id || report.value?.run?.judge_model_id)
+)
 const pendingTitle = computed(() =>
   runStatus.value === 'queued'
     ? '评估任务正在排队，后台 worker 会按并发配置自动执行。'

@@ -68,6 +68,40 @@ def _channel_config(raw: Any) -> EvalChannelConfig:
     return EvalChannelConfig(base_url=base_url.rstrip("/"), api_key=api_key, type=str(raw.get("type") or "openai_compat"))
 
 
+def list_eval_roster_models(roster_json: str, channels_json: str) -> list[dict[str, str]]:
+    roster = _load_json(roster_json, name="EVAL_ROSTER")
+    channels = _load_json(channels_json, name="EVAL_ANSWER_CHANNELS")
+    if not isinstance(roster, list):
+        raise RuntimeError("EVAL_ROSTER must be a JSON array")
+    if not isinstance(channels, dict):
+        raise RuntimeError("EVAL_ANSWER_CHANNELS must be a JSON object")
+
+    models: list[dict[str, str]] = []
+    for item in roster:
+        if not isinstance(item, dict):
+            continue
+        if item.get("enabled") is False:
+            continue
+        channel = str(item.get("channel") or "").strip()
+        if channel == "claude_cli":
+            continue
+        channel_raw = channels.get(channel)
+        if channel_raw is None:
+            continue
+        model = str(item.get("model") or "").strip()
+        if not model:
+            continue
+        models.append(
+            {
+                "id": str(item.get("id") or model),
+                "label": str(item.get("label") or model),
+                "channel": channel,
+                "model": model,
+            }
+        )
+    return models
+
+
 def parse_eval_roster(roster_json: str, channels_json: str, *, preferred_id: str = "") -> EvalRosterSelection:
     roster = _load_json(roster_json, name="EVAL_ROSTER")
     channels = _load_json(channels_json, name="EVAL_ANSWER_CHANNELS")

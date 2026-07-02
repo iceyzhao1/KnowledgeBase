@@ -91,6 +91,57 @@
             <el-radio-button label="mixed">混合</el-radio-button>
           </el-radio-group>
         </el-form-item>
+
+        <el-divider content-position="left">大模型选择</el-divider>
+        <el-form-item label="回答模型">
+          <el-select
+            v-model="form.answer_model_id"
+            placeholder="选择基于证据包生成答案的模型"
+            filterable
+            clearable
+            style="width: 100%"
+            :loading="loadingModels"
+          >
+            <el-option
+              v-for="m in modelCatalog"
+              :key="m.id"
+              :label="`${m.label}（${m.id}）`"
+              :value="m.id"
+            />
+          </el-select>
+          <div class="field-hint">
+            回答模型只能看到问题和检索证据包，不会看到标准答案。
+          </div>
+        </el-form-item>
+        <el-form-item label="判分模型">
+          <el-select
+            v-model="form.judge_model_id"
+            placeholder="选择用于语义判分的裁判模型"
+            filterable
+            clearable
+            style="width: 100%"
+            :loading="loadingModels"
+          >
+            <el-option
+              v-for="m in modelCatalog"
+              :key="m.id"
+              :label="`${m.label}（${m.id}）`"
+              :value="m.id"
+            />
+          </el-select>
+          <div class="field-hint">
+            默认尽量和回答模型不同，避免同一个模型自答自判。
+          </div>
+        </el-form-item>
+        <el-alert
+          v-if="sameModelSelected"
+          type="warning"
+          show-icon
+          :closable="false"
+          class="mb"
+          title="回答模型与判分模型相同，端到端评估结果可能偏乐观。"
+        />
+
         <el-form-item label="仅已确认样本">
           <el-switch v-model="form.confirmed_only" />
         </el-form-item>
@@ -137,6 +188,7 @@ import { useEvaluationApi } from '@/api/evaluation'
 import {
   defaultCreateRunRequest,
   type DatasetSummary,
+  type EvalModelOption,
   type EvaluationRunSummary,
   type PublishedParadigm,
 } from '@/types/evaluation'
@@ -148,7 +200,9 @@ const form = reactive(defaultCreateRunRequest())
 const datasets = ref<DatasetSummary[]>([])
 const allRuns = ref<EvaluationRunSummary[]>([])
 const paradigms = ref<PublishedParadigm[]>([])
+const modelCatalog = ref<EvalModelOption[]>([])
 const loadingParadigms = ref(false)
+const loadingModels = ref(false)
 const paradigmLoadError = ref(false)
 const selectedParadigmName = ref('')
 const submitting = ref(false)
@@ -169,6 +223,10 @@ const selectedDatasetCaseCount = computed(() => {
   if (!dataset) return 0
   return form.confirmed_only ? (dataset.confirmed_count ?? dataset.case_count) : dataset.case_count
 })
+
+const sameModelSelected = computed(() =>
+  Boolean(form.answer_model_id && form.judge_model_id && form.answer_model_id === form.judge_model_id)
+)
 
 function selectParadigm(name: string) {
   const selected = paradigms.value.find((p) => p.name === name)
@@ -222,6 +280,17 @@ onMounted(async () => {
     allRuns.value = await api.listRuns()
   } catch {
     // 历史记录查询失败不影响创建。
+  }
+  loadingModels.value = true
+  try {
+    const catalog = await api.getModelCatalog()
+    modelCatalog.value = catalog.models
+    form.answer_model_id = catalog.default_answer_model_id
+    form.judge_model_id = catalog.default_judge_model_id
+  } catch {
+    // 模型目录失败时仍允许创建检索类任务。
+  } finally {
+    loadingModels.value = false
   }
   loadingParadigms.value = true
   try {

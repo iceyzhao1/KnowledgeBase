@@ -11,6 +11,7 @@ import type {
   DatasetImportPreview,
   DatasetSnapshot,
   DatasetSummary,
+  EvalModelCatalog,
   EvaluationDataset,
   EvaluationRunSummary,
   PassageCandidate,
@@ -30,6 +31,11 @@ export function useEvaluationApi() {
   return {
     async getHealth(): Promise<{ status: string }> {
       const { data } = await http.get(`${base}/health`)
+      return data
+    },
+
+    async getModelCatalog(): Promise<EvalModelCatalog> {
+      const { data } = await http.get(`${base}/models`)
       return data
     },
 

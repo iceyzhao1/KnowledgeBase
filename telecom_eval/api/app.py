@@ -8,7 +8,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from telecom_eval.api.config import (
+    build_answer_adapter_factory,
     build_judge_service,
+    build_judge_service_factory,
     build_retrieval_adapter_factory,
     build_search_fn,
     build_segment_resolver,
@@ -54,11 +56,14 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     app.state.store = store
     app.state.judge_service = judge_service
     retrieval_factory = build_retrieval_adapter_factory(config)
+    answer_factory = build_answer_adapter_factory(config)
     segment_resolver = build_segment_resolver(config)
     app.state.evaluation_service = EvaluationService(
         store,
         judge_service=judge_service,
+        judge_service_factory=build_judge_service_factory(config, store),
         retrieval_adapter_factory=retrieval_factory,
+        answer_adapter_factory=answer_factory,
         segment_resolver=segment_resolver,
     )
     app.state.evaluation_queue_service = EvaluationQueueService(

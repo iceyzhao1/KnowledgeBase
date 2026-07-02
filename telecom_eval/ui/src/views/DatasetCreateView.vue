@@ -15,8 +15,21 @@
         </el-form-item>
         <el-form-item label="用途">
           <el-select v-model="form.dataset_type" style="width: 100%">
-            <el-option v-for="t in types" :key="t" :label="t" :value="t" />
+            <el-option
+              v-for="t in types"
+              :key="t.value"
+              :label="t.label"
+              :value="t.value"
+            >
+              <div class="type-option">
+                <strong>{{ t.label }}</strong>
+                <span>{{ t.description }}</span>
+              </div>
+            </el-option>
           </el-select>
+          <div class="field-hint">
+            回归、冒烟、对抗等用途建议写入标签；这里仅选择评估方式。
+          </div>
         </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -42,7 +55,11 @@ import type { CreateDatasetRequest } from '@/types/evaluation'
 
 const router = useRouter()
 const api = useEvaluationApi()
-const types = ['retrieval', 'e2e', 'mixed', 'regression', 'adversarial', 'smoke']
+const types = [
+  { label: '检索测试', value: 'retrieval', description: '只评估检索证据是否找得准、找得全。' },
+  { label: '端到端测试', value: 'e2e', description: '评估基于证据包生成的最终回答质量。' },
+  { label: '混合测试', value: 'mixed', description: '同时评估检索与最终回答，推荐默认使用。' },
+] as const
 
 const form = reactive<CreateDatasetRequest>({
   name: '',
@@ -75,4 +92,24 @@ async function submit() {
 
 <style scoped>
 .ds-create__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.field-hint {
+  margin-top: 6px;
+  color: var(--kb-text-secondary, #64748b);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.type-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.35;
+}
+.type-option strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+.type-option span {
+  color: var(--kb-text-secondary, #64748b);
+  font-size: 12px;
+}
 </style>

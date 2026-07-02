@@ -20,6 +20,8 @@ class CreateRunRequest(BaseModel):
     dataset_snapshot_id: str | None = None
     subject_id: str
     subject_search_path: str | None = None
+    answer_model_id: str | None = None
+    judge_model_id: str | None = None
     eval_type: Literal["retrieval", "e2e", "mixed"] = "mixed"
     metric_suite_ids: list[str] = Field(default_factory=lambda: list(DEFAULT_METRIC_SUITES))
     confirmed_only: bool = True

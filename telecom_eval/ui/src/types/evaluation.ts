@@ -21,6 +21,8 @@ export interface CreateRunRequest {
   dataset_id: string
   subject_id: string
   subject_search_path?: string | null
+  answer_model_id?: string | null
+  judge_model_id?: string | null
   eval_type: 'retrieval' | 'e2e' | 'mixed'
   metric_suite_ids: string[]
   confirmed_only: boolean
@@ -49,6 +51,21 @@ export interface PublishedParadigm {
   description: string | null
   version: number
   url: string
+}
+
+export interface EvalModelOption {
+  id: string
+  label: string
+  channel: string
+  model: string
+  supports_answer: boolean
+  supports_judge: boolean
+}
+
+export interface EvalModelCatalog {
+  models: EvalModelOption[]
+  default_answer_model_id: string | null
+  default_judge_model_id: string | null
 }
 
 export interface DatasetSummary {
@@ -170,7 +187,7 @@ export interface EvaluationDataset {
 export interface CreateDatasetRequest {
   name: string
   scenario_id: string
-  dataset_type: 'retrieval' | 'e2e' | 'mixed' | 'regression' | 'adversarial' | 'smoke'
+  dataset_type: 'retrieval' | 'e2e' | 'mixed'
   description: string
   tags: string[]
   owner?: string | null
@@ -284,6 +301,8 @@ export function defaultCreateRunRequest(): CreateRunRequest {
     dataset_id: '',
     subject_id: '',
     subject_search_path: null,
+    answer_model_id: null,
+    judge_model_id: null,
     eval_type: 'mixed',
     metric_suite_ids: ['retrieval_basic_suite', 'e2e_basic_suite', 'evaluation_efficiency_suite'],
     confirmed_only: true,

@@ -46,6 +46,13 @@ from telecom_eval.subjects.fake import FakeAnswerAdapter, FakeRetrievalAdapter
 _RETRIEVAL_LEVEL = "retrieval"
 _E2E_LEVEL = "e2e"
 _EFFICIENCY_LEVEL = "efficiency"
+_E2E_METRIC_IDS = (
+    "e2e.key_point_coverage",
+    "e2e.faithfulness",
+    "e2e.citation_accuracy",
+    "e2e.refusal_accuracy",
+    "e2e.answer_correctness",
+)
 
 
 def _now() -> str:
@@ -88,6 +95,7 @@ class EvaluationService:
         store,
         *,
         judge_service=None,
+        judge_service_factory=None,
         retrieval_adapter=None,
         answer_adapter=None,
         retrieval_adapter_factory=None,
@@ -96,6 +104,7 @@ class EvaluationService:
     ):
         self.store = store
         self.judge_service = judge_service
+        self._judge_service_factory = judge_service_factory
         self._retrieval_adapter = retrieval_adapter
         self._answer_adapter = answer_adapter
         # 工厂按 subject_id 产生 adapter（真实 HTTP adapter 需要每个 run 的 subject_id）。
@@ -128,6 +137,11 @@ class EvaluationService:
             "run_id": run_id,
             "subject_id": request.subject_id,
             "subject_search_path": request.subject_search_path,
+            "answer_model_id": request.answer_model_id,
+            "judge_model_id": request.judge_model_id,
+            "same_answer_and_judge_model": bool(
+                request.answer_model_id and request.judge_model_id and request.answer_model_id == request.judge_model_id
+            ),
             "dataset_id": request.dataset_id,
             "dataset_snapshot_id": snapshot.dataset_snapshot_id,
             "dataset_version": snapshot.dataset_version,
@@ -195,12 +209,20 @@ class EvaluationService:
             return self._retrieval_adapter_factory(subject_id, request)
         return FakeRetrievalAdapter(subject_id=subject_id)
 
-    def _answer(self, subject_id: str):
+    def _answer(self, subject_id: str, request: CreateRunRequest | None = None):
         if self._answer_adapter is not None:
             return self._answer_adapter
         if self._answer_adapter_factory is not None:
-            return self._answer_adapter_factory(subject_id)
+            return self._answer_adapter_factory(subject_id, request)
         return FakeAnswerAdapter(subject_id=subject_id)
+
+    def _judge(self, request: CreateRunRequest):
+        if self._judge_service_factory is not None and request.judge_model_id:
+            return self._judge_service_factory(request.judge_model_id)
+        return self.judge_service
+
+    def _has_real_answer_adapter(self) -> bool:
+        return self._answer_adapter is not None or self._answer_adapter_factory is not None
 
     def _execute(self, run_id: str, request: CreateRunRequest, cases: list[EvaluationCase]) -> None:
         subject_id = request.subject_id
@@ -209,7 +231,8 @@ class EvaluationService:
         do_e2e = request.eval_type in ("e2e", "mixed")
         runner = EvaluationRunner(run_id=run_id, subject_id=subject_id)
         retrieval_adapter = self._retrieval(subject_id, request)
-        answer_adapter = self._answer(subject_id)
+        answer_adapter = self._answer(subject_id, request) if do_e2e and self._has_real_answer_adapter() else None
+        judge_service = self._judge(request)
 
         budget = request.judge_budget.model_copy()
         if request.allow_llm_judge:
@@ -223,6 +246,7 @@ class EvaluationService:
                 continue
             metric_values: dict[str, float] = {}
             artifact_values: dict[str, Any] = {}
+            retrieved_evidence_package = []
 
             if do_retrieval:
                 rtrace = retrieval_adapter.retrieve(case, run_id=run_id)
@@ -230,17 +254,19 @@ class EvaluationService:
                 if rtrace.errors:
                     artifact_values["retrieval_errors"] = list(rtrace.errors)
                 ep = rtrace.output.evidence_package
+                retrieved_evidence_package = list(ep)
                 content_judgment = build_retrieval_content_judgment(
                     case,
                     ep,
                     k=top_k,
                     resolver=self._segment_resolver,
-                    support_judge=self._retrieval_support_judge(
-                        run_id=run_id,
-                        case=case,
-                        subject_id=subject_id,
-                        budget=budget,
-                        usage=usage,
+                        support_judge=self._retrieval_support_judge(
+                            run_id=run_id,
+                            case=case,
+                            subject_id=subject_id,
+                            judge_service=judge_service,
+                            budget=budget,
+                            usage=usage,
                     ),
                 )
                 judgment_artifact = EvaluationArtifact(
@@ -292,8 +318,16 @@ class EvaluationService:
                     metric_values[metric_id] = value
                     per_metric_values.setdefault(metric_id, []).append(value)
 
-            if do_e2e:
-                atrace = answer_adapter.answer(case, run_id=run_id)
+            if do_e2e and answer_adapter is None:
+                self._save_e2e_inconclusive_without_answer_adapter(run_id, case.case_id, subject_id)
+
+            if do_e2e and answer_adapter is not None:
+                atrace = self._answer_case(
+                    answer_adapter,
+                    case,
+                    run_id=run_id,
+                    evidence_package=retrieved_evidence_package,
+                )
                 self.store.save_trace(atrace)
                 claims = build_atomic_claims(
                     case.case_id, run_id, subject_id, atrace.trace_id, atrace.output.final_answer
@@ -314,6 +348,7 @@ class EvaluationService:
                     alignment=ev_align,
                     budget=budget,
                     usage=usage,
+                    judge_service=judge_service,
                 )
                 gold_align = self._enhance_gold_alignment(
                     run_id=run_id,
@@ -324,6 +359,7 @@ class EvaluationService:
                     alignment=gold_align,
                     budget=budget,
                     usage=usage,
+                    judge_service=judge_service,
                 )
                 self.store.save_artifact(
                     claims, artifact_type="atomic_claims", run_id=run_id, case_id=case.case_id, cache_key=claims.inputs_hash
@@ -355,6 +391,7 @@ class EvaluationService:
                     gold_alignment=gold_align.payload.get("alignments", []),
                     budget=budget,
                     usage=usage,
+                    judge_service=judge_service,
                 )
                 if correctness is not None:
                     value, details, status = correctness
@@ -414,16 +451,41 @@ class EvaluationService:
             )
         )
 
+    def _save_e2e_inconclusive_without_answer_adapter(self, run_id: str, case_id: str, subject_id: str) -> None:
+        details = {
+            "reason": "real_answer_adapter_missing",
+            "message": "未接入真实回答接口，不能用离线 FakeAnswerAdapter 计算端到端回答指标。",
+        }
+        for metric_id in _E2E_METRIC_IDS:
+            self._save_metric(
+                run_id,
+                case_id,
+                subject_id,
+                metric_id,
+                None,
+                status="inconclusive",
+                details=details,
+            )
+
+    def _answer_case(self, answer_adapter, case: EvaluationCase, *, run_id: str, evidence_package):
+        try:
+            return answer_adapter.answer(case, run_id=run_id, evidence_package=evidence_package)
+        except TypeError as exc:
+            if "evidence_package" not in str(exc):
+                raise
+            return answer_adapter.answer(case, run_id=run_id)
+
     def _retrieval_support_judge(
         self,
         *,
         run_id: str,
         case: EvaluationCase,
         subject_id: str,
+        judge_service,
         budget,
         usage: JudgeBudgetUsage,
     ):
-        if not budget.allow_llm_judge or self.judge_service is None:
+        if not budget.allow_llm_judge or judge_service is None:
             return None
 
         def judge(gold: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -457,7 +519,7 @@ class EvaluationService:
                 judge_model_version="unbound",
                 output_schema="retrieval_content_support_v1",
             )
-            artifact = self.judge_service.run(task, budget=budget, usage=usage)
+            artifact = judge_service.run(task, budget=budget, usage=usage)
             if artifact.status != "ok":
                 return {
                     "support_label": "partial",
@@ -488,8 +550,9 @@ class EvaluationService:
         alignment: EvaluationArtifact,
         budget,
         usage: JudgeBudgetUsage,
+        judge_service,
     ) -> EvaluationArtifact:
-        if not budget.allow_llm_judge or self.judge_service is None:
+        if not budget.allow_llm_judge or judge_service is None:
             return alignment
         claim_by_id = {claim["claim_id"]: claim for claim in claims.payload.get("claims", [])}
         evidence_brief = [
@@ -522,7 +585,7 @@ class EvaluationService:
                 judge_model_version="unbound",
                 output_schema="evidence_alignment_v1",
             )
-            artifact = self.judge_service.run(task, budget=budget, usage=usage)
+            artifact = judge_service.run(task, budget=budget, usage=usage)
             self.store.save_artifact(
                 artifact,
                 artifact_type="evidence_alignment_judgment",
@@ -554,8 +617,9 @@ class EvaluationService:
         alignment: EvaluationArtifact,
         budget,
         usage: JudgeBudgetUsage,
+        judge_service,
     ) -> EvaluationArtifact:
-        if not budget.allow_llm_judge or self.judge_service is None:
+        if not budget.allow_llm_judge or judge_service is None:
             return alignment
         updated = []
         for item in alignment.payload.get("alignments", []):
@@ -583,7 +647,7 @@ class EvaluationService:
                 judge_model_version="unbound",
                 output_schema="gold_alignment_v1",
             )
-            artifact = self.judge_service.run(task, budget=budget, usage=usage)
+            artifact = judge_service.run(task, budget=budget, usage=usage)
             self.store.save_artifact(
                 artifact,
                 artifact_type="gold_alignment_judgment",
@@ -616,8 +680,9 @@ class EvaluationService:
         gold_alignment: list[dict[str, Any]],
         budget,
         usage: JudgeBudgetUsage,
+        judge_service,
     ) -> tuple[float | None, dict[str, Any], str] | None:
-        if not budget.allow_llm_judge or self.judge_service is None:
+        if not budget.allow_llm_judge or judge_service is None:
             return None
         task = JudgeTask(
             task_id=f"jt_{run_id}_{case.case_id}_answer_correctness",
@@ -642,7 +707,7 @@ class EvaluationService:
             judge_model_version="unbound",
             output_schema="answer_correctness_v1",
         )
-        artifact = self.judge_service.run(task, budget=budget, usage=usage)
+        artifact = judge_service.run(task, budget=budget, usage=usage)
         self.store.save_artifact(
             artifact,
             artifact_type="answer_correctness_judgment",
@@ -673,6 +738,8 @@ class EvaluationService:
             aggregates[metric_id] = avg
             self._save_metric(run_id, None, subject_id, metric_id, avg)
 
+        self._save_inconclusive_aggregate_metrics(run_id, subject_id, aggregates)
+
         # 效率：缓存命中率 / LLM 调用次数（从审计表算）。
         invocations = self.store.list_judge_invocations(run_id=run_id)
         llm_calls = sum(1 for inv in invocations if inv["status"] == "ok")
@@ -698,3 +765,32 @@ class EvaluationService:
             payload={"aggregates": aggregates, "failures": failures},
             markdown=markdown,
         )
+
+    def _save_inconclusive_aggregate_metrics(
+        self,
+        run_id: str,
+        subject_id: str,
+        aggregates: dict[str, float],
+    ) -> None:
+        by_metric: dict[str, list[MetricResult]] = {}
+        for metric in self.store.list_run_metrics(run_id):
+            if metric.case_id is None or metric.metric_id in aggregates:
+                continue
+            by_metric.setdefault(metric.metric_id, []).append(metric)
+
+        for metric_id, metrics in by_metric.items():
+            statuses = {metric.status for metric in metrics}
+            if statuses and statuses <= {"inconclusive", "missing_inputs", "not_applicable"}:
+                status = "inconclusive" if "inconclusive" in statuses else sorted(statuses)[0]
+                self._save_metric(
+                    run_id,
+                    None,
+                    subject_id,
+                    metric_id,
+                    None,
+                    status=status,
+                    details={
+                        "reason": "all_case_metrics_inconclusive",
+                        "case_count": len(metrics),
+                    },
+                )

@@ -39,11 +39,12 @@ POST {subject.search_base_url}/api/v1/paradigm/pd-1064589e/search
 
 ## 评估 LLM 配置
 
-现在框架里有两个可用 judge provider：
+现在框架里有三个常用模型入口：
 
 | Provider | 是否真实调用 LLM | 当前用途 | 什么时候用 |
 | --- | --- | --- | --- |
 | `mock` | 否 | 默认评估 judge，返回稳定的模拟判分，适合流程联调、UI 验证、离线 smoke test | 现在默认就是它，成本低、不会依赖外部模型 |
+| `eval_roster` | 是 | 读取 `.env` 中的 `EVAL_ROSTER` / `EVAL_ANSWER_CHANNELS`，可在页面上选择回答模型和判分模型 | 本地已有多个 OpenAI-compatible 模型时使用 |
 | `claude_cli` | 是 | 通过本机已登录的 `claude -p --output-format json` 做语义判分 | 需要真实 LLM 判断答案正确性、faithfulness、citation 等语义类指标时使用 |
 
 预留但未实现的 provider：
@@ -54,6 +55,19 @@ POST {subject.search_base_url}/api/v1/paradigm/pd-1064589e/search
 | `openai_compat` | 工厂里保留扩展点，当前调用会报“未实现” |
 
 真实 LLM 只通过 `JudgeService` 调用。前端、指标、诊断和报告不会直接调用模型。
+
+### 回答模型与判分模型
+
+端到端评估会把“大模型回答”和“大模型判分”分成两个角色：
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `EVAL_ANSWER_MODEL_ID` | 基于检索证据包生成最终答案的模型 |
+| `EVAL_JUDGE_MODEL_ID` | 对答案正确性、证据支撑等语义指标进行判分的模型 |
+
+创建评估任务页面会从 `/api/v1/eval/models` 读取可选模型，并默认选择不同的回答模型和判分模型。如果只配置了一个可用模型，系统允许同模，但报告页会提示“回答模型与判分模型相同”。
+
+回答模型只会看到用户问题和本次检索返回的证据包，不会看到 `expected_answer`、`expected_key_points` 或标准证据。
 
 ### 当前配置
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from telecom_eval.judges.providers.claude_cli import ClaudeCLIConfig
-from telecom_eval.judges.providers.eval_roster import EvalRosterConfig
+from telecom_eval.judges.providers.eval_roster import EvalRosterConfig, list_eval_roster_models
 from telecom_eval.judges.providers.factory import build_provider
 from telecom_eval.judges.service import JudgeService
 
@@ -29,6 +29,7 @@ class EvalApiConfig:
     eval_answer_channels_json: str = ""
     eval_roster_timeout: int = 120
     eval_judge_model_id: str = ""
+    eval_answer_model_id: str = ""
     # 被测检索系统：fake（离线默认）或 http（真实 /api/v1/search）。
     subject_provider: str = "fake"
     search_base_url: str = "http://121.89.90.178:8081"
@@ -106,6 +107,7 @@ def load_config(db_path: str | Path | None = None) -> EvalApiConfig:
         eval_answer_channels_json=os.environ.get("EVAL_ANSWER_CHANNELS", ""),
         eval_roster_timeout=int(os.environ.get("EVAL_LLM_TIMEOUT", "120")),
         eval_judge_model_id=os.environ.get("EVAL_JUDGE_MODEL_ID", ""),
+        eval_answer_model_id=os.environ.get("EVAL_ANSWER_MODEL_ID", ""),
         subject_provider=os.environ.get("TELECOM_EVAL_SUBJECT_PROVIDER", subject_config.get("provider", "fake")),
         search_base_url=os.environ.get("TELECOM_EVAL_SEARCH_URL", subject_config.get("search_base_url", "http://121.89.90.178:8081")),
         search_domain=os.environ.get("TELECOM_EVAL_SEARCH_DOMAIN", subject_config.get("search_domain", "cloud_core_network")),
@@ -194,20 +196,68 @@ def build_search_fn(config: EvalApiConfig):
     return search
 
 
-def build_judge_service(config: EvalApiConfig, store) -> JudgeService:
-    model = None
-    if config.judge_provider == "eval_roster":
-        _load_dotenv()
-        provider = build_provider(
-            "eval_roster",
-            EvalRosterConfig(
-                roster_json=config.eval_roster_json or os.environ.get("EVAL_ROSTER", ""),
-                channels_json=config.eval_answer_channels_json or os.environ.get("EVAL_ANSWER_CHANNELS", ""),
-                timeout=config.eval_roster_timeout,
-                preferred_id=config.eval_judge_model_id or os.environ.get("EVAL_JUDGE_MODEL_ID", ""),
-            ),
+def _roster_config(config: EvalApiConfig, *, preferred_id: str = "") -> EvalRosterConfig:
+    _load_dotenv()
+    return EvalRosterConfig(
+        roster_json=config.eval_roster_json or os.environ.get("EVAL_ROSTER", ""),
+        channels_json=config.eval_answer_channels_json or os.environ.get("EVAL_ANSWER_CHANNELS", ""),
+        timeout=config.eval_roster_timeout,
+        preferred_id=preferred_id,
+    )
+
+
+def available_llm_models(config: EvalApiConfig) -> list[dict[str, object]]:
+    _load_dotenv()
+    try:
+        models = list_eval_roster_models(
+            config.eval_roster_json or os.environ.get("EVAL_ROSTER", ""),
+            config.eval_answer_channels_json or os.environ.get("EVAL_ANSWER_CHANNELS", ""),
         )
-        model = getattr(provider, "model_name", None)
+    except RuntimeError:
+        return []
+    return [
+        {
+            **model,
+            "supports_answer": True,
+            "supports_judge": True,
+        }
+        for model in models
+    ]
+
+
+def select_default_model_ids(config: EvalApiConfig) -> dict[str, str | None]:
+    models = available_llm_models(config)
+    ids = [str(model["id"]) for model in models]
+    judge_id = config.eval_judge_model_id if config.eval_judge_model_id in ids else (ids[0] if ids else None)
+    answer_id = config.eval_answer_model_id if config.eval_answer_model_id in ids else None
+    if answer_id is None:
+        answer_id = next((model_id for model_id in ids if model_id != judge_id), None)
+    if answer_id is None:
+        answer_id = judge_id
+    return {"answer_model_id": answer_id, "judge_model_id": judge_id}
+
+
+def build_model_catalog(config: EvalApiConfig) -> dict:
+    defaults = select_default_model_ids(config)
+    return {
+        "models": available_llm_models(config),
+        "default_answer_model_id": defaults["answer_model_id"],
+        "default_judge_model_id": defaults["judge_model_id"],
+    }
+
+
+def build_eval_roster_provider(config: EvalApiConfig, *, model_id: str | None = None):
+    provider = build_provider(
+        "eval_roster",
+        _roster_config(config, preferred_id=model_id or config.eval_judge_model_id),
+    )
+    return provider, getattr(provider, "model_name", None)
+
+
+def build_judge_service(config: EvalApiConfig, store, *, model_id: str | None = None) -> JudgeService:
+    model = None
+    if model_id or config.judge_provider == "eval_roster":
+        provider, model = build_eval_roster_provider(config, model_id=model_id or config.eval_judge_model_id)
     elif config.judge_provider == "claude_cli":
         provider = build_provider(
             "claude_cli",
@@ -223,3 +273,26 @@ def build_judge_service(config: EvalApiConfig, store) -> JudgeService:
     else:
         provider = build_provider("mock")
     return JudgeService(store=store, provider=provider, model=model)
+
+
+def build_answer_adapter_factory(config: EvalApiConfig):
+    from telecom_eval.subjects.llm_answer import EvidenceGroundedLLMAnswerAdapter
+
+    if not available_llm_models(config):
+        return None
+
+    def factory(subject_id: str, request=None):
+        model_id = getattr(request, "answer_model_id", None) or select_default_model_ids(config)["answer_model_id"]
+        if not model_id:
+            return None
+        provider, model = build_eval_roster_provider(config, model_id=model_id)
+        return EvidenceGroundedLLMAnswerAdapter(subject_id=subject_id, provider=provider, model=model or model_id)
+
+    return factory
+
+
+def build_judge_service_factory(config: EvalApiConfig, store):
+    def factory(model_id: str | None = None) -> JudgeService:
+        return build_judge_service(config, store, model_id=model_id)
+
+    return factory
