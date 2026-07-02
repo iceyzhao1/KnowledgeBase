@@ -10,6 +10,7 @@ const PERCENT_METRICS = new Set([
   'e2e.faithfulness',
   'e2e.key_point_coverage',
   'e2e.refusal_accuracy',
+  'e2e.answer_correctness',
 ])
 
 const METRIC_DEFINITIONS = {
@@ -68,6 +69,13 @@ const METRIC_DEFINITIONS = {
     group: 'e2e',
     description: '遇到不该回答或资料不足的问题时，系统是否按规则拒答。',
     interpretation: '越高越好。低分表示系统可能回答了不该答的问题，或把可答问题误判成不可答。',
+  },
+  'e2e.answer_correctness': {
+    label: '答案正确性',
+    testType: '端到端回答测试',
+    group: 'e2e',
+    description: '大模型裁判综合标准答案、关键要点和证据后，对最终回答正确性的判断。',
+    interpretation: '越高越好。低分表示回答可能缺少关键要点、与标准答案不一致，或没有足够证据支撑。',
   },
   'retrieval.latency': {
     label: '检索耗时',
@@ -128,6 +136,7 @@ const GROUPS = [
       'e2e.key_point_coverage',
       'e2e.citation_accuracy',
       'e2e.refusal_accuracy',
+      'e2e.answer_correctness',
     ],
   },
   {
@@ -217,7 +226,7 @@ export function buildRunInterpretation(summary) {
   const flat = flattenMetricSummary(summary)
   const retrievalGood = ['retrieval.hit_at_k', 'retrieval.recall_at_k', 'retrieval.mrr']
     .every((metricId) => rawNumber(flat[metricId]) !== null && rawNumber(flat[metricId]) >= 0.9)
-  const weakE2e = ['e2e.faithfulness', 'e2e.key_point_coverage', 'e2e.citation_accuracy']
+  const weakE2e = ['e2e.faithfulness', 'e2e.key_point_coverage', 'e2e.citation_accuracy', 'e2e.answer_correctness']
     .filter((metricId) => rawNumber(flat[metricId]) !== null && rawNumber(flat[metricId]) < 0.8)
     .map((metricId) => METRIC_DEFINITIONS[metricId].label)
   const refusal = rawNumber(flat['e2e.refusal_accuracy'])

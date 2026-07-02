@@ -29,6 +29,7 @@ from telecom_eval.services import (
     DatasetService,
     DebugService,
     EvaluationService,
+    EvaluationQueueService,
     ReportViewService,
 )
 from telecom_eval.storage.sqlite_store import SQLiteEvaluationStore
@@ -60,10 +61,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         retrieval_adapter_factory=retrieval_factory,
         segment_resolver=segment_resolver,
     )
+    app.state.evaluation_queue_service = EvaluationQueueService(
+        store=store,
+        evaluation_service=app.state.evaluation_service,
+        max_workers=config.runner_max_concurrent_runs,
+    )
     app.state.report_view_service = ReportViewService(store)
     app.state.debug_service = DebugService(store)
     app.state.dataset_service = DatasetService(store)
     app.state.retrieval_search = build_search_fn(config)
+    app.state.evaluation_queue_service.recover_pending_runs()
 
     for module in (
         health,

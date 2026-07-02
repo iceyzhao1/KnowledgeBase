@@ -20,6 +20,7 @@
         <el-descriptions-item label="当前前端端口">5174</el-descriptions-item>
         <el-descriptions-item label="当前评估后端">http://127.0.0.1:8811</el-descriptions-item>
         <el-descriptions-item label="当前范式/检索服务">http://10.205.71.26:8081</el-descriptions-item>
+        <el-descriptions-item label="最大并发评估任务数">telecom_eval/config/runtime.json 中的 runner.max_concurrent_runs，默认 2</el-descriptions-item>
       </el-descriptions>
     </el-card>
 
@@ -36,7 +37,8 @@
         <el-descriptions-item label="当前默认模型提供方">mock</el-descriptions-item>
         <el-descriptions-item label="真实模型提供方">claude_cli，通过本机 claude 命令做语义判分</el-descriptions-item>
         <el-descriptions-item label="缓存键">task_type + case + answer/evidence/key_points + rubric + provider + model</el-descriptions-item>
-        <el-descriptions-item label="预算项">最大大模型调用次数 / 最大令牌数总量 / 最多参与大模型判分样本数</el-descriptions-item>
+        <el-descriptions-item label="前端可配置项">大模型失败重试次数</el-descriptions-item>
+        <el-descriptions-item label="默认预算">总调用次数和总令牌数不设上限，参与大模型判分样本数按当前测试集自动设置</el-descriptions-item>
         <el-descriptions-item label="超预算行为">写入“已跳过”的判分结果产物，相关指标置为“无法判定”</el-descriptions-item>
       </el-descriptions>
     </el-card>
@@ -52,6 +54,7 @@ TELECOM_EVAL_CLAUDE_BIN=claude
 TELECOM_EVAL_CLAUDE_MODEL=
 TELECOM_EVAL_CLAUDE_TIMEOUT=600
 TELECOM_EVAL_CLAUDE_PROXY=
+TELECOM_EVAL_MAX_CONCURRENT_RUNS=2
 
 TELECOM_EVAL_UI_PORT=5174
 TELECOM_EVAL_API=http://127.0.0.1:8811

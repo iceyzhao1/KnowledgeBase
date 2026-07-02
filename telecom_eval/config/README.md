@@ -14,6 +14,7 @@
 | `api.host` | `127.0.0.1`                            | 启动后端时建议监听地址 | 启动命令参数 |
 | `api.port` | `8811`                                 | 启动后端时建议监听端口 | 启动命令参数 |
 | `api.db_path` | `data/evaluation/telecom_eval_demo.db` | SQLite 评估库路径 | `TELECOM_EVAL_DB_PATH` |
+| `runner.max_concurrent_runs` | `2` | 同一后端进程最多同时运行的评估任务数 | `TELECOM_EVAL_MAX_CONCURRENT_RUNS` |
 | `subject.search_base_url` | `http://10.205.71.26:8081`             | 后端真实检索请求的 base URL | `TELECOM_EVAL_SEARCH_URL` |
 
 范式查询接口由前端先调用：
@@ -97,4 +98,4 @@ $env:TELECOM_EVAL_JUDGE_PROVIDER="claude_cli"
 $env:TELECOM_EVAL_CLAUDE_BIN="claude"
 ```
 
-创建评估任务时还需要打开页面上的“允许 LLM 判分”，并设置预算，例如 `max_llm_calls`、`max_total_tokens`、`max_cases_with_llm`。如果页面上不允许 LLM 判分，即使 provider 配成 `claude_cli`，语义判分也不会真实调用模型。
+创建评估任务时还需要打开页面上的“允许 LLM 判分”。前端只需要手动设置“大模型失败重试次数”；总调用次数和总 token 默认不设上限，参与 LLM 判分样本数会按当前测试集自动设置。如果页面上不允许 LLM 判分，即使 provider 配成 `claude_cli`，语义判分也不会真实调用模型。

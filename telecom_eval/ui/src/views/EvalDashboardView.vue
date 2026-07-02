@@ -43,7 +43,7 @@
         <el-table-column prop="eval_type" label="类型" width="100" />
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" min-width="180" />
@@ -82,7 +82,16 @@ function statusType(status: string): 'success' | 'warning' | 'info' | 'danger' {
   if (status === 'completed') return 'success'
   if (status === 'failed') return 'danger'
   if (status === 'running') return 'warning'
+  if (status === 'queued') return 'info'
   return 'info'
+}
+
+function statusLabel(status: string): string {
+  if (status === 'queued') return '排队中'
+  if (status === 'running') return '运行中'
+  if (status === 'completed') return '已完成'
+  if (status === 'failed') return '失败'
+  return status
 }
 
 async function removeRun(runId: string) {

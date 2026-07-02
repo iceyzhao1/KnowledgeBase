@@ -7,7 +7,9 @@ router = APIRouter()
 
 @router.post("/runs")
 def create_run(payload: CreateRunRequest, request: Request) -> dict:
-    return request.app.state.evaluation_service.create_run(payload)
+    run = request.app.state.evaluation_service.create_run(payload, execute_immediately=False)
+    request.app.state.evaluation_queue_service.enqueue(run["run_id"])
+    return run
 
 
 @router.get("/runs")

@@ -36,6 +36,7 @@ class EvalApiConfig:
     search_timeout: float = 30.0
     search_trust_env: bool = False
     local_mock_corpus_path: Path = Path("data/knowledge_base/IP/测试集.md")
+    runner_max_concurrent_runs: int = 2
 
 
 def _load_runtime_config() -> dict:
@@ -88,6 +89,7 @@ def load_config(db_path: str | Path | None = None) -> EvalApiConfig:
     api_config = runtime.get("api", {})
     subject_config = runtime.get("subject", {})
     judge_config = runtime.get("judge", {})
+    runner_config = runtime.get("runner", {})
     claude_config = judge_config.get("claude_cli", {})
     resolved = Path(db_path) if db_path is not None else Path(
         os.environ.get("TELECOM_EVAL_DB_PATH", str(api_config.get("db_path") or DEFAULT_DB_PATH))
@@ -114,6 +116,15 @@ def load_config(db_path: str | Path | None = None) -> EvalApiConfig:
                 "TELECOM_EVAL_LOCAL_MOCK_CORPUS",
                 str(subject_config.get("local_mock_corpus_path", "data/knowledge_base/IP/测试集.md")),
             )
+        ),
+        runner_max_concurrent_runs=max(
+            1,
+            int(
+                os.environ.get(
+                    "TELECOM_EVAL_MAX_CONCURRENT_RUNS",
+                    str(runner_config.get("max_concurrent_runs", 2)),
+                )
+            ),
         ),
     )
 

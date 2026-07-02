@@ -13,12 +13,21 @@
     <template v-if="report">
       <RunStatusPanel :run="report.run" class="mb" />
 
-      <el-card shadow="never" class="mb">
+      <el-alert
+        v-if="isPendingRun"
+        type="info"
+        show-icon
+        :closable="false"
+        class="mb"
+        :title="pendingTitle"
+      />
+
+      <el-card v-if="!isPendingRun" shadow="never" class="mb">
         <template #header><span>质量指标解读</span></template>
         <MetricSummaryGrid :summary="report.metric_summary" />
       </el-card>
 
-      <el-card shadow="never" class="mb">
+      <el-card v-if="!isPendingRun" shadow="never" class="mb">
         <template #header><span>技术指标明细</span></template>
         <MetricTable :rows="report.metrics" show-detail-action @detail="selectMetric" />
       </el-card>
@@ -64,12 +73,19 @@
         <el-empty v-if="!selectedMetricCases.length" description="该指标暂无样本级明细" :image-size="64" />
       </el-card>
 
-      <el-card shadow="never" class="mb">
-        <template #header><span>失败样本（{{ report.failures.length }}）</span></template>
+      <el-card v-if="!isPendingRun" shadow="never" class="mb">
+        <template #header><span>需关注样本（质量诊断 {{ report.failures.length }}）</span></template>
+        <el-alert
+          class="mb"
+          type="info"
+          show-icon
+          :closable="false"
+          title="这里不是系统运行失败，而是样本级质量诊断；用于提示哪些样本的检索、回答或评估材料需要重点检查。"
+        />
         <FailureCaseTable :failures="report.failures" :run-id="runId" />
       </el-card>
 
-      <el-card shadow="never" class="mb">
+      <el-card v-if="!isPendingRun" shadow="never" class="mb">
         <template #header><span>大模型判分用量</span></template>
         <JudgeUsagePanel :usage="report.judge_usage" />
       </el-card>
@@ -80,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Back } from '@element-plus/icons-vue'
 import { useEvaluationApi } from '@/api/evaluation'
 import type { MetricCaseRow, MetricRow, RunCaseRow, RunReportViewModel } from '@/types/evaluation'
@@ -104,6 +120,15 @@ const runCases = ref<RunCaseRow[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const selectedMetricId = ref<string | null>(null)
+const pollTimer = ref<number | null>(null)
+
+const runStatus = computed(() => String(report.value?.run?.status ?? ''))
+const isPendingRun = computed(() => runStatus.value === 'queued' || runStatus.value === 'running')
+const pendingTitle = computed(() =>
+  runStatus.value === 'queued'
+    ? '评估任务正在排队，后台 worker 会按并发配置自动执行。'
+    : '评估任务正在运行，页面会自动刷新结果。',
+)
 
 const selectedMetric = computed<MetricRow | null>(() =>
   report.value?.metrics.find((m) => m.metric_id === selectedMetricId.value) ?? null,
@@ -167,16 +192,31 @@ function statusType(status: string): 'success' | 'warning' | 'info' | 'danger' {
   return 'info'
 }
 
-onMounted(async () => {
+async function loadReport() {
   loading.value = true
   try {
     report.value = await api.getRunReport(props.runId)
-    runCases.value = await api.listRunCases(props.runId)
+    if (!isPendingRun.value) runCases.value = await api.listRunCases(props.runId)
+    if (!isPendingRun.value && pollTimer.value !== null) {
+      window.clearInterval(pollTimer.value)
+      pollTimer.value = null
+    }
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     loading.value = false
   }
+}
+
+onMounted(async () => {
+  await loadReport()
+  if (isPendingRun.value) {
+    pollTimer.value = window.setInterval(loadReport, 3000)
+  }
+})
+
+onUnmounted(() => {
+  if (pollTimer.value !== null) window.clearInterval(pollTimer.value)
 })
 </script>
 

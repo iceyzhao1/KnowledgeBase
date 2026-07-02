@@ -18,6 +18,7 @@ class ReportViewService:
         all_metrics = self.store.list_run_metrics(run_id)
         aggregate_metrics = [m for m in all_metrics if m.case_id is None]
         case_ids = {m.case_id for m in all_metrics if m.case_id is not None}
+        case_count = int(run.get("case_count") or len(case_ids))
 
         metric_summary: dict[str, dict] = {}
         metrics_out: list[dict] = []
@@ -75,7 +76,7 @@ class ReportViewService:
             metric_summary=metric_summary,
             failures=failures,
             judge_usage=judge_usage,
-            case_count=len(case_ids),
+            case_count=case_count,
             markdown=markdown,
         )
 

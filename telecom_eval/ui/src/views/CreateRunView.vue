@@ -111,11 +111,12 @@
           class="mb"
         />
         <template v-if="form.allow_llm_judge">
-          <el-form-item label="最大大模型调用次数">
-            <el-input-number v-model="form.judge_budget.max_llm_calls" :min="0" />
+          <el-form-item label="失败重试次数">
+            <el-input-number v-model="form.judge_budget.max_llm_retries" :min="0" :max="5" />
           </el-form-item>
           <div class="field-hint budget-hint">
-            总令牌数不设上限；最多参与大模型判分样本数会按当前测试集样本数自动设置。
+            这里只控制大模型调用失败后的重试次数。0 表示不重试，1 表示失败后再试一次。
+            总调用次数和总令牌数默认不设上限；缓存命中不会重复调用。
           </div>
         </template>
 
@@ -196,12 +197,13 @@ async function submit() {
     return
   }
   form.judge_budget.allow_llm_judge = form.allow_llm_judge
+  form.judge_budget.max_llm_calls = 0
   form.judge_budget.max_total_tokens = 0
   form.judge_budget.max_cases_with_llm = selectedDatasetCaseCount.value
   submitting.value = true
   try {
     const run = await api.createRun(form)
-    ElMessage.success('评估已完成')
+    ElMessage.success('评估任务已创建，正在排队运行')
     router.push(`/runs/${run.run_id}`)
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : '创建失败')

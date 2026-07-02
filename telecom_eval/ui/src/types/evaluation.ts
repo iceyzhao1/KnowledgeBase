@@ -10,6 +10,7 @@ export type MetricStatus =
 export interface JudgeBudget {
   allow_llm_judge: boolean
   max_llm_calls: number
+  max_llm_retries: number
   max_prompt_tokens: number
   max_completion_tokens: number
   max_total_tokens: number
@@ -270,6 +271,7 @@ export function defaultJudgeBudget(): JudgeBudget {
   return {
     allow_llm_judge: false,
     max_llm_calls: 0,
+    max_llm_retries: 0,
     max_prompt_tokens: 0,
     max_completion_tokens: 0,
     max_total_tokens: 0,

@@ -21,6 +21,7 @@ from telecom_eval.diagnosis.engine import diagnose_case
 from telecom_eval.judges.budget import JudgeBudgetUsage
 from telecom_eval.judges.tasks import JudgeTask
 from telecom_eval.metrics.e2e import (
+    answer_correctness_score,
     citation_accuracy,
     faithfulness,
     key_point_coverage,
@@ -103,7 +104,7 @@ class EvaluationService:
         self._segment_resolver = segment_resolver
 
     # ------------------------------------------------------------------
-    def create_run(self, request: CreateRunRequest) -> dict:
+    def create_run(self, request: CreateRunRequest, *, execute_immediately: bool = True) -> dict:
         run_id = "run_" + uuid.uuid4().hex[:12]
         created_at = _now()
 
@@ -131,8 +132,9 @@ class EvaluationService:
             "dataset_snapshot_id": snapshot.dataset_snapshot_id,
             "dataset_version": snapshot.dataset_version,
             "eval_type": request.eval_type,
-            "status": "running",
+            "status": "queued",
             "allow_llm_judge": request.allow_llm_judge,
+            "request": request.model_dump(),
             "metric_suite_ids": request.metric_suite_ids,
             "scenario_id": cases[0].scenario_id if cases else None,
             "top_k": request.top_k,
@@ -140,9 +142,28 @@ class EvaluationService:
             "case_count": len(cases),
             "case_ids": [c.case_id for c in cases],
             "created_at": created_at,
-            "started_at": created_at,
         }
         self.store.save_run(run_payload)
+        if not execute_immediately:
+            return self.get_run_summary(run_id)
+        return self.execute_queued_run(run_id)
+
+    def execute_queued_run(self, run_id: str) -> dict:
+        payload = self.store.load_run_payload(run_id)
+        request = CreateRunRequest.model_validate(payload.get("request") or payload)
+        snapshot_id = payload.get("dataset_snapshot_id")
+        if not snapshot_id:
+            raise KeyError(f"run has no dataset snapshot: {run_id}")
+        snapshot = self.store.load_dataset_snapshot(snapshot_id)
+        if snapshot is None:
+            raise KeyError(f"dataset_snapshot not found: {snapshot_id}")
+        snapshot_case_ids = set(snapshot.case_ids)
+        cases = [
+            c
+            for c in self.store.list_cases(dataset_id=request.dataset_id)
+            if c.case_id in snapshot_case_ids
+        ]
+        self.store.update_run_status(run_id, "running", started_at=_now())
         try:
             self._execute(run_id, request, cases)
         except Exception:
@@ -283,6 +304,27 @@ class EvaluationService:
                 gold_align = build_gold_alignment(
                     case.case_id, run_id, subject_id, atrace.trace_id, claims, case
                 )
+                ev_align = self._enhance_evidence_alignment(
+                    run_id=run_id,
+                    case=case,
+                    subject_id=subject_id,
+                    trace_id=atrace.trace_id,
+                    claims=claims,
+                    evidence_package=atrace.output.evidence_package,
+                    alignment=ev_align,
+                    budget=budget,
+                    usage=usage,
+                )
+                gold_align = self._enhance_gold_alignment(
+                    run_id=run_id,
+                    case=case,
+                    subject_id=subject_id,
+                    trace_id=atrace.trace_id,
+                    claims=claims,
+                    alignment=gold_align,
+                    budget=budget,
+                    usage=usage,
+                )
                 self.store.save_artifact(
                     claims, artifact_type="atomic_claims", run_id=run_id, case_id=case.case_id, cache_key=claims.inputs_hash
                 )
@@ -303,33 +345,37 @@ class EvaluationService:
                     metric_values[metric_id] = value
                     per_metric_values.setdefault(metric_id, []).append(value)
 
+                correctness = self._judge_answer_correctness(
+                    run_id=run_id,
+                    case=case,
+                    subject_id=subject_id,
+                    answer=atrace.output.final_answer,
+                    evidence=[e.content for e in atrace.output.evidence_package],
+                    evidence_alignment=ev_align.payload.get("alignments", []),
+                    gold_alignment=gold_align.payload.get("alignments", []),
+                    budget=budget,
+                    usage=usage,
+                )
+                if correctness is not None:
+                    value, details, status = correctness
+                    self._save_metric(
+                        run_id,
+                        case.case_id,
+                        subject_id,
+                        "e2e.answer_correctness",
+                        value,
+                        status=status,
+                        details=details,
+                    )
+                    if status == "ok":
+                        metric_values["e2e.answer_correctness"] = float(value)
+                        per_metric_values.setdefault("e2e.answer_correctness", []).append(float(value))
+
                 artifact_values["unsupported_claims"] = [
                     a["claim_id"]
                     for a in ev_align.payload["alignments"]
                     if a["support_label"] != "supported"
                 ]
-
-                # LLM 判分（受控）：仅在允许时经 JudgeService，唯一入口。
-                if budget.allow_llm_judge and self.judge_service is not None:
-                    task = JudgeTask(
-                        task_id=f"jt_{run_id}_{case.case_id}_answer_correctness",
-                        task_type="answer_correctness",
-                        case_id=case.case_id,
-                        run_id=run_id,
-                        subject_id=subject_id,
-                        normalized_input={
-                            "answer": atrace.output.final_answer,
-                            "evidence": [e.content for e in atrace.output.evidence_package],
-                            "expected_key_points": case.expected_key_points,
-                        },
-                        input_hash="",
-                        rubric_version="rubric_v1",
-                        prompt_version="prompt_v1",
-                        judge_type="llm",
-                        judge_model_version="unbound",
-                        output_schema="v1",
-                    )
-                    self.judge_service.run(task, budget=budget, usage=usage)
 
             diagnosis = diagnose_case(
                 case_id=case.case_id,
@@ -429,6 +475,189 @@ class EvaluationService:
             }
 
         return judge
+
+    def _enhance_evidence_alignment(
+        self,
+        *,
+        run_id: str,
+        case: EvaluationCase,
+        subject_id: str,
+        trace_id: str,
+        claims: EvaluationArtifact,
+        evidence_package,
+        alignment: EvaluationArtifact,
+        budget,
+        usage: JudgeBudgetUsage,
+    ) -> EvaluationArtifact:
+        if not budget.allow_llm_judge or self.judge_service is None:
+            return alignment
+        claim_by_id = {claim["claim_id"]: claim for claim in claims.payload.get("claims", [])}
+        evidence_brief = [
+            {"evidence_id": item.evidence_id, "content": item.content[:600], "rank": item.rank}
+            for item in evidence_package
+        ]
+        updated = []
+        for item in alignment.payload.get("alignments", []):
+            current = dict(item)
+            if current.get("support_label") == "supported":
+                updated.append(current)
+                continue
+            claim = claim_by_id.get(str(current.get("claim_id")), {})
+            task = JudgeTask(
+                task_id=f"jt_{run_id}_{case.case_id}_{current.get('claim_id')}_evidence_alignment",
+                task_type="evidence_alignment",
+                case_id=case.case_id,
+                run_id=run_id,
+                subject_id=subject_id,
+                normalized_input={
+                    "question": case.question,
+                    "claim": claim,
+                    "retrieved_evidence": evidence_brief,
+                    "rule_alignment": current,
+                },
+                input_hash="",
+                rubric_version="evidence_alignment_v1",
+                prompt_version="evidence_alignment_prompt_v1",
+                judge_type="llm",
+                judge_model_version="unbound",
+                output_schema="evidence_alignment_v1",
+            )
+            artifact = self.judge_service.run(task, budget=budget, usage=usage)
+            self.store.save_artifact(
+                artifact,
+                artifact_type="evidence_alignment_judgment",
+                run_id=run_id,
+                case_id=case.case_id,
+                cache_key=artifact.judge_cache_key,
+            )
+            current["llm_status"] = artifact.status
+            if artifact.status == "ok":
+                result = artifact.result or {}
+                current["method"] = "llm"
+                current["support_label"] = str(result.get("support_label") or current.get("support_label"))
+                current["evidence_id"] = result.get("best_evidence_id") or current.get("evidence_id")
+                current["score"] = result.get("score")
+                current["rationale"] = str(result.get("reason") or current.get("rationale") or "")
+            updated.append(current)
+        alignment.payload["alignments"] = updated
+        alignment.payload["llm_enhanced"] = True
+        return alignment
+
+    def _enhance_gold_alignment(
+        self,
+        *,
+        run_id: str,
+        case: EvaluationCase,
+        subject_id: str,
+        trace_id: str,
+        claims: EvaluationArtifact,
+        alignment: EvaluationArtifact,
+        budget,
+        usage: JudgeBudgetUsage,
+    ) -> EvaluationArtifact:
+        if not budget.allow_llm_judge or self.judge_service is None:
+            return alignment
+        updated = []
+        for item in alignment.payload.get("alignments", []):
+            current = dict(item)
+            if current.get("coverage_label") == "covered":
+                updated.append(current)
+                continue
+            task = JudgeTask(
+                task_id=f"jt_{run_id}_{case.case_id}_{current.get('gold_id')}_gold_alignment",
+                task_type="gold_alignment",
+                case_id=case.case_id,
+                run_id=run_id,
+                subject_id=subject_id,
+                normalized_input={
+                    "question": case.question,
+                    "expected_answer": case.expected_answer,
+                    "expected_key_points": case.expected_key_points,
+                    "claims": claims.payload.get("claims", []),
+                    "rule_alignment": current,
+                },
+                input_hash="",
+                rubric_version="gold_alignment_v1",
+                prompt_version="gold_alignment_prompt_v1",
+                judge_type="llm",
+                judge_model_version="unbound",
+                output_schema="gold_alignment_v1",
+            )
+            artifact = self.judge_service.run(task, budget=budget, usage=usage)
+            self.store.save_artifact(
+                artifact,
+                artifact_type="gold_alignment_judgment",
+                run_id=run_id,
+                case_id=case.case_id,
+                cache_key=artifact.judge_cache_key,
+            )
+            current["llm_status"] = artifact.status
+            if artifact.status == "ok":
+                result = artifact.result or {}
+                current["method"] = "llm"
+                current["coverage_label"] = str(result.get("coverage_label") or current.get("coverage_label"))
+                current["claim_ids"] = result.get("matched_claim_ids") or current.get("claim_ids", [])
+                current["score"] = result.get("score")
+                current["rationale"] = str(result.get("reason") or current.get("rationale") or "")
+            updated.append(current)
+        alignment.payload["alignments"] = updated
+        alignment.payload["llm_enhanced"] = True
+        return alignment
+
+    def _judge_answer_correctness(
+        self,
+        *,
+        run_id: str,
+        case: EvaluationCase,
+        subject_id: str,
+        answer: str,
+        evidence: list[str],
+        evidence_alignment: list[dict[str, Any]],
+        gold_alignment: list[dict[str, Any]],
+        budget,
+        usage: JudgeBudgetUsage,
+    ) -> tuple[float | None, dict[str, Any], str] | None:
+        if not budget.allow_llm_judge or self.judge_service is None:
+            return None
+        task = JudgeTask(
+            task_id=f"jt_{run_id}_{case.case_id}_answer_correctness",
+            task_type="answer_correctness",
+            case_id=case.case_id,
+            run_id=run_id,
+            subject_id=subject_id,
+            normalized_input={
+                "question": case.question,
+                "answer": answer,
+                "expected_answer": case.expected_answer,
+                "expected_key_points": case.expected_key_points,
+                "expected_evidence": case.expected_evidence,
+                "evidence": evidence,
+                "evidence_alignment": evidence_alignment,
+                "gold_alignment": gold_alignment,
+            },
+            input_hash="",
+            rubric_version="answer_correctness_v1",
+            prompt_version="answer_correctness_prompt_v1",
+            judge_type="llm",
+            judge_model_version="unbound",
+            output_schema="answer_correctness_v1",
+        )
+        artifact = self.judge_service.run(task, budget=budget, usage=usage)
+        self.store.save_artifact(
+            artifact,
+            artifact_type="answer_correctness_judgment",
+            run_id=run_id,
+            case_id=case.case_id,
+            cache_key=artifact.judge_cache_key,
+        )
+        details = {
+            "judge_status": artifact.status,
+            "reason": artifact.reason,
+            "result": artifact.result,
+        }
+        if artifact.status != "ok":
+            return None, details, "inconclusive"
+        return answer_correctness_score(artifact.result or {}), details, "ok"
 
     def _finalize(
         self,

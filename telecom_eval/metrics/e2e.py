@@ -45,3 +45,15 @@ def citation_accuracy(output: AnswerOutput, evidence_alignment: EvaluationArtifa
 def refusal_accuracy(case: EvaluationCase, refusal: Refusal) -> float:
     should_refuse = case.answerability in _EXPECT_REFUSAL
     return 1.0 if should_refuse == refusal.refused else 0.0
+
+
+def answer_correctness_score(result: dict) -> float:
+    try:
+        score = float(result.get("score"))
+    except (TypeError, ValueError):
+        return 0.0
+    if score >= 0.75:
+        return 1.0
+    if score >= 0.25:
+        return 0.5
+    return 0.0

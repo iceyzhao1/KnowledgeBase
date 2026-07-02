@@ -37,6 +37,13 @@ def _parse_text(text: str) -> dict:
         return {"raw_text": text}
 
 
+def _parse_provider_text(text: str) -> dict:
+    parsed = _parse_text(text)
+    if "raw_text" in parsed:
+        raise ValueError("judge provider returned non-JSON text")
+    return parsed
+
+
 class JudgeService:
     def __init__(self, *, store, provider: JudgeProvider, model: str | None = None):
         self.store = store
@@ -66,41 +73,79 @@ class JudgeService:
             return artifact
 
         system, user = build_judge_prompt(task)
-        try:
-            provider_result = self.provider.invoke(system=system, user=user)
-        except Exception as exc:  # provider 失败：记审计、返回 error 工件，但不污染缓存
+        max_attempts = max(1, int(getattr(budget, "max_llm_retries", 0) or 0) + 1)
+        last_error = ""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                provider_result = self.provider.invoke(system=system, user=user)
+                parsed = _parse_provider_text(provider_result.text)
+            except Exception as exc:  # provider/parse 失败：逐次审计，成功前不污染缓存
+                last_error = str(exc)
+                log = logger.exception if attempt == max_attempts else logger.warning
+                log(
+                    "judge provider failed provider=%s model=%s run_id=%s case_id=%s task_id=%s attempt=%s/%s error=%s",
+                    self.provider.name,
+                    self.model,
+                    task.run_id,
+                    task.case_id,
+                    task.task_id,
+                    attempt,
+                    max_attempts,
+                    last_error,
+                )
+                self._audit(
+                    task,
+                    cache_key,
+                    status="error",
+                    usage=ProviderUsage(),
+                    error=last_error,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                )
+                if attempt == max_attempts:
+                    return self._build_artifact(
+                        task,
+                        cache_key,
+                        status="error",
+                        result={"error": last_error, "attempts": attempt},
+                        usage=ProviderUsage(),
+                    )
+                continue
+
             artifact = self._build_artifact(
-                task, cache_key, status="error", result={"error": str(exc)}, usage=ProviderUsage()
+                task,
+                cache_key,
+                status="ok",
+                result=parsed,
+                usage=provider_result.usage,
             )
-            logger.exception(
-                "judge provider failed provider=%s model=%s run_id=%s case_id=%s task_id=%s",
-                self.provider.name,
-                self.model,
-                task.run_id,
-                task.case_id,
-                task.task_id,
+            self.store.put_judge_cache(cache_key, artifact)
+
+            usage.llm_calls += 1
+            usage.prompt_tokens += provider_result.usage.prompt_tokens
+            usage.completion_tokens += provider_result.usage.completion_tokens
+            usage.total_tokens += provider_result.usage.total_tokens
+            if task.case_id:
+                usage.cases_with_llm.add(task.case_id)
+
+            self._audit(
+                task,
+                cache_key,
+                status="ok",
+                usage=provider_result.usage,
+                latency_ms=provider_result.latency_ms,
+                attempt=attempt,
+                max_attempts=max_attempts,
             )
-            self._audit(task, cache_key, status="error", usage=ProviderUsage(), error=str(exc))
             return artifact
 
-        artifact = self._build_artifact(
+        return self._build_artifact(
             task,
             cache_key,
-            status="ok",
-            result=_parse_text(provider_result.text),
-            usage=provider_result.usage,
+            status="error",
+            result={"error": last_error or "judge provider failed"},
+            usage=ProviderUsage(),
         )
-        self.store.put_judge_cache(cache_key, artifact)
-
-        usage.llm_calls += 1
-        usage.prompt_tokens += provider_result.usage.prompt_tokens
-        usage.completion_tokens += provider_result.usage.completion_tokens
-        usage.total_tokens += provider_result.usage.total_tokens
-        if task.case_id:
-            usage.cases_with_llm.add(task.case_id)
-
-        self._audit(task, cache_key, status="ok", usage=provider_result.usage, latency_ms=provider_result.latency_ms)
-        return artifact
 
     # ------------------------------------------------------------------
     def _build_artifact(
@@ -145,6 +190,8 @@ class JudgeService:
         usage: ProviderUsage,
         error: str | None = None,
         latency_ms: int = 0,
+        attempt: int = 1,
+        max_attempts: int = 1,
     ) -> None:
         system, user = build_judge_prompt(task)
         self.store.save_judge_invocation(
@@ -163,6 +210,8 @@ class JudgeService:
                 "latency_ms": latency_ms,
                 "status": status,
                 "error": error,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
                 "created_at": _now(),
             }
         )

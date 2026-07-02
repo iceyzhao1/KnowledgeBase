@@ -44,6 +44,8 @@ class SQLiteEvaluationStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         apply_migrations(self._conn)
 
     def close(self) -> None:
@@ -766,8 +768,8 @@ class SQLiteEvaluationStore:
             INSERT INTO judge_invocations
               (invocation_id, task_id, run_id, case_id, cache_key, judge_provider,
                judge_model, prompt_hash, prompt_tokens, completion_tokens, total_tokens,
-               latency_ms, status, error, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               latency_ms, status, error, attempt, max_attempts, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 invocation["invocation_id"],
@@ -784,6 +786,8 @@ class SQLiteEvaluationStore:
                 invocation.get("latency_ms", 0),
                 invocation["status"],
                 invocation.get("error"),
+                invocation.get("attempt", 1),
+                invocation.get("max_attempts", 1),
                 invocation.get("created_at") or _now(),
             ),
         )

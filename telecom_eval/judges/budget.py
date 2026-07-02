@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 class JudgeBudget(BaseModel):
     allow_llm_judge: bool = False
     max_llm_calls: int = 0
+    max_llm_retries: int = 0
     max_prompt_tokens: int = 0
     max_completion_tokens: int = 0
     max_total_tokens: int = 0

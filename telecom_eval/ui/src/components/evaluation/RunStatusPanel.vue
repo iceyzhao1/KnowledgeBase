@@ -5,7 +5,7 @@
     <el-descriptions-item label="数据集">{{ run.dataset_id }}</el-descriptions-item>
     <el-descriptions-item label="评估类型">{{ run.eval_type }}</el-descriptions-item>
     <el-descriptions-item label="状态">
-      <el-tag :type="statusType(String(run.status))" size="small">{{ run.status }}</el-tag>
+      <el-tag :type="statusType(String(run.status))" size="small">{{ statusLabel(String(run.status)) }}</el-tag>
     </el-descriptions-item>
     <el-descriptions-item label="大模型判分">
       <el-tag :type="run.allow_llm_judge ? 'warning' : 'info'" size="small">
@@ -28,5 +28,13 @@ function statusType(status: string): 'success' | 'warning' | 'info' | 'danger' {
   if (status === 'failed') return 'danger'
   if (status === 'running') return 'warning'
   return 'info'
+}
+
+function statusLabel(status: string): string {
+  if (status === 'queued') return '排队中'
+  if (status === 'running') return '运行中'
+  if (status === 'completed') return '已完成'
+  if (status === 'failed') return '失败'
+  return status
 }
 </script>

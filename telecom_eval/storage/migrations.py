@@ -188,6 +188,8 @@ SCHEMA_STATEMENTS: list[str] = [
       latency_ms INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL,
       error TEXT,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      max_attempts INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     )
     """,
@@ -202,6 +204,14 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
     # 兼容旧库：补 eval_runs.dataset_snapshot_id 列（已存在则忽略）。
     try:
         cursor.execute("ALTER TABLE eval_runs ADD COLUMN dataset_snapshot_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE judge_invocations ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE judge_invocations ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1")
     except sqlite3.OperationalError:
         pass
     conn.commit()

@@ -116,12 +116,17 @@ const metricRows = computed<MetricRow[]>(() =>
 
 const judgeUsage = computed(() => {
   const inv = view.value?.judge_invocations ?? []
+  const okCaseIds = new Set(
+    inv
+      .filter((i: Record<string, any>) => i.status === 'ok' && i.case_id)
+      .map((i: Record<string, any>) => String(i.case_id)),
+  )
   return {
     total_invocations: inv.length,
     ok_calls: inv.filter((i: Record<string, any>) => i.status === 'ok').length,
     skipped_calls: inv.filter((i: Record<string, any>) => i.status === 'skipped').length,
     total_tokens: inv.reduce((s: number, i: Record<string, any>) => s + (Number(i.total_tokens) || 0), 0),
-    cases_with_llm: 0,
+    cases_with_llm: okCaseIds.size,
   }
 })
 

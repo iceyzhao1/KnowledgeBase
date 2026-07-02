@@ -53,6 +53,7 @@ telecom_eval/config/runtime.json
 | --- | --- |
 | `api.port` | 评估后端端口，当前默认是 `8811` |
 | `api.db_path` | SQLite 评估库路径 |
+| `runner.max_concurrent_runs` | 同一后端进程最多同时运行的评估任务数，默认 `2` |
 | `ui.dev_port` | 前端开发端口，当前默认是 `5174` |
 | `ui.eval_api_base_url` | 前端代理到评估后端的地址 |
 | `subject.provider` | 被测系统来源：`local_mock`、`http` 或 `fake` |
@@ -71,6 +72,7 @@ telecom_eval/config/runtime.json
 $env:TELECOM_EVAL_DB_PATH="data/evaluation/telecom_eval_demo.db"
 $env:TELECOM_EVAL_API="http://127.0.0.1:8811"
 $env:TELECOM_EVAL_SUBJECT_PROVIDER="local_mock"
+$env:TELECOM_EVAL_MAX_CONCURRENT_RUNS="2"
 ```
 
 ### 3. 启动后端
@@ -174,7 +176,7 @@ python -m telecom_eval.demo --db-path data/evaluation/my_eval.db
 5. 按需开启“大模型判分”；
 6. 点击“创建并运行”。
 
-运行完成后会跳转到报告页。
+任务创建后会立即跳转到报告页。评估任务会先进入 `queued`，后台 worker 按 `runner.max_concurrent_runs` 并发执行；运行中页面会自动刷新，完成后展示完整指标。
 
 ### 3. 查看报告
 
@@ -250,6 +252,7 @@ python -m telecom_eval.demo --db-path data/evaluation/my_eval.db
 | `e2e.faithfulness` | 回答陈述是否有检索证据支撑 |
 | `e2e.citation_accuracy` | 引用是否准确指向支持证据 |
 | `e2e.refusal_accuracy` | 对不可答或应拒答问题的处理是否正确 |
+| `e2e.answer_correctness` | 大模型裁判综合标准答案、关键要点和证据后，对最终回答正确性的判断 |
 
 ## 大模型判分
 
@@ -286,7 +289,8 @@ $env:TELECOM_EVAL_CLAUDE_BIN="claude"
 注意：
 
 - 前端创建评估时也要打开“允许大模型判分”；
-- 大模型调用会受最大调用次数限制；
+- 前端只需要设置“大模型失败重试次数”，0 表示失败后不重试，1 表示失败后再试一次；
+- 总调用次数和总 token 默认不设上限；
 - 判分调用会记录在 SQLite 中，可在样本详情页查看。
 
 ## 被测检索系统接入
@@ -353,7 +357,7 @@ $env:TELECOM_EVAL_CLAUDE_BIN="claude"
 | `GET` | `/datasets/{dataset_id}` | 测试集详情 |
 | `POST` | `/datasets/{dataset_id}/imports:preview` | 导入预览 |
 | `POST` | `/datasets/{dataset_id}/imports` | 提交导入 |
-| `POST` | `/runs` | 创建并运行评估 |
+| `POST` | `/runs` | 创建评估任务并入队运行 |
 | `GET` | `/runs` | 运行列表 |
 | `GET` | `/runs/{run_id}/report` | 运行报告 |
 | `GET` | `/runs/{run_id}/cases` | 运行样本分数明细 |
@@ -424,4 +428,3 @@ python -m telecom_eval.demo
 6. 在报告页查看指标；
 7. 点“查看详情”定位低分样本；
 8. 进入样本详情页查看证据包和判分过程。
-

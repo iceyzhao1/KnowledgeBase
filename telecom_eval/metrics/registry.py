@@ -127,5 +127,14 @@ def default_registry() -> MetricRegistry:
             required_inputs=("AnswerTrace",),
         )
     )
+    registry.register(
+        MetricSpec(
+            metric_id="e2e.answer_correctness",
+            level="e2e",
+            required_inputs=("AnswerTrace",),
+            required_artifacts=("AtomicClaimsArtifact", "EvidenceAlignmentArtifact", "GoldAlignmentArtifact"),
+            judge_requirements=("answer_correctness",),
+        )
+    )
 
     return registry

@@ -9,8 +9,11 @@
     "port": 8811,
     "db_path": "data/evaluation/telecom_eval_demo.db"
   },
+  "runner": {
+    "max_concurrent_runs": 2
+  },
   "subject": {
-    "provider": "local_mock",
+    "provider": "http",
     "search_base_url": "http://10.205.71.26:8081",
     "search_domain": "cloud_core_network",
     "search_timeout": 30,
