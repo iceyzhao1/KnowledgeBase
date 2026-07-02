@@ -1,0 +1,30 @@
+{
+  "ui": {
+    "dev_port": 5174,
+    "eval_api_base_url": "http://127.0.0.1:8810",
+    "paradigm_api_base_url": "http://10.205.71.26:8081"
+  },
+  "api": {
+    "host": "127.0.0.1",
+    "port": 8811,
+    "db_path": "data/evaluation/telecom_eval_demo.db"
+  },
+  "subject": {
+    "provider": "local_mock",
+    "search_base_url": "http://10.205.71.26:8081",
+    "search_domain": "cloud_core_network",
+    "search_timeout": 30,
+    "trust_env": false,
+    "local_mock_corpus_path": "data/knowledge_base/IP/telecom_eval_mock_segments.md"
+  },
+  "judge": {
+    "provider": "mock",
+    "claude_cli": {
+      "bin": "claude",
+      "model": "",
+      "timeout": 600,
+      "extra_args": "",
+      "proxy": ""
+    }
+  }
+}
