@@ -32,6 +32,10 @@
 !kb-ui/**
 !docker/
 !docker/**
+!config_library/
+!config_library/**
+!tests/
+!tests/**
 
 # === Allowlisted root files ===
 !.env.example

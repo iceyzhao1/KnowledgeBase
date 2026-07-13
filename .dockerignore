@@ -21,3 +21,4 @@ scripts/
 data/
 .claude/
 tests/
+config_library/
