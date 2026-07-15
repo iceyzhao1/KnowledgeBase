@@ -58,18 +58,15 @@ const router = createRouter({
         },
         {
           path: 'entities',
-          name: 'entities',
-          component: () => import('@/views/knowledge/EntityGraphView.vue'),
+          redirect: '/',
         },
         {
           path: 'ontology',
-          name: 'ontology',
-          component: () => import('@/views/knowledge/OntologyView.vue'),
+          redirect: '/',
         },
         {
           path: 'ontology/graph',
-          name: 'ontology-graph',
-          component: () => import('@/views/knowledge/OntologyGraphView.vue'),
+          redirect: '/',
         },
         {
           // 本体确认评审：挖掘流程的临时子页面（仿实体确认的 mentions/review）。
