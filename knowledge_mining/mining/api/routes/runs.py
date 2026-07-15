@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from knowledge_mining.mining.api.domain_scope import require_domain
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,8 @@ _run_lock = threading.Lock()
 
 class CreateRunRequest(BaseModel):
     input_path: str
-    domain: str | None = None
-    domain_pack: str | None = None  # deprecated, use domain
+    domain: str
+    domain_pack: str | None = None
     max_workers: int | None = None
     phase1_only: bool = False
     publish_on_partial_failure: bool = False
@@ -42,6 +43,21 @@ class CancelRunResponse(BaseModel):
     message: str
 
 
+async def _require_run_domain(pool, run_id: str, domain: str) -> dict:
+    """Return the run only when it belongs to the requested domain."""
+    requested = require_domain(domain)
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, domain, status FROM mining_runs "
+            "WHERE id = %s AND domain = %s",
+            [run_id, requested],
+        )
+        row = await cur.fetchone()
+    if row is None:
+        raise HTTPException(404, f"Run {run_id} not found")
+    return dict(row)
+
+
 # ── Routes ──
 
 @router.post("", response_model=RunResponse, status_code=202)
@@ -50,10 +66,9 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
     pool = request.app.state.pg_pool
     db_config: MiningDbConfig = request.app.state.db_config
 
-    # Resolve domain: explicit domain > domain_pack > config default > cloud_core_network
     from knowledge_mining.mining.infra.mining_config import MiningConfig
     cfg = MiningConfig()
-    resolved_domain = body.domain or body.domain_pack or cfg.domain or "cloud_core_network"
+    resolved_domain = require_domain(body.domain)
 
     llm_base_url = body.llm_base_url or cfg.llm_service_url
 
@@ -90,7 +105,8 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT id, status, started_at FROM mining_runs "
-                "ORDER BY started_at DESC LIMIT 1"
+                "WHERE domain = %s ORDER BY started_at DESC LIMIT 1",
+                [resolved_domain],
             )
             row = await cur.fetchone()
             if row:
@@ -106,23 +122,20 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
 @router.get("")
 async def list_runs(
     request: Request,
+    domain: str = Query(..., min_length=1),
     status: str | None = None,
-    domain: str | None = None,
     limit: int = Query(20, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict:
-    """List mining runs with optional status/domain filter."""
+    """List mining runs in one domain."""
     pool = request.app.state.pg_pool
 
     async with pool.connection() as conn:
-        conds: list[str] = []
-        params: list[str] = []
+        conds: list[str] = ["domain = %s"]
+        params: list[str] = [require_domain(domain)]
         if status:
             conds.append("status = %s")
             params.append(status)
-        if domain:
-            conds.append("domain = %s")
-            params.append(domain)
         where = f"WHERE {' AND '.join(conds)}" if conds else ""
 
         count_cur = await conn.execute(
@@ -149,9 +162,10 @@ async def list_runs(
 
 
 @router.get("/{run_id}")
-async def get_run(run_id: str, request: Request) -> dict:
+async def get_run(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get run details."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         cur = await conn.execute(
@@ -168,9 +182,10 @@ async def get_run(run_id: str, request: Request) -> dict:
 
 
 @router.get("/{run_id}/stages")
-async def get_run_stages(run_id: str, request: Request) -> dict:
+async def get_run_stages(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get stage timeline for a run."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         cur = await conn.execute(
@@ -189,6 +204,7 @@ async def get_run_stages(run_id: str, request: Request) -> dict:
 async def get_run_documents(
     run_id: str,
     request: Request,
+    domain: str = Query(..., min_length=1),
     status: str | None = None,
     action: str | None = None,
     has_error: bool | None = None,
@@ -197,6 +213,7 @@ async def get_run_documents(
 ) -> dict:
     """Get document processing results for a run with pagination and filtering."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         # Build WHERE conditions
@@ -286,9 +303,10 @@ async def get_run_documents(
 
 
 @router.get("/{run_id}/progress")
-async def get_run_progress(run_id: str, request: Request) -> dict:
+async def get_run_progress(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get run progress — aggregated from mining_run_documents + mining_run_stage_events."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         # Verify run exists
@@ -387,9 +405,13 @@ async def get_run_progress(run_id: str, request: Request) -> dict:
 
 
 @router.get("/{run_id}/documents/{doc_id}")
-async def get_run_document(run_id: str, doc_id: str, request: Request) -> dict:
+async def get_run_document(
+    run_id: str, doc_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
+) -> dict:
     """Get single document detail within a run."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         cur = await conn.execute(
@@ -413,9 +435,13 @@ async def get_run_document(run_id: str, doc_id: str, request: Request) -> dict:
 
 
 @router.get("/{run_id}/documents/{doc_id}/stages")
-async def get_run_document_stages(run_id: str, doc_id: str, request: Request) -> dict:
+async def get_run_document_stages(
+    run_id: str, doc_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
+) -> dict:
     """Get stage timeline for a single document within a run."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         # Verify doc belongs to run
@@ -440,9 +466,13 @@ async def get_run_document_stages(run_id: str, doc_id: str, request: Request) ->
 
 
 @router.get("/{run_id}/documents/{doc_id}/artifacts")
-async def get_run_document_artifacts(run_id: str, doc_id: str, request: Request) -> dict:
+async def get_run_document_artifacts(
+    run_id: str, doc_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
+) -> dict:
     """Get artifact counts for a single document (via document_snapshot_id)."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         # Get document_snapshot_id
@@ -494,11 +524,13 @@ async def get_run_document_artifacts(run_id: str, doc_id: str, request: Request)
 @router.get("/{run_id}/documents/{doc_id}/segments")
 async def get_run_document_segments(
     run_id: str, doc_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict:
     """Get segments for a single document in run context."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         doc_cur = await conn.execute(
@@ -540,12 +572,14 @@ async def get_run_document_segments(
 @router.get("/{run_id}/documents/{doc_id}/units")
 async def get_run_document_units(
     run_id: str, doc_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
     unit_type: str | None = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict:
     """Get retrieval units for a single document in run context."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         doc_cur = await conn.execute(
@@ -590,11 +624,13 @@ async def get_run_document_units(
 @router.get("/{run_id}/documents/{doc_id}/relations")
 async def get_run_document_relations(
     run_id: str, doc_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> dict:
     """Get segment relations for a single document in run context."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         doc_cur = await conn.execute(
@@ -639,9 +675,10 @@ async def get_run_document_relations(
 
 
 @router.get("/{run_id}/artifacts")
-async def get_run_artifacts(run_id: str, request: Request) -> dict:
+async def get_run_artifacts(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get run-level artifact aggregation."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         # Verify run exists
@@ -694,9 +731,10 @@ async def get_run_artifacts(run_id: str, request: Request) -> dict:
 
 
 @router.post("/{run_id}/cancel", response_model=CancelRunResponse)
-async def cancel_run(run_id: str, request: Request) -> dict:
+async def cancel_run(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Cancel a running run (best-effort)."""
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         cur = await conn.execute(
@@ -721,22 +759,18 @@ class PublishRunRequest(BaseModel):
 
 
 @router.post("/{run_id}/publish")
-async def publish_run(run_id: str, request: Request, body: PublishRunRequest | None = None) -> dict:
+async def publish_run(
+    run_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
+    body: PublishRunRequest | None = None,
+) -> dict:
     """Publish a completed run's build as active release."""
     db_config: MiningDbConfig = request.app.state.db_config
+    pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     try:
-        # Resolve domain: body > run record > fallback
-        publish_domain = body.domain if body and body.domain else None
-        if not publish_domain:
-            pool = request.app.state.pg_pool
-            async with pool.connection() as conn:
-                cur = await conn.execute("SELECT domain FROM mining_runs WHERE id = %s", [run_id])
-                row = await cur.fetchone()
-                if row and row["domain"]:
-                    publish_domain = row["domain"]
-        if not publish_domain:
-            publish_domain = "cloud_core_network"
+        publish_domain = require_domain(domain)
 
         from knowledge_mining.mining.jobs.run import publish
         result = publish(run_id, domain=publish_domain, db_config=db_config)
@@ -748,13 +782,14 @@ async def publish_run(run_id: str, request: Request, body: PublishRunRequest | N
 
 
 @router.get("/{run_id}/trace")
-async def get_run_trace(run_id: str, request: Request) -> dict:
+async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """B7 挖掘过程透视：在常规 run 详情之上叠加本体/图谱视角的概览。
 
     返回 run 状态（含 awaiting_review 的 subloop_stage）+ 两道检查点的待办数 +
     该 run 落图的对象/边规模，供前端"透明前端"页一屏看清这次挖掘干了什么。
     """
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         run_cur = await conn.execute(
@@ -766,19 +801,19 @@ async def get_run_trace(run_id: str, request: Request) -> dict:
         run = await run_cur.fetchone()
         if not run:
             raise HTTPException(404, f"Run {run_id} not found")
-        domain = run["domain"]
+        run_domain = run["domain"]
 
         # 本体确认: 该领域待审本体候选数
         cand_cur = await conn.execute(
             "SELECT COUNT(*) AS n FROM ontology_candidates "
-            "WHERE domain_id = %s AND status = 'proposed'", [domain]
+            "WHERE domain_id = %s AND status = 'proposed'", [run_domain]
         )
         proposed_candidates = (await cand_cur.fetchone())["n"]
 
         # 本体线 entity_extract 产出：逃生口候选数（source='escape_hatch'，含待审/已处理）
         esc_cur = await conn.execute(
             "SELECT COUNT(*) AS n FROM ontology_candidates "
-            "WHERE domain_id = %s AND source = 'escape_hatch'", [domain]
+            "WHERE domain_id = %s AND source = 'escape_hatch'", [run_domain]
         )
         escape_hatch_candidates = (await esc_cur.fetchone())["n"]
 
@@ -792,17 +827,17 @@ async def get_run_trace(run_id: str, request: Request) -> dict:
 
         # 该 run 落图规模（对象/边按 domain 计；MVP 不按 snapshot 精确切分）
         ent_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM ontology_entities WHERE domain_id = %s", [domain]
+            "SELECT COUNT(*) AS n FROM ontology_entities WHERE domain_id = %s", [run_domain]
         )
         entity_count = (await ent_cur.fetchone())["n"]
         rel_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM ontology_entity_relations WHERE domain_id = %s", [domain]
+            "SELECT COUNT(*) AS n FROM ontology_entity_relations WHERE domain_id = %s", [run_domain]
         )
         relation_count = (await rel_cur.fetchone())["n"]
 
     return {
         "run_id": run_id,
-        "domain": domain,
+        "domain": run_domain,
         "status": run["status"],
         "subloop_stage": run["subloop_stage"],
         "ontology_version_id": run["ontology_version_id"],
@@ -830,7 +865,11 @@ class ResumeRunRequest(BaseModel):
 
 
 @router.post("/{run_id}/resume")
-async def resume_run(run_id: str, request: Request, body: ResumeRunRequest | None = None) -> dict:
+async def resume_run(
+    run_id: str, request: Request,
+    domain: str = Query(..., min_length=1),
+    body: ResumeRunRequest | None = None,
+) -> dict:
     """B6/B7：人审提交后续跑一个 awaiting_review 的 run。
 
     重新评估两道检查点：仍有待办 → 保持 awaiting_review 刷新 subloop_stage；
@@ -842,6 +881,7 @@ async def resume_run(run_id: str, request: Request, body: ResumeRunRequest | Non
     """
     db_config: MiningDbConfig = request.app.state.db_config
     pool = request.app.state.pg_pool
+    await _require_run_domain(pool, run_id, domain)
 
     # 快速读当前 run 状态（同时拿 domain，避免再查一次）
     async with pool.connection() as conn:
@@ -853,7 +893,7 @@ async def resume_run(run_id: str, request: Request, body: ResumeRunRequest | Non
     if row is None:
         raise HTTPException(404, f"Run {run_id} not found")
 
-    resume_domain = (body.domain if body and body.domain else None) or row["domain"] or "cloud_core_network"
+    resume_domain = require_domain(domain)
     status = row["status"]
     stage = row["subloop_stage"]
     finished = row["finished_at"]

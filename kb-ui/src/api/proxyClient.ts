@@ -11,6 +11,9 @@ export function createProxyClient(service: string) {
   client.interceptors.request.use((config) => {
     const domain = useDomainStore()
     config.baseURL = `/api/control-plane/api/v1/proxy/${domain.currentDomain}/${service}`
+    if (service === 'mining') {
+      config.params = { ...config.params, domain: config.params?.domain ?? domain.currentDomain }
+    }
     return config
   })
   return client
