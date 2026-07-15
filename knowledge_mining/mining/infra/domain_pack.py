@@ -31,13 +31,10 @@ logger = logging.getLogger(__name__)
 # Repository root (knowledge_mining/mining/infra/ -> CoreMasterKB/)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Single source of truth paths. main_control_service owns the active config;
-# root-level files are kept as a legacy fallback for older tests/tools.
+# Single source of truth paths. main_control_service owns the active config.
 _MAIN_CONTROL_CONFIG_ROOT = _REPO_ROOT / "main_control_service" / "config"
 _REGISTRY_PATH = _MAIN_CONTROL_CONFIG_ROOT / "domain_registry.yaml"
 _SCENARIO_PACKS_ROOT = _MAIN_CONTROL_CONFIG_ROOT / "scenario_packs"
-_LEGACY_REGISTRY_PATH = _REPO_ROOT / "domain_registry.yaml"
-_LEGACY_SCENARIO_PACKS_ROOT = _REPO_ROOT / "scenario_packs"
 
 
 
@@ -151,12 +148,11 @@ class DomainProfile:
 
 def load_domain_registry() -> dict[str, Any]:
     """Load domain_registry.yaml and return the full dict."""
-    registry_path = _REGISTRY_PATH if _REGISTRY_PATH.exists() else _LEGACY_REGISTRY_PATH
-    if not registry_path.exists():
+    if not _REGISTRY_PATH.exists():
         raise FileNotFoundError(
             f"Domain registry not found: {_REGISTRY_PATH}"
         )
-    with open(registry_path, encoding="utf-8") as f:
+    with open(_REGISTRY_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data
 
@@ -345,8 +341,6 @@ def load_domain_pack(domain_id: str, *, packs_root: Path | None = None) -> Domai
     else:
         scenario_pack = _resolve_scenario_pack(domain_id)
         yaml_path = _SCENARIO_PACKS_ROOT / scenario_pack / "domain.yaml"
-        if not yaml_path.exists():
-            yaml_path = _LEGACY_SCENARIO_PACKS_ROOT / scenario_pack / "domain.yaml"
 
     if not yaml_path.exists():
         raise FileNotFoundError(
