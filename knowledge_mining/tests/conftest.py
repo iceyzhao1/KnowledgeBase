@@ -24,7 +24,19 @@ def _ensure_schema(db_config):
 
 
 def _truncate_all(conn):
-    """Truncate all mining tables (asset + runtime + ontology) for clean test isolation."""
+    """Truncate all mining tables (asset + runtime + ontology) for clean test isolation.
+
+    安全护栏（默认彻底关闭自动清表）：除非显式设置环境变量
+    ``KB_ALLOW_TEST_TRUNCATE=1``，否则本函数直接返回、不删任何表——
+    防止误删 ``.env`` 指向的真实库（尤其生产库 coremasterkb）。
+    需要自动清测试库时，自行 ``export KB_ALLOW_TEST_TRUNCATE=1`` 再跑；
+    平时一律手动清库。
+    """
+    import os
+
+    if os.environ.get("KB_ALLOW_TEST_TRUNCATE") != "1":
+        return
+
     conn.execute("TRUNCATE TABLE mining_run_stage_events CASCADE")
     conn.execute("TRUNCATE TABLE mining_run_documents CASCADE")
     conn.execute("TRUNCATE TABLE mining_runs CASCADE")

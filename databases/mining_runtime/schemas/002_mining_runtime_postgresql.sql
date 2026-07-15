@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS mining_runs (
         status IN ('queued', 'running', 'completed', 'interrupted', 'failed', 'cancelled',
                    'awaiting_review')
     ),
+    domain           TEXT NOT NULL DEFAULT 'default',
+    channel          TEXT NOT NULL DEFAULT 'prod',
     build_id         TEXT,
     total_documents  INTEGER NOT NULL DEFAULT 0,
     new_count        INTEGER NOT NULL DEFAULT 0,
@@ -27,6 +29,15 @@ CREATE TABLE IF NOT EXISTS mining_runs (
 
 CREATE INDEX IF NOT EXISTS idx_mining_runs_status
     ON mining_runs(status);
+
+ALTER TABLE mining_runs
+    ADD COLUMN IF NOT EXISTS domain TEXT NOT NULL DEFAULT 'default';
+
+ALTER TABLE mining_runs
+    ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'prod';
+
+CREATE INDEX IF NOT EXISTS idx_mining_runs_domain_status
+    ON mining_runs(domain, status);
 
 CREATE TABLE IF NOT EXISTS mining_run_documents (
     id                    TEXT PRIMARY KEY,

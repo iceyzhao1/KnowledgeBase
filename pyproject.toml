@@ -27,4 +27,4 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["agent_serving*", "knowledge_mining*", "llm_service*", "main_control_service*"]
+include = ["agent_serving*", "knowledge_mining*", "llm_service*", "main_control_service*", "telecom_eval*"]
